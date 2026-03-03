@@ -16,7 +16,7 @@ from django.core.mail import send_mail
 from django.conf import settings
 from django.db import IntegrityError
 
-from .models import User, UserRole, PasswordResetToken, hash_reset_token, UserActivityLog
+from .models import User, UserRole, PasswordResetToken, hash_reset_token, UserActivityLog, SessionSetting
 from .serializers import (
     UserSerializer,
     UserCreateSerializer,
@@ -27,6 +27,7 @@ from .serializers import (
     ResetPasswordSerializer,
     UserReportSerializer,
     UserActivityLogSerializer,
+    SessionSettingSerializer,
 )
 from .permissions import (
     CanCreateUsers,
@@ -62,13 +63,13 @@ class CustomTokenObtainPairView(TokenObtainPairView):
                 status=status.HTTP_401_UNAUTHORIZED
             )
         
-        # Log successful login
+        # Log successful manual login
         try:
             ip_address = request.META.get("REMOTE_ADDR")
             user_agent = request.META.get("HTTP_USER_AGENT", "")
             UserActivityLog.objects.create(
                 user=user,
-                event_type="login",
+                event_type="manual_login",
                 ip_address=ip_address,
                 user_agent=user_agent,
             )
@@ -115,8 +116,8 @@ class LogoutView(APIView):
             token = RefreshToken(refresh_token)
             token.blacklist()
 
-            # Determine logout event type (normal vs auto)
-            event_type = "logout"
+            # Determine logout event type (manual vs auto)
+            event_type = "manual_logout"
             reason = request.query_params.get("reason")
             if reason == "auto":
                 event_type = "auto_logout"
@@ -461,4 +462,36 @@ class UserActivityReportViewSet(viewsets.ReadOnlyModelViewSet):
             qs = qs.filter(event_type=event_type)
 
         return qs.order_by("-created_at")
+
+
+class SessionSettingsView(APIView):
+    """
+    API for retrieving and updating session/auto-logout configuration.
+
+    - GET: any authenticated user can read current settings.
+    - PATCH: only Super Admin and Admin (Manager) can update.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        setting = SessionSetting.get_solo()
+        serializer = SessionSettingSerializer(setting)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def patch(self, request):
+        user = request.user
+        if user.role not in [UserRole.SUPER_ADMIN, UserRole.MANAGER]:
+            return Response(
+                {"detail": "You do not have permission to update session settings."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        setting = SessionSetting.get_solo()
+        serializer = SessionSettingSerializer(
+            setting, data=request.data, partial=True, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_200_OK)
 

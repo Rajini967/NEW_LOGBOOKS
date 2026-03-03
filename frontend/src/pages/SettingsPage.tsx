@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Header } from '@/components/layout/Header';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -17,10 +17,49 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { authAPI } from '@/lib/api';
 
 export default function SettingsPage() {
-  const handleSave = () => {
-    toast.success('Settings saved successfully');
+  const [sessionTimeoutMinutes, setSessionTimeoutMinutes] = useState<number | ''>('');
+  const [isSessionLoading, setIsSessionLoading] = useState(false);
+
+  useEffect(() => {
+    const loadSessionSettings = async () => {
+      setIsSessionLoading(true);
+      try {
+        const data = await authAPI.getSessionSettings();
+        if (typeof data.auto_logout_minutes === 'number') {
+          setSessionTimeoutMinutes(data.auto_logout_minutes);
+        }
+      } catch (error: any) {
+        console.error('Failed to load session settings:', error);
+        toast.error('Failed to load session timeout settings');
+      } finally {
+        setIsSessionLoading(false);
+      }
+    };
+
+    loadSessionSettings();
+  }, []);
+
+  const handleSave = async () => {
+    try {
+      if (sessionTimeoutMinutes !== '') {
+        const minutes = Number(sessionTimeoutMinutes);
+        if (!Number.isFinite(minutes) || minutes <= 0) {
+          toast.error('Please enter a valid session timeout (minutes).');
+          return;
+        }
+        await authAPI.updateSessionSettings({ auto_logout_minutes: minutes });
+      }
+
+      toast.success('Settings saved successfully');
+    } catch (error: any) {
+      console.error('Failed to save settings:', error);
+      toast.error(
+        error?.message || error?.data?.detail || 'Failed to save session settings',
+      );
+    }
   };
 
   return (
@@ -135,7 +174,23 @@ export default function SettingsPage() {
                 <p className="text-sm text-muted-foreground">Auto logout after inactivity</p>
               </div>
               <div className="flex items-center gap-2">
-                <Input type="number" defaultValue="30" className="w-20" />
+                <Input
+                  type="number"
+                  className="w-20"
+                  value={sessionTimeoutMinutes}
+                  disabled={isSessionLoading}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    if (value === '') {
+                      setSessionTimeoutMinutes('');
+                    } else {
+                      const num = Number(value);
+                      if (!Number.isNaN(num)) {
+                        setSessionTimeoutMinutes(num);
+                      }
+                    }
+                  }}
+                />
                 <span className="text-sm text-muted-foreground">minutes</span>
               </div>
             </div>

@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from .models import LogbookSchema, LogbookRoleAssignment, LogbookEntry
 from accounts.models import UserRole
+from reports.utils import log_limit_change
 
 
 class LogbookRoleAssignmentSerializer(serializers.ModelSerializer):
@@ -83,11 +84,113 @@ class LogbookSchemaUpdateSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         assigned_roles = validated_data.pop('assigned_roles', None)
         request = self.context.get('request')
-        
+
+        # Capture old config before changes
+        old_fields = list(instance.fields or [])
+        old_metadata = dict(instance.metadata or {})
+
         # Update schema fields
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()
+
+        # Capture new config after changes
+        new_fields = list(instance.fields or [])
+        new_metadata = dict(instance.metadata or {})
+
+        user = request.user if request and getattr(request, "user", None) else None
+
+        # --- Log limit-like changes in fields JSON ---
+        try:
+            # Index fields by their 'name' for comparison
+            def index_fields(fields_list):
+                indexed = {}
+                for f in fields_list:
+                    if not isinstance(f, dict):
+                        continue
+                    name = f.get("name") or f.get("id")
+                    if name:
+                        indexed[name] = f
+                return indexed
+
+            old_index = index_fields(old_fields)
+            new_index = index_fields(new_fields)
+
+            limit_keys = {
+                "min",
+                "max",
+                "nmt",
+                "nlt",
+                "warning_low",
+                "warning_high",
+                "critical_low",
+                "critical_high",
+            }
+
+            for field_name in sorted(set(old_index.keys()) | set(new_index.keys())):
+                old_cfg = old_index.get(field_name, {}) or {}
+                new_cfg = new_index.get(field_name, {}) or {}
+
+                for key in limit_keys:
+                    old_val = old_cfg.get(key)
+                    new_val = new_cfg.get(key)
+                    if old_val == new_val:
+                        continue
+
+                    extra = {
+                        "schema_name": instance.name,
+                        "client_id": instance.client_id,
+                        "category": instance.category,
+                        "field_label": new_cfg.get("label") or old_cfg.get("label") or field_name,
+                    }
+                    log_limit_change(
+                        user=user,
+                        object_type="logbook_field_limit",
+                        key=f"{instance.id}:{field_name}",
+                        field_name=f"{field_name}.{key}",
+                        old=old_val,
+                        new=new_val,
+                        extra=extra,
+                        event_type="limit_update",
+                    )
+        except Exception:
+            # Never block saving schemas due to audit issues
+            pass
+
+        # --- Log metadata limit-like changes ---
+        try:
+            combined_keys = set(old_metadata.keys()) | set(new_metadata.keys())
+            for meta_key in sorted(combined_keys):
+                old_val = old_metadata.get(meta_key)
+                new_val = new_metadata.get(meta_key)
+                if old_val == new_val:
+                    continue
+
+                # Only treat obvious limit-style metadata keys as limits
+                if not (
+                    str(meta_key).endswith("_min")
+                    or str(meta_key).endswith("_max")
+                    or str(meta_key).endswith("_limit")
+                ):
+                    continue
+
+                extra = {
+                    "schema_name": instance.name,
+                    "client_id": instance.client_id,
+                    "category": instance.category,
+                }
+                log_limit_change(
+                    user=user,
+                    object_type="logbook_schema",
+                    key=str(instance.id),
+                    field_name=f"metadata.{meta_key}",
+                    old=old_val,
+                    new=new_val,
+                    extra=extra,
+                    event_type="limit_update",
+                )
+        except Exception:
+            pass
         
         # Update role assignments if provided
         if assigned_roles is not None:

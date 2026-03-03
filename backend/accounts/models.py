@@ -178,6 +178,42 @@ class UserActivityLog(models.Model):
         return f"{self.user.email} - {self.event_type} at {self.created_at}"
 
 
+class SessionSetting(models.Model):
+    """
+    Singleton-style model storing session configuration such as
+    auto-logout timeout. There should normally be only one row.
+    """
+
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    auto_logout_minutes = models.PositiveIntegerField(
+        default=30,
+        help_text="Auto logout after this many minutes of inactivity.",
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="updated_session_settings",
+    )
+
+    class Meta:
+        db_table = "session_settings"
+
+    def __str__(self) -> str:  # pragma: no cover - trivial
+        return f"Session settings (auto_logout_minutes={self.auto_logout_minutes})"
+
+    @classmethod
+    def get_solo(cls):
+        """
+        Return the single SessionSetting instance, creating it with defaults
+        if it does not yet exist.
+        """
+        obj, _ = cls.objects.get_or_create(pk=1, defaults={})
+        return obj
+
+
 def hash_reset_token(raw_token: str) -> str:
     """
     Return a SHA-256 hex digest for a raw reset token.

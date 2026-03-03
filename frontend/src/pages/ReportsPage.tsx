@@ -98,7 +98,6 @@ interface UserActivityRow {
   id: string;
   user: string;
   user_email: string;
-  user_name: string | null;
   event_type: string;
   ip_address: string | null;
   user_agent: string | null;
@@ -329,9 +328,20 @@ export default function ReportsPage() {
         setAuditLoading(true);
         const data = await reportsAPI.listAuditEvents(params);
         setAuditRows(data);
-      } catch (error) {
-        console.error('Error loading audit trail report:', error);
-        toast.error('Failed to load audit trail report');
+      } catch (error: any) {
+        console.error('Error loading audit trail report:', {
+          error,
+          status: error?.status,
+          data: error?.data,
+        });
+
+        if (error?.status && error.status >= 500) {
+          toast.error('Server error while loading audit trail report');
+        } else if (error?.status && error.status >= 400) {
+          toast.error('Failed to load audit trail report (check filters and permissions)');
+        } else {
+          toast.error('Failed to load audit trail report');
+        }
       } finally {
         setAuditLoading(false);
       }
@@ -359,6 +369,39 @@ export default function ReportsPage() {
     loadUserReports,
     loadUserActivity,
     loadAuditEvents,
+  ]);
+
+  // Poll user activity periodically when the User Activity tab is active
+  useEffect(() => {
+    if (!(activeTab === 'user-activity' && canSeeActivity)) {
+      return;
+    }
+
+    const buildParams = () => {
+      const params: any = {};
+      if (activityFromDate) params.from_date = activityFromDate;
+      if (activityToDate) params.to_date = activityToDate;
+      if (activityEventType !== 'all') params.event_type = activityEventType;
+      return params;
+    };
+
+    const params = buildParams();
+    loadUserActivity(params);
+
+    const intervalId = window.setInterval(() => {
+      loadUserActivity(buildParams());
+    }, 30000); // 30 seconds
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [
+    activeTab,
+    canSeeActivity,
+    activityFromDate,
+    activityToDate,
+    activityEventType,
+    loadUserActivity,
   ]);
 
 
@@ -1966,19 +2009,12 @@ export default function ReportsPage() {
                 variant="outline"
                 size="sm"
                 onClick={() => {
-                  const printWindow = window.open('', '_blank');
-                  if (!printWindow) {
-                    toast.error('Please allow popups to export PDF');
-                    return;
-                  }
-
                   const rowsHtml = activityRows
                     .map(
                       (row) => `
                         <tr>
                           <td>${row.created_at ? format(new Date(row.created_at), 'dd/MM/yy HH:mm') : ''}</td>
                           <td>${row.user_email}</td>
-                          <td>${row.user_name || ''}</td>
                           <td>${row.event_type}</td>
                           <td>${row.ip_address || ''}</td>
                           <td>${row.user_agent || ''}</td>
@@ -1987,17 +2023,36 @@ export default function ReportsPage() {
                     )
                     .join('');
 
-                  printWindow.document.write(`
+                  const html = `
                     <!DOCTYPE html>
                     <html>
                       <head>
                         <title>User Activity Report</title>
                         <style>
-                          body { font-family: Arial, sans-serif; padding: 20px; }
-                          h1 { margin-bottom: 16px; }
-                          table { width: 100%; border-collapse: collapse; }
-                          th, td { border: 1px solid #ccc; padding: 6px 8px; font-size: 12px; }
-                          th { background: #f5f5f5; }
+                          body {
+                            font-family: Arial, sans-serif;
+                            margin: 0;
+                            padding: 20px;
+                            font-size: 13px;
+                            line-height: 1.4;
+                          }
+                          h1 {
+                            margin: 0 0 16px 0;
+                            font-size: 20px;
+                            text-align: left;
+                          }
+                          table {
+                            width: 100%;
+                            border-collapse: collapse;
+                          }
+                          th, td {
+                            border: 1px solid #ccc;
+                            padding: 8px 10px;
+                            font-size: 12px;
+                          }
+                          th {
+                            background: #f5f5f5;
+                          }
                         </style>
                       </head>
                       <body>
@@ -2007,7 +2062,6 @@ export default function ReportsPage() {
                             <tr>
                               <th>Date/Time</th>
                               <th>User Email</th>
-                              <th>User Name</th>
                               <th>Event</th>
                               <th>IP Address</th>
                               <th>User Agent</th>
@@ -2017,13 +2071,20 @@ export default function ReportsPage() {
                             ${rowsHtml}
                           </tbody>
                         </table>
-                        <script>
-                          window.onload = function() { window.print(); };
-                        </script>
                       </body>
                     </html>
-                  `);
-                  printWindow.document.close();
+                  `;
+
+                  try {
+                    const blob = new Blob([html], { type: 'text/html' });
+                    const success = printPDF(blob);
+                    if (!success) {
+                      toast.error('Please allow popups to print reports');
+                    }
+                  } catch (error) {
+                    console.error('Error preparing User Activity printout:', error);
+                    toast.error('Failed to open print dialog for User Activity report');
+                  }
                 }}
               >
                 <Printer className="w-4 h-4 mr-2" />
@@ -2048,9 +2109,6 @@ export default function ReportsPage() {
                           User Email
                         </th>
                         <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                          User Name
-                        </th>
-                        <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
                           Event
                         </th>
                         <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
@@ -2070,7 +2128,6 @@ export default function ReportsPage() {
                               : ''}
                           </td>
                           <td className="px-4 py-3 text-sm">{row.user_email}</td>
-                          <td className="px-4 py-3 text-sm">{row.user_name}</td>
                           <td className="px-4 py-3 text-sm capitalize">{row.event_type}</td>
                           <td className="px-4 py-3 text-sm">{row.ip_address}</td>
                           <td className="px-4 py-3 text-sm truncate max-w-xs">
@@ -2130,6 +2187,7 @@ export default function ReportsPage() {
                     <SelectItem value="all">All</SelectItem>
                     <SelectItem value="limit_update">Limit Update</SelectItem>
                     <SelectItem value="config_update">Config Update</SelectItem>
+                    <SelectItem value="log_update">Log Update</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -2177,7 +2235,6 @@ export default function ReportsPage() {
                         <tr>
                           <td>${row.timestamp ? format(new Date(row.timestamp), 'dd/MM/yy HH:mm') : ''}</td>
                           <td>${row.user_email || ''}</td>
-                          <td>${row.user_name || ''}</td>
                           <td>${row.event_type}</td>
                           <td>${row.object_type}</td>
                           <td>${row.object_id || ''}</td>
@@ -2209,7 +2266,6 @@ export default function ReportsPage() {
                             <tr>
                               <th>Date/Time</th>
                               <th>User Email</th>
-                              <th>User Name</th>
                               <th>Event</th>
                               <th>Object Type</th>
                               <th>Object ID</th>
@@ -2253,9 +2309,6 @@ export default function ReportsPage() {
                           User Email
                         </th>
                         <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                          User Name
-                        </th>
-                        <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
                           Event
                         </th>
                         <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
@@ -2284,7 +2337,6 @@ export default function ReportsPage() {
                               : ''}
                           </td>
                           <td className="px-4 py-3 text-sm">{row.user_email}</td>
-                          <td className="px-4 py-3 text-sm">{row.user_name}</td>
                           <td className="px-4 py-3 text-sm capitalize">{row.event_type}</td>
                           <td className="px-4 py-3 text-sm">{row.object_type}</td>
                           <td className="px-4 py-3 text-sm">{row.object_id}</td>
@@ -2296,7 +2348,7 @@ export default function ReportsPage() {
                       {auditRows.length === 0 && (
                         <tr>
                           <td
-                            colSpan={9}
+                            colSpan={8}
                             className="px-4 py-6 text-center text-sm text-muted-foreground"
                           >
                             No audit events found for selected filters.

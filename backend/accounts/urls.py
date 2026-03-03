@@ -13,6 +13,7 @@ from .views import (
     UserViewSet,
     UserReportViewSet,
     UserActivityReportViewSet,
+    SessionSettingsView,
 )
 
 router = DefaultRouter()
@@ -28,6 +29,9 @@ urlpatterns = [
     path('auth/forgot-password/', ForgotPasswordView.as_view(), name='auth_forgot_password'),
     path('auth/validate-reset-token/', ValidateResetTokenView.as_view(), name='auth_validate_reset_token'),
     path('auth/reset-password/', ResetPasswordView.as_view(), name='auth_reset_password'),
+    
+    # Session / activity settings
+    path('settings/session/', SessionSettingsView.as_view(), name='session_settings'),
     
     # User management endpoints (via router)
     path('', include(router.urls)),

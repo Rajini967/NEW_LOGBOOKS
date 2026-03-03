@@ -7,6 +7,7 @@ from django.utils import timezone
 from .models import ChillerLog, ChillerEquipmentStatusAudit
 from .serializers import ChillerLogSerializer
 from accounts.permissions import CanLogEntries, CanApproveReports
+from reports.utils import log_limit_change
 
 
 class ChillerLogViewSet(viewsets.ModelViewSet):
@@ -135,7 +136,10 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
         return bool(first_log and first_log.id == log.id)
 
     def update(self, request, *args, **kwargs):
-        """Prevent editing the first verified reading of the day."""
+        """
+        Prevent editing the first verified reading of the day and
+        record reading changes in the audit trail.
+        """
         instance = self.get_object()
         if instance.status == 'approved' and self._is_first_log_of_day(instance):
             raise ValidationError(
@@ -145,20 +149,87 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
                     ]
                 }
             )
-        return super().update(request, *args, **kwargs)
+        # Capture old readings before update
+        tracked_fields = [
+            'chiller_supply_temp',
+            'chiller_return_temp',
+            'cooling_tower_supply_temp',
+            'cooling_tower_return_temp',
+            'ct_differential_temp',
+            'chiller_water_inlet_pressure',
+            'chiller_makeup_water_flow',
+            'evap_water_inlet_pressure',
+            'evap_water_outlet_pressure',
+            'evap_entering_water_temp',
+            'evap_leaving_water_temp',
+            'evap_approach_temp',
+            'cond_water_inlet_pressure',
+            'cond_water_outlet_pressure',
+            'cond_entering_water_temp',
+            'cond_leaving_water_temp',
+            'cond_approach_temp',
+            'chiller_control_signal',
+            'avg_motor_current',
+            'compressor_running_time_min',
+            'starter_energy_kwh',
+            'cooling_tower_pump_status',
+            'chilled_water_pump_status',
+            'cooling_tower_fan_status',
+            'cooling_tower_blowoff_valve_status',
+            'cooling_tower_blowdown_time_min',
+            'cooling_tower_chemical_name',
+            'cooling_tower_chemical_qty_per_day',
+            'chilled_water_pump_chemical_name',
+            'chilled_water_pump_chemical_qty_kg',
+            'cooling_tower_fan_chemical_name',
+            'cooling_tower_fan_chemical_qty_kg',
+            'recording_frequency',
+            'operator_sign',
+            'verified_by',
+            'remarks',
+            'comment',
+            'status',
+        ]
+        old_values = {field: getattr(instance, field) for field in tracked_fields}
+
+        response = super().update(request, *args, **kwargs)
+
+        # Reload instance to get updated values
+        updated = self.get_object()
+        user = request.user
+        extra_base = {
+            "equipment_id": updated.equipment_id,
+            "site_id": updated.site_id,
+            "timestamp": timezone.localtime(updated.timestamp).isoformat() if updated.timestamp else None,
+        }
+
+        for field in tracked_fields:
+            before = old_values.get(field)
+            after = getattr(updated, field)
+            if before == after:
+                continue
+            extra = dict(extra_base)
+            extra["field_label"] = field
+            log_limit_change(
+                user=user,
+                object_type="chiller_log",
+                key=str(updated.id),
+                field_name=field,
+                old=before,
+                new=after,
+                extra=extra,
+                event_type="log_update",
+            )
+
+        return response
 
     def partial_update(self, request, *args, **kwargs):
-        """Prevent editing the first verified reading of the day."""
-        instance = self.get_object()
-        if instance.status == 'approved' and self._is_first_log_of_day(instance):
-            raise ValidationError(
-                {
-                    'detail': [
-                        'First reading of the day cannot be edited after verification.'
-                    ]
-                }
-            )
-        return super().partial_update(request, *args, **kwargs)
+        """
+        Prevent editing the first verified reading of the day and
+        record reading changes in the audit trail (partial updates).
+        """
+        kwargs["partial"] = True
+        return self.update(request, *args, **kwargs)
     
     @action(detail=True, methods=['post'])
     def approve(self, request, pk=None):

@@ -76,6 +76,7 @@ def log_limit_change(
     old,
     new,
     extra=None,
+    event_type: str = "limit_update",
 ):
     """
     Helper to record a limit/configuration change in the audit trail.
@@ -88,11 +89,12 @@ def log_limit_change(
         old: Previous value
         new: New value
         extra: Optional dict with additional context
+        event_type: Audit event type label, defaults to 'limit_update'
     """
     try:
         AuditEvent.objects.create(
             user=user if getattr(user, "is_authenticated", False) else None,
-            event_type="limit_update",
+            event_type=event_type or "limit_update",
             object_type=object_type,
             object_id=str(key),
             field_name=field_name,

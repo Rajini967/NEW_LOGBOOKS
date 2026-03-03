@@ -101,11 +101,12 @@ export const authAPI = {
     return response.data;
   },
 
-  logout: async () => {
+  logout: async (reason?: 'auto') => {
     const refreshToken = localStorage.getItem('refresh_token');
     if (refreshToken) {
       try {
-        await api.post('/auth/logout/', { refresh: refreshToken });
+        const url = reason === 'auto' ? '/auth/logout/?reason=auto' : '/auth/logout/';
+        await api.post(url, { refresh: refreshToken });
       } catch (error) {
         // Even if logout fails, clear tokens locally
         console.error('Logout error:', error);
@@ -150,6 +151,17 @@ export const authAPI = {
 
   resetPassword: async (payload: { token: string; new_password: string; confirm_password: string }) => {
     const response = await api.post('/auth/reset-password/', payload);
+    return response.data;
+  },
+
+  // Session / activity settings
+  getSessionSettings: async () => {
+    const response = await api.get('/settings/session/');
+    return response.data;
+  },
+
+  updateSessionSettings: async (data: { auto_logout_minutes: number }) => {
+    const response = await api.patch('/settings/session/', data);
     return response.data;
   },
 };

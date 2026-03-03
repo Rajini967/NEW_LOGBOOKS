@@ -15,6 +15,18 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [autoLogoutMinutes, setAutoLogoutMinutes] = useState<number | null>(null);
+
+  const loadSessionSettings = useCallback(async () => {
+    try {
+      const settings = await authAPI.getSessionSettings();
+      if (typeof settings.auto_logout_minutes === 'number') {
+        setAutoLogoutMinutes(settings.auto_logout_minutes);
+      }
+    } catch (error) {
+      console.error('Failed to load session settings:', error);
+    }
+  }, []);
 
   // Check if user is already logged in on mount
   useEffect(() => {
@@ -29,6 +41,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             role: userData.role === 'client' ? 'customer' : (userData.role as UserRole),
           };
           setUser(mappedUser);
+          await loadSessionSettings();
         } catch (error) {
           // Token invalid, clear it
           localStorage.removeItem('access_token');
@@ -39,7 +52,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
 
     checkAuth();
-  }, []);
+  }, [loadSessionSettings]);
 
   const login = useCallback(async (email: string, password: string): Promise<boolean> => {
     try {
@@ -55,6 +68,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       };
       
       setUser(mappedUser);
+      await loadSessionSettings();
       return true;
     } catch (error: any) {
       console.error('Login error:', error);
@@ -71,6 +85,50 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(null);
     }
   }, []);
+
+  // Inactivity-based auto logout using configured timeout
+  useEffect(() => {
+    if (!user || !autoLogoutMinutes || autoLogoutMinutes <= 0) {
+      return;
+    }
+
+    const timeoutMs = autoLogoutMinutes * 60 * 1000;
+    const activityEvents: (keyof WindowEventMap)[] = ['mousemove', 'keydown', 'click', 'scroll'];
+    let timeoutId: number | undefined;
+
+    const triggerAutoLogout = async () => {
+      try {
+        await authAPI.logout('auto');
+      } catch (error) {
+        console.error('Auto logout error:', error);
+      } finally {
+        setUser(null);
+      }
+    };
+
+    const resetTimer = () => {
+      if (timeoutId !== undefined) {
+        window.clearTimeout(timeoutId);
+      }
+      timeoutId = window.setTimeout(triggerAutoLogout, timeoutMs);
+    };
+
+    activityEvents.forEach((eventName) => {
+      window.addEventListener(eventName, resetTimer);
+    });
+
+    // Start timer immediately
+    resetTimer();
+
+    return () => {
+      if (timeoutId !== undefined) {
+        window.clearTimeout(timeoutId);
+      }
+      activityEvents.forEach((eventName) => {
+        window.removeEventListener(eventName, resetTimer);
+      });
+    };
+  }, [user, autoLogoutMinutes]);
 
   const switchRole = useCallback((role: UserRole) => {
     if (user) {

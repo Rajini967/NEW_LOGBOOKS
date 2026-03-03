@@ -8,7 +8,7 @@ from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
-from .models import User, UserRole, PasswordResetToken, hash_reset_token, UserActivityLog
+from .models import User, UserRole, PasswordResetToken, hash_reset_token, UserActivityLog, SessionSetting
 
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
@@ -391,6 +391,26 @@ class UserActivityLogSerializer(serializers.ModelSerializer):
             "user_agent",
             "created_at",
         ]
+
+
+class SessionSettingSerializer(serializers.ModelSerializer):
+    """
+    Serializer for session/auto-logout configuration.
+    """
+
+    class Meta:
+        model = SessionSetting
+        fields = [
+            "auto_logout_minutes",
+            "updated_at",
+        ]
+        read_only_fields = ["updated_at"]
+
+    def update(self, instance, validated_data):
+        request = self.context.get("request")
+        if request and getattr(request, "user", None) and request.user.is_authenticated:
+            instance.updated_by = request.user
+        return super().update(instance, validated_data)
         read_only_fields = [
             "id",
             "user",
