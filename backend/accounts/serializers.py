@@ -8,7 +8,7 @@ from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
-from .models import User, UserRole, PasswordResetToken, hash_reset_token
+from .models import User, UserRole, PasswordResetToken, hash_reset_token, UserActivityLog
 
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
@@ -43,11 +43,13 @@ class UserSerializer(serializers.ModelSerializer):
             'is_staff',
             'is_superuser',
             'is_deleted',
+            'last_login',
             'created_at',
             'updated_at',
         ]
         read_only_fields = [
             'id',
+            'last_login',
             'created_at',
             'updated_at',
             'is_deleted',
@@ -297,5 +299,107 @@ class ResetPasswordSerializer(_BaseTokenSerializer):
         token_obj.mark_used()
 
         return user
+
+
+class UserReportSerializer(serializers.ModelSerializer):
+    """
+    Lightweight serializer for user management reports.
+    """
+
+    role_display = serializers.CharField(source="get_role_display", read_only=True)
+    first_login = serializers.SerializerMethodField(read_only=True)
+    last_logout = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = User
+        fields = [
+            "id",
+            "email",
+            "role",
+            "role_display",
+            "is_active",
+            "created_at",
+            "last_login",
+            "first_login",
+            "last_logout",
+        ]
+        read_only_fields = fields
+
+    def _get_target_date(self):
+        """
+        Resolve the target date for activity aggregation from context,
+        defaulting to today's local date when not provided or invalid.
+        """
+        activity_date_str = self.context.get("activity_date")
+        if activity_date_str:
+            try:
+                return datetime.fromisoformat(activity_date_str).date()
+            except ValueError:
+                pass
+        return timezone.localdate()
+
+    def get_first_login(self, obj):
+        """
+        Return the first login event timestamp for the target date for this user, if any.
+        """
+        target_date = self._get_target_date()
+        qs = (
+            UserActivityLog.objects.filter(
+                user=obj,
+                event_type__in=["login", "manual_login"],
+                created_at__date=target_date,
+            )
+            .order_by("created_at")
+            .first()
+        )
+        return qs.created_at if qs else None
+
+    def get_last_logout(self, obj):
+        """
+        Return the last logout event timestamp for the target date for this user, if any.
+        """
+        target_date = self._get_target_date()
+        qs = (
+            UserActivityLog.objects.filter(
+                user=obj,
+                event_type__in=["logout", "manual_logout", "auto_logout"],
+                created_at__date=target_date,
+            )
+            .order_by("-created_at")
+            .first()
+        )
+        return qs.created_at if qs else None
+
+
+class UserActivityLogSerializer(serializers.ModelSerializer):
+    """
+    Serializer for user activity reporting.
+    """
+
+    user_email = serializers.EmailField(source="user.email", read_only=True)
+    user_name = serializers.CharField(source="user.name", read_only=True)
+
+    class Meta:
+        model = UserActivityLog
+        fields = [
+            "id",
+            "user",
+            "user_email",
+            "user_name",
+            "event_type",
+            "ip_address",
+            "user_agent",
+            "created_at",
+        ]
+        read_only_fields = [
+            "id",
+            "user",
+            "user_email",
+            "user_name",
+            "ip_address",
+            "user_agent",
+            "created_at",
+        ]
+
 
 

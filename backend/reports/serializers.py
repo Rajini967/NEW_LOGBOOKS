@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Report
+from .models import Report, AuditEvent
 
 
 class ReportSerializer(serializers.ModelSerializer):
@@ -26,4 +26,27 @@ class ReportSerializer(serializers.ModelSerializer):
             'updated_at',
         ]
         read_only_fields = ['id', 'approved_at', 'timestamp', 'updated_at']
+
+
+class AuditEventSerializer(serializers.ModelSerializer):
+    user_email = serializers.EmailField(source="user.email", read_only=True, allow_null=True)
+    user_name = serializers.CharField(source="user.name", read_only=True, allow_null=True)
+
+    class Meta:
+        model = AuditEvent
+        fields = [
+            "id",
+            "timestamp",
+            "user",
+            "user_email",
+            "user_name",
+            "event_type",
+            "object_type",
+            "object_id",
+            "field_name",
+            "old_value",
+            "new_value",
+            "extra",
+        ]
+        read_only_fields = fields
 

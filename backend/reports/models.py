@@ -62,3 +62,38 @@ class Report(models.Model):
     
     def __str__(self):
         return f"{self.get_report_type_display()} - {self.title}"
+
+
+class AuditEvent(models.Model):
+    """
+    Generic audit event for configuration and limit changes.
+    """
+
+    EVENT_TYPE_CHOICES = [
+        ("limit_update", "Limit Update"),
+        ("config_update", "Configuration Update"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    timestamp = models.DateTimeField(auto_now_add=True)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="audit_events",
+    )
+    event_type = models.CharField(max_length=64, choices=EVENT_TYPE_CHOICES)
+    object_type = models.CharField(max_length=100)
+    object_id = models.CharField(max_length=100, blank=True, null=True)
+    field_name = models.CharField(max_length=100)
+    old_value = models.TextField(blank=True, null=True)
+    new_value = models.TextField(blank=True, null=True)
+    extra = models.JSONField(blank=True, null=True)
+
+    class Meta:
+        db_table = "audit_events"
+        ordering = ["-timestamp"]
+
+    def __str__(self) -> str:  # pragma: no cover - trivial
+        return f"{self.event_type} on {self.object_type}:{self.object_id or ''}"

@@ -771,6 +771,44 @@ export const reportsAPI = {
     const response = await api.get(`/reports/${id}/`);
     return response.data;
   },
+
+  // User management report
+  listUsers: async (params?: { role?: string; is_active?: string; activity_date?: string }) => {
+    const response = await api.get('/reports/users/', { params });
+    if (response.data.results) {
+      return response.data.results;
+    }
+    return Array.isArray(response.data) ? response.data : [];
+  },
+
+  // User activity report
+  listUserActivity: async (params?: {
+    from_date?: string;
+    to_date?: string;
+    user?: string;
+    event_type?: string;
+  }) => {
+    const response = await api.get('/reports/user-activity/', { params });
+    if (response.data.results) {
+      return response.data.results;
+    }
+    return Array.isArray(response.data) ? response.data : [];
+  },
+
+  // Audit trail report
+  listAuditEvents: async (params?: {
+    from_date?: string;
+    to_date?: string;
+    user?: string;
+    object_type?: string;
+    event_type?: string;
+  }) => {
+    const response = await api.get('/reports/audit/', { params });
+    if (response.data.results) {
+      return response.data.results;
+    }
+    return Array.isArray(response.data) ? response.data : [];
+  },
 };
 
 export default api;

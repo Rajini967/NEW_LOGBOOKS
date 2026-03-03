@@ -11,10 +11,14 @@ from .views import (
     ValidateResetTokenView,
     ResetPasswordView,
     UserViewSet,
+    UserReportViewSet,
+    UserActivityReportViewSet,
 )
 
 router = DefaultRouter()
 router.register(r'users', UserViewSet, basename='user')
+router.register(r'reports/users', UserReportViewSet, basename='user-report')
+router.register(r'reports/user-activity', UserActivityReportViewSet, basename='user-activity-report')
 
 urlpatterns = [
     # Authentication endpoints

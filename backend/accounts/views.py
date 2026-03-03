@@ -1,7 +1,7 @@
 """
 Views for authentication and user management.
 """
-from rest_framework import viewsets, status
+from rest_framework import viewsets, status, filters
 from rest_framework.views import APIView
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -16,7 +16,7 @@ from django.core.mail import send_mail
 from django.conf import settings
 from django.db import IntegrityError
 
-from .models import User, UserRole, PasswordResetToken, hash_reset_token
+from .models import User, UserRole, PasswordResetToken, hash_reset_token, UserActivityLog
 from .serializers import (
     UserSerializer,
     UserCreateSerializer,
@@ -25,6 +25,8 @@ from .serializers import (
     ForgotPasswordSerializer,
     ValidateResetTokenSerializer,
     ResetPasswordSerializer,
+    UserReportSerializer,
+    UserActivityLogSerializer,
 )
 from .permissions import (
     CanCreateUsers,
@@ -59,6 +61,20 @@ class CustomTokenObtainPairView(TokenObtainPairView):
                 {'error': 'User account is inactive or deleted.'},
                 status=status.HTTP_401_UNAUTHORIZED
             )
+        
+        # Log successful login
+        try:
+            ip_address = request.META.get("REMOTE_ADDR")
+            user_agent = request.META.get("HTTP_USER_AGENT", "")
+            UserActivityLog.objects.create(
+                user=user,
+                event_type="login",
+                ip_address=ip_address,
+                user_agent=user_agent,
+            )
+        except Exception:
+            # Logging should not block login if it fails
+            pass
         
         return Response(serializer.validated_data, status=status.HTTP_200_OK)
 
@@ -98,6 +114,25 @@ class LogoutView(APIView):
             
             token = RefreshToken(refresh_token)
             token.blacklist()
+
+            # Determine logout event type (normal vs auto)
+            event_type = "logout"
+            reason = request.query_params.get("reason")
+            if reason == "auto":
+                event_type = "auto_logout"
+
+            try:
+                ip_address = request.META.get("REMOTE_ADDR")
+                user_agent = request.META.get("HTTP_USER_AGENT", "")
+                UserActivityLog.objects.create(
+                    user=request.user,
+                    event_type=event_type,
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                )
+            except Exception:
+                # Do not block logout if logging fails
+                pass
             
             return Response(
                 {'message': 'Successfully logged out.'},
@@ -335,4 +370,95 @@ class UserViewSet(viewsets.ModelViewSet):
         """Get current user information."""
         serializer = self.get_serializer(request.user)
         return Response(serializer.data)
+
+
+class UserReportViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    Read-only viewset exposing basic user information for reporting.
+    """
+
+    serializer_class = UserReportSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [filters.SearchFilter]
+    search_fields = ["email", "name", "role"]
+
+    def get_serializer_context(self):
+        """
+        Extend serializer context with optional activity_date used for
+        computing per-day first login and last logout.
+        """
+        context = super().get_serializer_context()
+        activity_date = self.request.query_params.get("activity_date")
+        if activity_date:
+            context["activity_date"] = activity_date
+        return context
+
+    def get_queryset(self):
+        user = self.request.user
+
+        # Super Admin can see all active, non-deleted users
+        if user.role == UserRole.SUPER_ADMIN:
+            qs = User.all_objects.filter(is_deleted=False)
+        # Manager/Admin can see Supervisor, Operator, Client
+        elif user.role == UserRole.MANAGER:
+            qs = User.all_objects.filter(
+                is_deleted=False,
+                role__in=[UserRole.SUPERVISOR, UserRole.OPERATOR, UserRole.CLIENT],
+            )
+        # Supervisor can see Operator and Client for reporting
+        elif user.role == UserRole.SUPERVISOR:
+            qs = User.all_objects.filter(
+                is_deleted=False,
+                role__in=[UserRole.SUPERVISOR, UserRole.OPERATOR, UserRole.CLIENT],
+            )
+        else:
+            return User.objects.none()
+
+        # Optional filtering by role/active via query params
+        role = self.request.query_params.get("role")
+        if role:
+            qs = qs.filter(role=role)
+
+        is_active = self.request.query_params.get("is_active")
+        if is_active in ("true", "false"):
+            qs = qs.filter(is_active=(is_active == "true"))
+
+        return qs.order_by("-created_at")
+
+
+class UserActivityReportViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    Read-only viewset for user login/logout activity reports.
+    """
+
+    serializer_class = UserActivityLogSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [filters.OrderingFilter]
+    ordering = ["-created_at"]
+
+    def get_queryset(self):
+        user = self.request.user
+
+        # Supervisors, Managers(Admin), and Super Admin can see activity
+        if user.role not in [UserRole.SUPERVISOR, UserRole.MANAGER, UserRole.SUPER_ADMIN]:
+            return UserActivityLog.objects.none()
+
+        qs = UserActivityLog.objects.select_related("user").all()
+
+        # Filters
+        from_date = self.request.query_params.get("from_date")
+        to_date = self.request.query_params.get("to_date")
+        user_id = self.request.query_params.get("user")
+        event_type = self.request.query_params.get("event_type")
+
+        if from_date:
+            qs = qs.filter(created_at__date__gte=from_date)
+        if to_date:
+            qs = qs.filter(created_at__date__lte=to_date)
+        if user_id:
+            qs = qs.filter(user_id=user_id)
+        if event_type:
+            qs = qs.filter(event_type=event_type)
+
+        return qs.order_by("-created_at")
 

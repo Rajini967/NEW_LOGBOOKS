@@ -9,6 +9,7 @@ from datetime import timedelta
 from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin, BaseUserManager
 from django.db import models
 from django.utils import timezone
+from django.conf import settings
 
 
 class UserRole(models.TextChoices):
@@ -143,6 +144,38 @@ class User(AbstractBaseUser, PermissionsMixin):
     def is_client(self):
         """Check if user is Client."""
         return self.role == UserRole.CLIENT
+
+
+class UserActivityLog(models.Model):
+    """
+    Simple activity log for user login/logout and related events.
+    """
+
+    EVENT_TYPE_CHOICES = [
+        ("login", "Login"),
+        ("logout", "Logout"),
+        ("manual_login", "Manual Login"),
+        ("manual_logout", "Manual Logout"),
+        ("auto_logout", "Auto Logout"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="activity_logs",
+    )
+    event_type = models.CharField(max_length=32, choices=EVENT_TYPE_CHOICES)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "user_activity_logs"
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:  # pragma: no cover - trivial
+        return f"{self.user.email} - {self.event_type} at {self.created_at}"
 
 
 def hash_reset_token(raw_token: str) -> str:

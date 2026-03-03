@@ -18,6 +18,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
 } from '@/components/ui/dialog';
 import { useAuth } from '@/contexts/AuthContext';
 import {
@@ -57,9 +58,19 @@ import {
   testCertificateAPI,
 } from '@/lib/api';
 
+type ApprovedReportType =
+  | 'utility'
+  | 'chemical'
+  | 'validation'
+  | 'air_velocity'
+  | 'filter_integrity'
+  | 'recovery'
+  | 'differential_pressure'
+  | 'nvpc';
+
 interface Report {
   id: string;
-  type: 'utility' | 'chemical' | 'validation' | 'air_velocity' | 'filter_integrity' | 'recovery' | 'differential_pressure' | 'nvpc';
+  type: ApprovedReportType;
   title: string;
   site: string;
   createdBy: string;
@@ -69,6 +80,43 @@ interface Report {
   status: 'pending' | 'approved' | 'rejected';
   remarks?: string;
   originalData?: any; // Store original log data for viewing
+}
+
+interface UserReport {
+  id: string;
+  email: string;
+  role: string;
+  role_display: string;
+  is_active: boolean;
+  created_at: string;
+  last_login: string | null;
+  first_login: string | null;
+  last_logout: string | null;
+}
+
+interface UserActivityRow {
+  id: string;
+  user: string;
+  user_email: string;
+  user_name: string | null;
+  event_type: string;
+  ip_address: string | null;
+  user_agent: string | null;
+  created_at: string;
+}
+
+interface AuditEventRow {
+  id: string;
+  timestamp: string;
+  user: string | null;
+  user_email: string | null;
+  user_name: string | null;
+  event_type: string;
+  object_type: string;
+  object_id: string | null;
+  field_name: string;
+  old_value: string | null;
+  new_value: string | null;
 }
 
 // TODO: Replace with API call to fetch reports
@@ -96,7 +144,11 @@ const typeLabels = {
 
 export default function ReportsPage() {
   const { user } = useAuth();
-  
+
+  const [activeTab, setActiveTab] = useState<
+    'approved' | 'user-management' | 'user-activity' | 'audit-trail'
+  >('approved');
+
   // Load reports from centralized reports API (only approved reports for all roles)
   const loadReportsFromAPI = useCallback(async () => {
     try {
@@ -140,9 +192,31 @@ export default function ReportsPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedReports, setSelectedReports] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [userReports, setUserReports] = useState<UserReport[]>([]);
+  const [userReportsLoading, setUserReportsLoading] = useState(false);
+  const [userReportRoleFilter, setUserReportRoleFilter] = useState<string>('all');
+  const [userReportActiveFilter, setUserReportActiveFilter] = useState<string>('all');
+  const [userReportActivityDate, setUserReportActivityDate] = useState<string>('');
+
+  const [activityRows, setActivityRows] = useState<UserActivityRow[]>([]);
+  const [activityLoading, setActivityLoading] = useState(false);
+  const [activityFromDate, setActivityFromDate] = useState<string>('');
+  const [activityToDate, setActivityToDate] = useState<string>('');
+  const [activityEventType, setActivityEventType] = useState<string>('all');
+
+  const [auditRows, setAuditRows] = useState<AuditEventRow[]>([]);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditFromDate, setAuditFromDate] = useState<string>('');
+  const [auditToDate, setAuditToDate] = useState<string>('');
+  const [auditEventType, setAuditEventType] = useState<string>('all');
+  const [auditObjectType, setAuditObjectType] = useState<string>('all');
 
   const isSupervisor = user?.role === 'supervisor' || user?.role === 'super_admin';
+  const isManager = user?.role === 'manager';
   const isCustomer = user?.role === 'customer';
+  const canSeeUserReports = !isCustomer && (isSupervisor || isManager || user?.role === 'super_admin');
+  const canSeeActivity = !isCustomer && (isSupervisor || isManager || user?.role === 'super_admin');
+  const canSeeAudit = !isCustomer && (isSupervisor || isManager || user?.role === 'super_admin');
 
   const filteredReports = reports.filter(report => {
     // Only show approved reports
@@ -187,7 +261,7 @@ export default function ReportsPage() {
     }
   };
 
-  // Load reports from API on mount and refresh periodically
+  // Load approved reports from API on mount and refresh periodically
   useEffect(() => {
     const fetchReports = async () => {
       setIsLoading(true);
@@ -205,6 +279,87 @@ export default function ReportsPage() {
       clearInterval(intervalId);
     };
   }, [loadReportsFromAPI]);
+
+  const loadUserReports = useCallback(
+    async (params?: { role?: string; is_active?: string }) => {
+      try {
+        setUserReportsLoading(true);
+        const data = await reportsAPI.listUsers(params);
+        setUserReports(data);
+      } catch (error) {
+        console.error('Error loading user management reports:', error);
+        toast.error('Failed to load user management report');
+      } finally {
+        setUserReportsLoading(false);
+      }
+    },
+    [],
+  );
+
+  const loadUserActivity = useCallback(
+    async (params?: {
+      from_date?: string;
+      to_date?: string;
+      user?: string;
+      event_type?: string;
+    }) => {
+      try {
+        setActivityLoading(true);
+        const data = await reportsAPI.listUserActivity(params);
+        setActivityRows(data);
+      } catch (error) {
+        console.error('Error loading user activity report:', error);
+        toast.error('Failed to load user activity report');
+      } finally {
+        setActivityLoading(false);
+      }
+    },
+    [],
+  );
+
+  const loadAuditEvents = useCallback(
+    async (params?: {
+      from_date?: string;
+      to_date?: string;
+      user?: string;
+      object_type?: string;
+      event_type?: string;
+    }) => {
+      try {
+        setAuditLoading(true);
+        const data = await reportsAPI.listAuditEvents(params);
+        setAuditRows(data);
+      } catch (error) {
+        console.error('Error loading audit trail report:', error);
+        toast.error('Failed to load audit trail report');
+      } finally {
+        setAuditLoading(false);
+      }
+    },
+    [],
+  );
+
+  // Lazy-load data when switching tabs
+  useEffect(() => {
+    if (activeTab === 'user-management' && canSeeUserReports && userReports.length === 0) {
+      loadUserReports();
+    } else if (activeTab === 'user-activity' && canSeeActivity && activityRows.length === 0) {
+      loadUserActivity();
+    } else if (activeTab === 'audit-trail' && canSeeAudit && auditRows.length === 0) {
+      loadAuditEvents();
+    }
+  }, [
+    activeTab,
+    canSeeUserReports,
+    canSeeActivity,
+    canSeeAudit,
+    userReports.length,
+    activityRows.length,
+    auditRows.length,
+    loadUserReports,
+    loadUserActivity,
+    loadAuditEvents,
+  ]);
 
 
   const handleApprove = async () => {
@@ -306,8 +461,38 @@ export default function ReportsPage() {
 
   // Helper function to fetch full data from original source
   const fetchFullReportData = useCallback(async (report: Report): Promise<any> => {
+    // If originalData already holds a fully resolved object (set by handleView),
+    // reuse it instead of trying to refetch by sourceId/sourceTable.
+    if (
+      report.originalData &&
+      !('sourceId' in report.originalData) &&
+      !('sourceTable' in report.originalData)
+    ) {
+      return report.originalData;
+    }
+
     const { sourceId, sourceTable } = report.originalData || {};
-    if (!sourceId || !sourceTable) return null;
+    if (!sourceTable) return null;
+
+    // For utility (E Log Book) reports we only need equipmentType.
+    // Derive it from the sourceTable so export/print still works even
+    // if the original log record has been deleted.
+    if (report.type === 'utility') {
+      if (sourceTable === 'chiller_logs') {
+        return { equipmentType: 'chiller' };
+      }
+      if (sourceTable === 'boiler_logs') {
+        return { equipmentType: 'boiler' };
+      }
+      if (sourceTable === 'compressor_logs') {
+        return { equipmentType: 'compressor' };
+      }
+      if (sourceTable === 'chemical_preparations') {
+        return { equipmentType: 'chemical' };
+      }
+    }
+
+    if (!sourceId) return null;
 
     try {
       // Map source table names to API functions
@@ -554,10 +739,14 @@ export default function ReportsPage() {
   };
 
   const handleExport = async (report: Report) => {
-    // Fetch full data from original source
+    // Fetch full data from original source (or minimal info for utility reports)
     const log = await fetchFullReportData(report);
     if (!log) {
-      toast.error('Failed to load report data');
+      toast.error(
+        report.type === 'utility'
+          ? 'Failed to determine report equipment type for export.'
+          : 'Original report data was deleted or not found; cannot export this report.'
+      );
       return;
     }
     
@@ -848,10 +1037,14 @@ export default function ReportsPage() {
   };
 
   const handlePrint = async (report: Report) => {
-    // Fetch full data from original source
+    // Fetch full data from original source (or minimal info for utility reports)
     const log = await fetchFullReportData(report);
     if (!log) {
-      toast.error('Failed to load report data');
+      toast.error(
+        report.type === 'utility'
+          ? 'Failed to determine report equipment type for printing.'
+          : 'Original report data was deleted or not found; cannot print this report.'
+      );
       return;
     }
     
@@ -1093,11 +1286,49 @@ export default function ReportsPage() {
     <div className="min-h-screen">
       <Header
         title="Reports"
-        subtitle="View and export approved reports"
+        subtitle="View and export reports"
       />
 
       <div className="p-6 space-y-6">
-        {isLoading ? (
+        {/* Tabs */}
+        <div className="flex flex-wrap gap-2 border-b border-border pb-2">
+          <Button
+            variant={activeTab === 'approved' ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setActiveTab('approved')}
+          >
+            Approved Reports
+          </Button>
+          {canSeeUserReports && (
+            <Button
+              variant={activeTab === 'user-management' ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setActiveTab('user-management')}
+            >
+              User Management
+            </Button>
+          )}
+          {canSeeActivity && (
+            <Button
+              variant={activeTab === 'user-activity' ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setActiveTab('user-activity')}
+            >
+              User Activity
+            </Button>
+          )}
+          {canSeeAudit && (
+            <Button
+              variant={activeTab === 'audit-trail' ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setActiveTab('audit-trail')}
+            >
+              Audit Trail
+            </Button>
+          )}
+        </div>
+
+        {activeTab === 'approved' && (isLoading ? (
           <div className="flex items-center justify-center py-12">
             <div className="text-center">
               <Clock className="w-8 h-8 mx-auto mb-2 animate-spin text-muted-foreground" />
@@ -1276,6 +1507,9 @@ export default function ReportsPage() {
                 <FileText className="w-5 h-5" />
                 Report Details
               </DialogTitle>
+              <DialogDescription>
+                Summary of the approved report information. Use Export or Print to generate a PDF.
+              </DialogDescription>
             </DialogHeader>
             {selectedReport && (
               <div className="space-y-4">
@@ -1287,23 +1521,34 @@ export default function ReportsPage() {
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <Label className="text-xs text-muted-foreground">Type</Label>
-                      <p className="text-sm">
+                      <div className="text-sm">
                         <Badge variant="accent">{typeLabels[selectedReport.type]}</Badge>
-                      </p>
+                      </div>
                     </div>
                     <div>
                       <Label className="text-xs text-muted-foreground">Status</Label>
-                      <p className="text-sm">
-                        <Badge variant={
-                          selectedReport.status === 'approved' ? 'success' : 
-                          selectedReport.status === 'rejected' ? 'danger' : 'pending'
-                        }>
-                          {selectedReport.status === 'approved' && <CheckCircle2 className="w-3 h-3 mr-1" />}
-                          {selectedReport.status === 'rejected' && <XCircle className="w-3 h-3 mr-1" />}
-                          {selectedReport.status === 'pending' && <Clock className="w-3 h-3 mr-1" />}
+                      <div className="text-sm">
+                        <Badge
+                          variant={
+                            selectedReport.status === 'approved'
+                              ? 'success'
+                              : selectedReport.status === 'rejected'
+                              ? 'danger'
+                              : 'pending'
+                          }
+                        >
+                          {selectedReport.status === 'approved' && (
+                            <CheckCircle2 className="w-3 h-3 mr-1" />
+                          )}
+                          {selectedReport.status === 'rejected' && (
+                            <XCircle className="w-3 h-3 mr-1" />
+                          )}
+                          {selectedReport.status === 'pending' && (
+                            <Clock className="w-3 h-3 mr-1" />
+                          )}
                           {selectedReport.status}
                         </Badge>
-                      </p>
+                      </div>
                     </div>
                     <div>
                       <Label className="text-xs text-muted-foreground">Site</Label>
@@ -1408,6 +1653,662 @@ export default function ReportsPage() {
           </DialogContent>
         </Dialog>
           </>
+        ))}
+
+        {activeTab === 'user-management' && canSeeUserReports && (
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center gap-4">
+              <div className="flex items-center gap-2">
+                <Label>Role</Label>
+                <Select
+                  value={userReportRoleFilter}
+                  onValueChange={(value) => {
+                    setUserReportRoleFilter(value);
+                    const roleParam = value === 'all' ? undefined : value;
+                    const activeParam =
+                      userReportActiveFilter === 'all' ? undefined : userReportActiveFilter;
+                    const activityDateParam = userReportActivityDate || undefined;
+                    loadUserReports({
+                      role: roleParam,
+                      is_active: activeParam,
+                      activity_date: activityDateParam,
+                    });
+                  }}
+                >
+                  <SelectTrigger className="w-[160px]">
+                    <SelectValue placeholder="Role" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All</SelectItem>
+                    <SelectItem value="super_admin">Super Admin</SelectItem>
+                    <SelectItem value="manager">Admin</SelectItem>
+                    <SelectItem value="supervisor">Supervisor</SelectItem>
+                    <SelectItem value="operator">Operator</SelectItem>
+                    <SelectItem value="client">Client</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex items-center gap-2">
+                <Label>Status</Label>
+                <Select
+                  value={userReportActiveFilter}
+                  onValueChange={(value) => {
+                    setUserReportActiveFilter(value);
+                    const roleParam =
+                      userReportRoleFilter === 'all' ? undefined : userReportRoleFilter;
+                    const activeParam = value === 'all' ? undefined : value;
+                    const activityDateParam = userReportActivityDate || undefined;
+                    loadUserReports({
+                      role: roleParam,
+                      is_active: activeParam,
+                      activity_date: activityDateParam,
+                    });
+                  }}
+                >
+                  <SelectTrigger className="w-[160px]">
+                    <SelectValue placeholder="Status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All</SelectItem>
+                    <SelectItem value="true">Active</SelectItem>
+                    <SelectItem value="false">Inactive</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex items-center gap-2">
+                <Label>Activity date</Label>
+                <Input
+                  type="date"
+                  value={userReportActivityDate}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setUserReportActivityDate(value);
+                    const roleParam =
+                      userReportRoleFilter === 'all' ? undefined : userReportRoleFilter;
+                    const activeParam =
+                      userReportActiveFilter === 'all' ? undefined : userReportActiveFilter;
+                    const activityDateParam = value || undefined;
+                    loadUserReports({
+                      role: roleParam,
+                      is_active: activeParam,
+                      activity_date: activityDateParam,
+                    });
+                  }}
+                  className="w-[180px]"
+                />
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  const rowsHtml = userReports
+                    .map(
+                      (u) => `
+                        <tr>
+                          <td>${u.email}</td>
+                          <td>${u.role_display}</td>
+                          <td>${u.is_active ? 'Active' : 'Inactive'}</td>
+                          <td>${u.created_at ? format(new Date(u.created_at), 'dd/MM/yy HH:mm') : ''}</td>
+                          <td>${
+                            u.first_login
+                              ? format(new Date(u.first_login), 'dd/MM/yy HH:mm')
+                              : ''
+                          }</td>
+                          <td>${
+                            u.last_logout
+                              ? format(new Date(u.last_logout), 'dd/MM/yy HH:mm')
+                              : ''
+                          }</td>
+                        </tr>
+                      `,
+                    )
+                    .join('');
+
+                  const html = `
+                    <!DOCTYPE html>
+                    <html>
+                      <head>
+                        <title>User Management Report</title>
+                        <style>
+                          body {
+                            font-family: Arial, sans-serif;
+                            margin: 0;
+                            padding: 16px;
+                            font-size: 12px;
+                          }
+                          h1 {
+                            margin: 0 0 12px 0;
+                            font-size: 18px;
+                            text-align: left;
+                          }
+                          table {
+                            width: 100%;
+                            border-collapse: collapse;
+                          }
+                          th, td {
+                            border: 1px solid #ccc;
+                            padding: 6px 8px;
+                            font-size: 11px;
+                          }
+                          th {
+                            background: #f5f5f5;
+                          }
+                        </style>
+                      </head>
+                      <body>
+                        <h1>User Management Report</h1>
+                        <table>
+                          <thead>
+                            <tr>
+                              <th>Email</th>
+                              <th>Role</th>
+                              <th>Status</th>
+                              <th>Date Joined</th>
+                              <th>First Login</th>
+                              <th>Last Logout</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            ${rowsHtml}
+                          </tbody>
+                        </table>
+                      </body>
+                    </html>
+                  `;
+
+                  try {
+                    const blob = new Blob([html], { type: 'text/html' });
+                    const success = printPDF(blob);
+                    if (!success) {
+                      toast.error('Please allow popups to print reports');
+                    }
+                  } catch (error) {
+                    console.error('Error preparing User Management printout:', error);
+                    toast.error('Failed to open print dialog for User Management report');
+                  }
+                }}
+              >
+                <Printer className="w-4 h-4 mr-2" />
+                PDF / Print
+              </Button>
+            </div>
+
+            <div className="bg-card rounded-lg border border-border overflow-hidden">
+              {userReportsLoading ? (
+                <div className="flex items-center justify-center py-8 text-muted-foreground text-sm">
+                  Loading user management report...
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="bg-muted/50 border-b border-border">
+                        <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                          Email
+                        </th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                          Role
+                        </th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                          Status
+                        </th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                          Date Joined
+                        </th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                          First Login
+                        </th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                          Last Logout
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {userReports.map((u) => (
+                        <tr key={u.id} className="hover:bg-muted/30 transition-colors">
+                          <td className="px-4 py-3 text-sm">{u.email}</td>
+                          <td className="px-4 py-3 text-sm">{u.role_display}</td>
+                          <td className="px-4 py-3 text-sm">
+                            <Badge variant={u.is_active ? 'success' : 'outline'}>
+                              {u.is_active ? 'Active' : 'Inactive'}
+                            </Badge>
+                          </td>
+                          <td className="px-4 py-3 text-sm">
+                            {u.created_at
+                              ? format(new Date(u.created_at), 'dd/MM/yy HH:mm')
+                              : ''}
+                          </td>
+                          <td className="px-4 py-3 text-sm">
+                            {u.first_login
+                              ? format(new Date(u.first_login), 'dd/MM/yy HH:mm')
+                              : '-'}
+                          </td>
+                          <td className="px-4 py-3 text-sm">
+                            {u.last_logout
+                              ? format(new Date(u.last_logout), 'dd/MM/yy HH:mm')
+                              : '-'}
+                          </td>
+                        </tr>
+                      ))}
+                      {userReports.length === 0 && (
+                        <tr>
+                          <td
+                            colSpan={6}
+                            className="px-4 py-6 text-center text-sm text-muted-foreground"
+                          >
+                            No users found for selected filters.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'user-activity' && canSeeActivity && (
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-end gap-4">
+              <div>
+                <Label>From date</Label>
+                <Input
+                  type="date"
+                  value={activityFromDate}
+                  onChange={(e) => setActivityFromDate(e.target.value)}
+                  className="mt-1"
+                />
+              </div>
+              <div>
+                <Label>To date</Label>
+                <Input
+                  type="date"
+                  value={activityToDate}
+                  onChange={(e) => setActivityToDate(e.target.value)}
+                  className="mt-1"
+                />
+              </div>
+              <div>
+                <Label>Event type</Label>
+                <Select
+                  value={activityEventType}
+                  onValueChange={(value) => setActivityEventType(value)}
+                >
+                  <SelectTrigger className="w-[180px] mt-1">
+                    <SelectValue placeholder="Event type" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All</SelectItem>
+                    <SelectItem value="login">Login</SelectItem>
+                    <SelectItem value="logout">Logout</SelectItem>
+                    <SelectItem value="manual_login">Manual Login</SelectItem>
+                    <SelectItem value="manual_logout">Manual Logout</SelectItem>
+                    <SelectItem value="auto_logout">Auto Logout</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  const params: any = {};
+                  if (activityFromDate) params.from_date = activityFromDate;
+                  if (activityToDate) params.to_date = activityToDate;
+                  if (activityEventType !== 'all') params.event_type = activityEventType;
+                  loadUserActivity(params);
+                }}
+              >
+                <Filter className="w-4 h-4 mr-2" />
+                Apply Filters
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  const printWindow = window.open('', '_blank');
+                  if (!printWindow) {
+                    toast.error('Please allow popups to export PDF');
+                    return;
+                  }
+
+                  const rowsHtml = activityRows
+                    .map(
+                      (row) => `
+                        <tr>
+                          <td>${row.created_at ? format(new Date(row.created_at), 'dd/MM/yy HH:mm') : ''}</td>
+                          <td>${row.user_email}</td>
+                          <td>${row.user_name || ''}</td>
+                          <td>${row.event_type}</td>
+                          <td>${row.ip_address || ''}</td>
+                          <td>${row.user_agent || ''}</td>
+                        </tr>
+                      `,
+                    )
+                    .join('');
+
+                  printWindow.document.write(`
+                    <!DOCTYPE html>
+                    <html>
+                      <head>
+                        <title>User Activity Report</title>
+                        <style>
+                          body { font-family: Arial, sans-serif; padding: 20px; }
+                          h1 { margin-bottom: 16px; }
+                          table { width: 100%; border-collapse: collapse; }
+                          th, td { border: 1px solid #ccc; padding: 6px 8px; font-size: 12px; }
+                          th { background: #f5f5f5; }
+                        </style>
+                      </head>
+                      <body>
+                        <h1>User Activity Report</h1>
+                        <table>
+                          <thead>
+                            <tr>
+                              <th>Date/Time</th>
+                              <th>User Email</th>
+                              <th>User Name</th>
+                              <th>Event</th>
+                              <th>IP Address</th>
+                              <th>User Agent</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            ${rowsHtml}
+                          </tbody>
+                        </table>
+                        <script>
+                          window.onload = function() { window.print(); };
+                        </script>
+                      </body>
+                    </html>
+                  `);
+                  printWindow.document.close();
+                }}
+              >
+                <Printer className="w-4 h-4 mr-2" />
+                PDF / Print
+              </Button>
+            </div>
+
+            <div className="bg-card rounded-lg border border-border overflow-hidden">
+              {activityLoading ? (
+                <div className="flex items-center justify-center py-8 text-muted-foreground text-sm">
+                  Loading user activity report...
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="bg-muted/50 border-b border-border">
+                        <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                          Date/Time
+                        </th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                          User Email
+                        </th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                          User Name
+                        </th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                          Event
+                        </th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                          IP Address
+                        </th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                          User Agent
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {activityRows.map((row) => (
+                        <tr key={row.id} className="hover:bg-muted/30 transition-colors">
+                          <td className="px-4 py-3 text-sm">
+                            {row.created_at
+                              ? format(new Date(row.created_at), 'dd/MM/yy HH:mm')
+                              : ''}
+                          </td>
+                          <td className="px-4 py-3 text-sm">{row.user_email}</td>
+                          <td className="px-4 py-3 text-sm">{row.user_name}</td>
+                          <td className="px-4 py-3 text-sm capitalize">{row.event_type}</td>
+                          <td className="px-4 py-3 text-sm">{row.ip_address}</td>
+                          <td className="px-4 py-3 text-sm truncate max-w-xs">
+                            {row.user_agent}
+                          </td>
+                        </tr>
+                      ))}
+                      {activityRows.length === 0 && (
+                        <tr>
+                          <td
+                            colSpan={6}
+                            className="px-4 py-6 text-center text-sm text-muted-foreground"
+                          >
+                            No activity found for selected filters.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'audit-trail' && canSeeAudit && (
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-end gap-4">
+              <div>
+                <Label>From date</Label>
+                <Input
+                  type="date"
+                  value={auditFromDate}
+                  onChange={(e) => setAuditFromDate(e.target.value)}
+                  className="mt-1"
+                />
+              </div>
+              <div>
+                <Label>To date</Label>
+                <Input
+                  type="date"
+                  value={auditToDate}
+                  onChange={(e) => setAuditToDate(e.target.value)}
+                  className="mt-1"
+                />
+              </div>
+              <div>
+                <Label>Event type</Label>
+                <Select
+                  value={auditEventType}
+                  onValueChange={(value) => setAuditEventType(value)}
+                >
+                  <SelectTrigger className="w-[180px] mt-1">
+                    <SelectValue placeholder="Event type" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All</SelectItem>
+                    <SelectItem value="limit_update">Limit Update</SelectItem>
+                    <SelectItem value="config_update">Config Update</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Object type</Label>
+                <Input
+                  value={auditObjectType === 'all' ? '' : auditObjectType}
+                  onChange={(e) =>
+                    setAuditObjectType(e.target.value ? e.target.value : 'all')
+                  }
+                  placeholder="e.g. chiller_limit"
+                  className="mt-1 w-[180px]"
+                />
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  const params: any = {};
+                  if (auditFromDate) params.from_date = auditFromDate;
+                  if (auditToDate) params.to_date = auditToDate;
+                  if (auditEventType !== 'all') params.event_type = auditEventType;
+                  if (auditObjectType !== 'all' && auditObjectType.trim()) {
+                    params.object_type = auditObjectType.trim();
+                  }
+                  loadAuditEvents(params);
+                }}
+              >
+                <Filter className="w-4 h-4 mr-2" />
+                Apply Filters
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  const printWindow = window.open('', '_blank');
+                  if (!printWindow) {
+                    toast.error('Please allow popups to export PDF');
+                    return;
+                  }
+
+                  const rowsHtml = auditRows
+                    .map(
+                      (row) => `
+                        <tr>
+                          <td>${row.timestamp ? format(new Date(row.timestamp), 'dd/MM/yy HH:mm') : ''}</td>
+                          <td>${row.user_email || ''}</td>
+                          <td>${row.user_name || ''}</td>
+                          <td>${row.event_type}</td>
+                          <td>${row.object_type}</td>
+                          <td>${row.object_id || ''}</td>
+                          <td>${row.field_name}</td>
+                          <td>${row.old_value || ''}</td>
+                          <td>${row.new_value || ''}</td>
+                        </tr>
+                      `,
+                    )
+                    .join('');
+
+                  printWindow.document.write(`
+                    <!DOCTYPE html>
+                    <html>
+                      <head>
+                        <title>Audit Trail Report</title>
+                        <style>
+                          body { font-family: Arial, sans-serif; padding: 20px; }
+                          h1 { margin-bottom: 16px; }
+                          table { width: 100%; border-collapse: collapse; }
+                          th, td { border: 1px solid #ccc; padding: 6px 8px; font-size: 12px; }
+                          th { background: #f5f5f5; }
+                        </style>
+                      </head>
+                      <body>
+                        <h1>Audit Trail Report</h1>
+                        <table>
+                          <thead>
+                            <tr>
+                              <th>Date/Time</th>
+                              <th>User Email</th>
+                              <th>User Name</th>
+                              <th>Event</th>
+                              <th>Object Type</th>
+                              <th>Object ID</th>
+                              <th>Field</th>
+                              <th>Old Value</th>
+                              <th>New Value</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            ${rowsHtml}
+                          </tbody>
+                        </table>
+                        <script>
+                          window.onload = function() { window.print(); };
+                        </script>
+                      </body>
+                    </html>
+                  `);
+                  printWindow.document.close();
+                }}
+              >
+                <Printer className="w-4 h-4 mr-2" />
+                PDF / Print
+              </Button>
+            </div>
+
+            <div className="bg-card rounded-lg border border-border overflow-hidden">
+              {auditLoading ? (
+                <div className="flex items-center justify-center py-8 text-muted-foreground text-sm">
+                  Loading audit trail report...
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="bg-muted/50 border-b border-border">
+                        <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                          Date/Time
+                        </th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                          User Email
+                        </th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                          User Name
+                        </th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                          Event
+                        </th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                          Object Type
+                        </th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                          Object ID
+                        </th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                          Field
+                        </th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                          Old Value
+                        </th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                          New Value
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {auditRows.map((row) => (
+                        <tr key={row.id} className="hover:bg-muted/30 transition-colors">
+                          <td className="px-4 py-3 text-sm">
+                            {row.timestamp
+                              ? format(new Date(row.timestamp), 'dd/MM/yy HH:mm')
+                              : ''}
+                          </td>
+                          <td className="px-4 py-3 text-sm">{row.user_email}</td>
+                          <td className="px-4 py-3 text-sm">{row.user_name}</td>
+                          <td className="px-4 py-3 text-sm capitalize">{row.event_type}</td>
+                          <td className="px-4 py-3 text-sm">{row.object_type}</td>
+                          <td className="px-4 py-3 text-sm">{row.object_id}</td>
+                          <td className="px-4 py-3 text-sm">{row.field_name}</td>
+                          <td className="px-4 py-3 text-sm">{row.old_value}</td>
+                          <td className="px-4 py-3 text-sm">{row.new_value}</td>
+                        </tr>
+                      ))}
+                      {auditRows.length === 0 && (
+                        <tr>
+                          <td
+                            colSpan={9}
+                            className="px-4 py-6 text-center text-sm text-muted-foreground"
+                          >
+                            No audit events found for selected filters.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
         )}
       </div>
     </div>
