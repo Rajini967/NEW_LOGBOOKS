@@ -9,9 +9,10 @@ class ChemicalPreparationSerializer(serializers.ModelSerializer):
     class Meta:
         model = ChemicalPreparation
         fields = [
-            'id', 'equipment_name', 'chemical_name',
+            'id', 'equipment_name', 'chemical_name', 'chemical_category',
             'chemical_percent', 'solution_concentration', 'water_qty', 'chemical_qty',
-            'remarks', 'checked_by', 'operator_id', 'operator_name', 'status',
+            'batch_no', 'quantity_taken', 'reason', 'done_by',
+            'remarks', 'comment', 'checked_by', 'operator_id', 'operator_name', 'status',
             'approved_by_id', 'approved_at', 'timestamp', 'created_at', 'updated_at'
         ]
         read_only_fields = [

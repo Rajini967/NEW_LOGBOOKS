@@ -208,7 +208,8 @@ class ChillerLog(models.Model):
         help_text="Verified by (Sign & Date)"
     )
     
-    remarks = models.TextField(blank=True, null=True)
+    remarks = models.TextField(blank=True, null=True, help_text="Operator remarks from entry form")
+    comment = models.TextField(blank=True, null=True, help_text="Separate comment field for list view")
     operator = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,

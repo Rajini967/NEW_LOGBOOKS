@@ -347,22 +347,18 @@ export const chemicalPrepAPI = {
     return response.data;
   },
 
-  create: async (data: {
-    equipment_name: string;
-    chemical_name: string;
-    chemical_percent: number;
-    solution_concentration: number;
-    water_qty: number;
-    chemical_qty: number;
-    remarks?: string;
-    checked_by?: string;
-  }) => {
+  create: async (data: any) => {
     const response = await api.post('/chemical-preps/', data);
     return response.data;
   },
 
   update: async (id: string, data: any) => {
     const response = await api.put(`/chemical-preps/${id}/`, data);
+    return response.data;
+  },
+
+  patch: async (id: string, data: any) => {
+    const response = await api.patch(`/chemical-preps/${id}/`, data);
     return response.data;
   },
 
@@ -415,6 +411,11 @@ export const chillerLogAPI = {
     return response.data;
   },
 
+  patch: async (id: string, data: any) => {
+    const response = await api.patch(`/chiller-logs/${id}/`, data);
+    return response.data;
+  },
+
   approve: async (id: string, action: 'approve' | 'reject', remarks?: string) => {
     const response = await api.post(`/chiller-logs/${id}/approve/`, {
       action,
@@ -451,6 +452,19 @@ export const boilerLogAPI = {
     steam_temp: number;
     steam_pressure: number;
     steam_flow_lph?: number;
+    fo_hsd_ng_day_tank_level?: number;
+    feed_water_tank_level?: number;
+    fo_pre_heater_temp?: number;
+    burner_oil_pressure?: number;
+    burner_heater_temp?: number;
+    boiler_steam_pressure?: number;
+    stack_temperature?: number;
+    steam_pressure_after_prv?: number;
+    feed_water_hardness_ppm?: number;
+    feed_water_tds_ppm?: number;
+    fo_hsd_ng_consumption?: number;
+    mobrey_functioning?: string;
+    manual_blowdown_time?: string;
     remarks?: string;
   }) => {
     const response = await api.post('/boiler-logs/', data);
@@ -459,6 +473,11 @@ export const boilerLogAPI = {
 
   update: async (id: string, data: any) => {
     const response = await api.put(`/boiler-logs/${id}/`, data);
+    return response.data;
+  },
+
+  patch: async (id: string, data: any) => {
+    const response = await api.patch(`/boiler-logs/${id}/`, data);
     return response.data;
   },
 

@@ -19,12 +19,26 @@ class ChemicalPreparation(models.Model):
     # Chemical preparation fields
     equipment_name = models.CharField(max_length=255, blank=True, null=True)
     chemical_name = models.CharField(max_length=255, blank=True, null=True)
+    chemical_category = models.CharField(
+        max_length=10,
+        choices=[
+            ('major', 'Major'),
+            ('minor', 'Minor'),
+        ],
+        blank=True,
+        null=True,
+    )
     chemical_percent = models.FloatField(validators=[MinValueValidator(0)], blank=True, null=True)
     solution_concentration = models.FloatField(validators=[MinValueValidator(0)], blank=True, null=True)
     water_qty = models.FloatField(validators=[MinValueValidator(0)], blank=True, null=True, help_text="Water quantity (L)")
     chemical_qty = models.FloatField(validators=[MinValueValidator(0)], blank=True, null=True, help_text="Chemical quantity (G)")
+    batch_no = models.CharField(max_length=100, blank=True, null=True)
+    quantity_taken = models.FloatField(validators=[MinValueValidator(0)], blank=True, null=True, help_text="Quantity taken (L or Kg)")
+    reason = models.TextField(blank=True, null=True)
+    done_by = models.CharField(max_length=255, blank=True, null=True)
     
-    remarks = models.TextField(blank=True, null=True)
+    remarks = models.TextField(blank=True, null=True, help_text="Operator remarks from entry form")
+    comment = models.TextField(blank=True, null=True, help_text="Separate comment field for list view")
     checked_by = models.CharField(max_length=255, blank=True, null=True)
     operator = models.ForeignKey(
         settings.AUTH_USER_MODEL,

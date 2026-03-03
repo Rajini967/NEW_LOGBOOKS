@@ -14,7 +14,7 @@ from django.utils import timezone
 class UserRole(models.TextChoices):
     """User role choices."""
     SUPER_ADMIN = 'super_admin', 'Super Admin'
-    MANAGER = 'manager', 'Manager'
+    MANAGER = 'manager', 'Admin'
     SUPERVISOR = 'supervisor', 'Supervisor'
     OPERATOR = 'operator', 'Operator'
     CLIENT = 'client', 'Client'

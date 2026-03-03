@@ -15,6 +15,7 @@ class ReportViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
     
     def get_queryset(self):
+        # Only approved reports are stored in Report table; ensure we never show others
         queryset = Report.objects.all()
         
         # Filter by report type if provided
@@ -22,7 +23,8 @@ class ReportViewSet(viewsets.ReadOnlyModelViewSet):
         if report_type:
             queryset = queryset.filter(report_type=report_type)
         
-        # Customers only see approved reports (already filtered by default)
+        # All roles see only approved reports (Report rows are created on approval only)
+        # Customers additionally restricted to certain report types
         if self.request.user.role == 'customer':
             queryset = queryset.filter(report_type__in=['utility', 'validation', 'air_velocity', 'filter_integrity', 'recovery', 'differential_pressure', 'nvpc'])
         

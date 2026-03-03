@@ -29,7 +29,7 @@ class ChillerLogSerializer(serializers.ModelSerializer):
             'chilled_water_pump_chemical_name', 'chilled_water_pump_chemical_qty_kg',
             'cooling_tower_fan_chemical_name', 'cooling_tower_fan_chemical_qty_kg',
             'recording_frequency', 'operator_sign', 'verified_by',
-            'remarks', 'operator_id', 'operator_name', 'status',
+            'remarks', 'comment', 'operator_id', 'operator_name', 'status',
             'approved_by_id', 'approved_at', 'timestamp',
             'created_at', 'updated_at'
         ]

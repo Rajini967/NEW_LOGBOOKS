@@ -102,6 +102,7 @@ export default function ChemicalPrepPage() {
     // Chemical fields
     equipmentName: '',
     chemicalName: '',
+    chemicalCategory: 'major' as 'major' | 'minor',
     solutionConcentration: '',
     waterQty: '',
     // Boiler fields
@@ -118,7 +119,13 @@ export default function ChemicalPrepPage() {
   // Auto-calculate chemical quantity when inputs change (for chemical type only)
   // Formula: Chemical Qty (g) = (Solution concentration % × Water Qty (L) × 1000) / Chemical %
   useEffect(() => {
-    if (formData.logType === 'chemical' && formData.chemicalName && formData.solutionConcentration && formData.waterQty) {
+    if (
+      formData.logType === 'chemical' &&
+      formData.chemicalCategory === 'major' &&
+      formData.chemicalName &&
+      formData.solutionConcentration &&
+      formData.waterQty
+    ) {
       const chemical = chemicals.find(c => c.name === formData.chemicalName);
       if (chemical) {
         const solutionConc = parseFloat(formData.solutionConcentration);
@@ -132,12 +139,39 @@ export default function ChemicalPrepPage() {
     } else {
       setCalculatedQuantity(null);
     }
-  }, [formData.logType, formData.chemicalName, formData.solutionConcentration, formData.waterQty]);
+  }, [
+    formData.logType,
+    formData.chemicalCategory,
+    formData.chemicalName,
+    formData.solutionConcentration,
+    formData.waterQty,
+  ]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (formData.logType === 'chemical' && !calculatedQuantity) return;
+    if (formData.logType === 'chemical') {
+      if (formData.chemicalCategory === 'major' && !calculatedQuantity) {
+        toast.error('Please fill Solution concentration and Water Qty to calculate Chemical Qty.');
+        return;
+      }
+
+      if (formData.solutionConcentration) {
+        const solutionConc = parseFloat(formData.solutionConcentration);
+        if (Number.isNaN(solutionConc)) {
+          toast.error('Solution concentration must be numeric.');
+          return;
+        }
+      }
+
+      if (formData.waterQty) {
+        const waterQty = parseFloat(formData.waterQty);
+        if (Number.isNaN(waterQty)) {
+          toast.error('Water quantity must be numeric.');
+          return;
+        }
+      }
+    }
     if (formData.logType === 'boiler' && !formData.feedWaterTemp && !formData.oilTemp && !formData.steamTemp && !formData.steamPressure) {
       toast.error('Please fill in at least one boiler reading');
       return;
@@ -145,14 +179,26 @@ export default function ChemicalPrepPage() {
 
     try {
       const selectedChemical = formData.logType === 'chemical' ? chemicals.find(c => c.name === formData.chemicalName) : null;
+
+      let solutionConcentrationValue: number | undefined;
+      let waterQtyValue: number | undefined;
+      if (formData.logType === 'chemical') {
+        if (formData.solutionConcentration) {
+          solutionConcentrationValue = parseFloat(formData.solutionConcentration);
+        }
+        if (formData.waterQty) {
+          waterQtyValue = parseFloat(formData.waterQty);
+        }
+      }
       
       const prepData = {
         log_type: formData.logType,
         equipment_name: formData.logType === 'chemical' ? formData.equipmentName : undefined,
         chemical_name: formData.logType === 'chemical' ? formData.chemicalName : undefined,
         chemical_percent: formData.logType === 'chemical' ? selectedChemical?.stockConcentration : undefined,
-        solution_concentration: formData.logType === 'chemical' ? parseFloat(formData.solutionConcentration) : undefined,
-        water_qty: formData.logType === 'chemical' ? parseFloat(formData.waterQty) : undefined,
+        chemical_category: formData.logType === 'chemical' ? formData.chemicalCategory : undefined,
+        solution_concentration: formData.logType === 'chemical' ? solutionConcentrationValue : undefined,
+        water_qty: formData.logType === 'chemical' ? waterQtyValue : undefined,
         chemical_qty: formData.logType === 'chemical' ? calculatedQuantity || undefined : undefined,
         feed_water_temp: formData.logType === 'boiler' && formData.feedWaterTemp ? parseFloat(formData.feedWaterTemp) : undefined,
         oil_temp: formData.logType === 'boiler' && formData.oilTemp ? parseFloat(formData.oilTemp) : undefined,
@@ -384,6 +430,7 @@ export default function ChemicalPrepPage() {
                         logType: v as 'chemical' | 'boiler',
                         equipmentName: '',
                         chemicalName: '',
+                        chemicalCategory: 'major',
                         solutionConcentration: '',
                         waterQty: '',
                         feedWaterTemp: '',
@@ -449,6 +496,27 @@ export default function ChemicalPrepPage() {
                       </div>
                     </div>
 
+                    <div className="space-y-2">
+                      <Label>Chemical Category</Label>
+                      <Select
+                        value={formData.chemicalCategory}
+                        onValueChange={(v) =>
+                          setFormData({
+                            ...formData,
+                            chemicalCategory: v as 'major' | 'minor',
+                          })
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select category" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="major">Major</SelectItem>
+                          <SelectItem value="minor">Minor</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
                     {selectedChemical && (
                       <div className="bg-accent/10 rounded-lg p-3 border border-accent/20">
                         <p className="text-sm text-accent font-medium">
@@ -459,7 +527,12 @@ export default function ChemicalPrepPage() {
 
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-2">
-                        <Label>Solution concentration %</Label>
+                        <Label>
+                          Solution concentration %
+                          {formData.chemicalCategory === 'major' && (
+                            <span className="text-destructive ml-1">*</span>
+                          )}
+                        </Label>
                         <Input
                           type="number"
                           step="0.1"
@@ -471,7 +544,12 @@ export default function ChemicalPrepPage() {
                         />
                       </div>
                       <div className="space-y-2">
-                        <Label>Water Qty (L)</Label>
+                        <Label>
+                          Water Qty (L)
+                          {formData.chemicalCategory === 'major' && (
+                            <span className="text-destructive ml-1">*</span>
+                          )}
+                        </Label>
                         <Input
                           type="number"
                           step="0.1"
@@ -592,7 +670,15 @@ export default function ChemicalPrepPage() {
                   <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
                     Cancel
                   </Button>
-                  <Button type="submit" variant="accent" disabled={formData.logType === 'chemical' && !calculatedQuantity}>
+                  <Button
+                    type="submit"
+                    variant="accent"
+                    disabled={
+                      formData.logType === 'chemical' &&
+                      formData.chemicalCategory === 'major' &&
+                      !calculatedQuantity
+                    }
+                  >
                     <Save className="w-4 h-4 mr-2" />
                     {formData.logType === 'chemical' ? 'Log Preparation' : 'Log Reading'}
                   </Button>

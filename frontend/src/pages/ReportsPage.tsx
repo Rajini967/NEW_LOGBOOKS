@@ -97,28 +97,30 @@ const typeLabels = {
 export default function ReportsPage() {
   const { user } = useAuth();
   
-  // Load reports from centralized reports API
+  // Load reports from centralized reports API (only approved reports for all roles)
   const loadReportsFromAPI = useCallback(async () => {
     try {
       const reportsData = await reportsAPI.list();
       
-      // Transform API response to Report format
-      const reportsList: Report[] = reportsData.map((report: any) => ({
-        id: report.id,
-        type: report.report_type,
-        title: report.title,
-        site: report.site,
-        createdBy: report.created_by,
-        createdAt: new Date(report.created_at),
-        approvedBy: report.approved_by_name || undefined,
-        approvedAt: report.approved_at ? new Date(report.approved_at) : undefined,
-        status: 'approved' as const, // All reports in this table are approved
-        remarks: report.remarks,
-        originalData: {
-          sourceId: report.source_id,
-          sourceTable: report.source_table,
-        },
-      }));
+      // Transform API response to Report format; only include approved reports
+      const reportsList: Report[] = reportsData
+        .filter((report: any) => report.approved_at != null)
+        .map((report: any) => ({
+          id: report.id,
+          type: report.report_type,
+          title: report.title,
+          site: report.site,
+          createdBy: report.created_by,
+          createdAt: new Date(report.created_at),
+          approvedBy: report.approved_by_name || undefined,
+          approvedAt: report.approved_at ? new Date(report.approved_at) : undefined,
+          status: 'approved' as const,
+          remarks: report.remarks,
+          originalData: {
+            sourceId: report.source_id,
+            sourceTable: report.source_table,
+          },
+        }));
       
       return reportsList;
     } catch (error) {

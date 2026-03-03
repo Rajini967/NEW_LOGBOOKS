@@ -36,7 +36,7 @@ const roleLabels: Record<string, string> = {
   supervisor: 'Supervisor',
   customer: 'Client',
   client: 'Client',
-  manager: 'Manager',
+  manager: 'Admin',
   super_admin: 'Super Admin',
 };
 
@@ -78,7 +78,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
     { path: '/instruments', icon: Wrench, label: 'Instruments', roles: ['supervisor', 'super_admin', 'manager'] },
     { path: '/reports', icon: FileText, label: 'Reports', roles: ['supervisor', 'customer', 'client', 'super_admin', 'manager'] },
     { path: '/users', icon: Users, label: 'User Management', roles: ['super_admin', 'manager'] },
-    { path: '/settings', icon: Settings, label: 'Settings', roles: ['super_admin'] },
+    { path: '/settings', icon: Settings, label: 'Settings', roles: ['super_admin', 'manager'] },
   ];
 
   const hvacTestItems = [

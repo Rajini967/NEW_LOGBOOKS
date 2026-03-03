@@ -57,7 +57,7 @@ class LogbookRoleAssignment(models.Model):
         choices=[
             ('operator', 'Operator'),
             ('supervisor', 'Supervisor'),
-            ('manager', 'Manager'),
+            ('manager', 'Admin'),
             ('super_admin', 'Super Admin'),
             ('client', 'Client'),
         ]

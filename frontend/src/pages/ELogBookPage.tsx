@@ -20,6 +20,7 @@ import {
   DialogDescription,
   DialogTrigger,
 } from '@/components/ui/dialog';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -31,10 +32,11 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { useAuth } from '@/contexts/AuthContext';
-import { Plus, Thermometer, Gauge, Droplets, Save, Clock, Trash2, Filter, X } from 'lucide-react';
+import { Plus, Thermometer, Gauge, Droplets, Save, Clock, Trash2, Filter, X, CheckCircle, XCircle, Edit } from 'lucide-react';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
 import { logbookAPI, chemicalPrepAPI, chillerLogAPI, boilerLogAPI, compressorLogAPI } from '@/lib/api';
+import { cn } from '@/lib/utils';
 import { LogbookSchema } from '@/types/logbook-config';
 import { FieldWithValidation } from '@/components/logbook/FieldWithValidation';
 
@@ -101,6 +103,7 @@ interface ELogBook {
   waterQty?: number;
   chemicalQty?: number;
   remarks: string;
+  comment?: string;
   checkedBy: string;
   timestamp: Date;
   status: 'pending' | 'approved' | 'rejected' | 'draft';
@@ -277,11 +280,25 @@ export default function ELogBookPage() {
     remarks: '',
   });
   
+  // Whether the current entry is the first chiller reading of the day for the selected equipment
+  const todayKey =
+    formData.equipmentId && formData.equipmentType === 'chiller'
+      ? `${formData.equipmentId}_${format(new Date(), 'yyyy-MM-dd')}`
+      : '';
+  const hasFirstChillerLogToday = !!(todayKey && firstChillerLogByDay[todayKey]);
+  const canEditRunningSection = !hasFirstChillerLogToday;
+  
   // Filter state
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [approveConfirmOpen, setApproveConfirmOpen] = useState(false);
+  const [approveCommentOpen, setApproveCommentOpen] = useState(false);
   const [rejectConfirmOpen, setRejectConfirmOpen] = useState(false);
   const [selectedLogId, setSelectedLogId] = useState<string | null>(null);
+  const [selectedLogIds, setSelectedLogIds] = useState<string[]>([]);
+  const [approvalComment, setApprovalComment] = useState('');
+  const [editingCommentLogId, setEditingCommentLogId] = useState<string | null>(null);
+  const [editingCommentValue, setEditingCommentValue] = useState('');
+  const [editingLogId, setEditingLogId] = useState<string | null>(null);
   const [filters, setFilters] = useState({
     fromDate: '',
     toDate: '',
@@ -293,123 +310,17 @@ export default function ELogBookPage() {
   });
   const [filteredLogs, setFilteredLogs] = useState<ELogBook[]>(logs);
 
-  // Fetch logbook schemas and logs from API
+  // Fetch logbook schemas and initial logs from API
   useEffect(() => {
     const fetchData = async () => {
       setIsLoading(true);
       try {
-        // Fetch logbook schemas
+        // Fetch logbook schemas (used for custom logbooks; kept for future extensibility)
         const schemas = await logbookAPI.list();
         setLogbookSchemas(schemas);
 
-        // Fetch chemical preparations
-        const chemicalPreps = await chemicalPrepAPI.list().catch(err => {
-          console.error('Error fetching chemical preps:', err);
-          return [];
-        });
-        
-        // Fetch chiller, boiler, and compressor logs
-        const [chillerLogs, boilerLogs, compressorLogs] = await Promise.all([
-          chillerLogAPI.list().catch(err => {
-            console.error('Error fetching chiller logs:', err);
-            return [];
-          }),
-          boilerLogAPI.list().catch(err => {
-            console.error('Error fetching boiler logs:', err);
-            return [];
-          }),
-          compressorLogAPI.list().catch(err => {
-            console.error('Error fetching compressor logs:', err);
-            return [];
-          }),
-        ]);
-
-        console.log('Fetched data:', { chillerLogs, boilerLogs, compressorLogs, chemicalPreps });
-
-        // Convert API data to ELogBook format
-      const allLogs: ELogBook[] = [];
-
-      // Convert chiller logs
-        chillerLogs.forEach((log: any) => {
-          const timestamp = new Date(log.timestamp);
-          allLogs.push({
-            id: log.id,
-            equipmentType: 'chiller',
-            equipmentId: log.equipment_id,
-            date: format(timestamp, 'yyyy-MM-dd'),
-            time: format(timestamp, 'HH:mm:ss'),
-            chillerSupplyTemp: log.chiller_supply_temp,
-            chillerReturnTemp: log.chiller_return_temp,
-            coolingTowerSupplyTemp: log.cooling_tower_supply_temp,
-            coolingTowerReturnTemp: log.cooling_tower_return_temp,
-            ctDifferentialTemp: log.ct_differential_temp,
-            chillerWaterInletPressure: log.chiller_water_inlet_pressure,
-            chillerMakeupWaterFlow: log.chiller_makeup_water_flow,
-            remarks: log.remarks || '',
-            checkedBy: log.operator_name,
-            timestamp: timestamp,
-            status: log.status as 'pending' | 'approved' | 'rejected',
-          });
-        });
-
-        // Convert boiler logs
-        boilerLogs.forEach((log: any) => {
-          const timestamp = new Date(log.timestamp);
-          allLogs.push({
-            id: log.id,
-            equipmentType: 'boiler',
-            equipmentId: log.equipment_id,
-            date: format(timestamp, 'yyyy-MM-dd'),
-            time: format(timestamp, 'HH:mm:ss'),
-            feedWaterTemp: log.feed_water_temp,
-            oilTemp: log.oil_temp,
-            steamTemp: log.steam_temp,
-            steamPressure: log.steam_pressure,
-            steamFlowLPH: log.steam_flow_lph,
-            remarks: log.remarks || '',
-            checkedBy: log.operator_name,
-            timestamp: timestamp,
-            status: log.status as 'pending' | 'approved' | 'rejected',
-          });
-        });
-
-        // Convert compressor logs (ignored on chiller page)
-        compressorLogs.forEach((log: any) => {
-          const timestamp = new Date(log.timestamp);
-          allLogs.push({
-            id: log.id,
-            equipmentType: 'compressor',
-            equipmentId: log.equipment_id,
-            date: format(timestamp, 'yyyy-MM-dd'),
-            time: format(timestamp, 'HH:mm:ss'),
-            compressorSupplyTemp: log.compressor_supply_temp,
-            compressorReturnTemp: log.compressor_return_temp,
-            compressorPressure: log.compressor_pressure,
-            compressorFlow: log.compressor_flow,
-            remarks: log.remarks || '',
-            checkedBy: log.operator_name,
-            timestamp: timestamp,
-            status: log.status as 'pending' | 'approved' | 'rejected',
-          });
-        });
-
-        // Only show chiller logs on this page
-        const chillerOnlyLogs = allLogs.filter(log => log.equipmentType === 'chiller');
-        chillerOnlyLogs.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
-        console.log('Total chiller logs after conversion:', chillerOnlyLogs.length, chillerOnlyLogs);
-        setLogs(chillerOnlyLogs);
-
-        // Build map of first chiller log per equipment per day
-        const firstMap: Record<string, ELogBook> = {};
-        allLogs.forEach(log => {
-          if (log.equipmentType !== 'chiller') return;
-          const key = `${log.equipmentId}_${log.date}`;
-          const existing = firstMap[key];
-          if (!existing || log.timestamp.getTime() < existing.timestamp.getTime()) {
-            firstMap[key] = log;
-          }
-        });
-        setFirstChillerLogByDay(firstMap);
+        // Load chiller logs (including all new fields) using shared refresh logic
+        await refreshLogs();
       } catch (error) {
         console.error('Error fetching data:', error);
         toast.error('Failed to load log entries');
@@ -502,6 +413,7 @@ export default function ELogBookPage() {
           operatorSign: log.operator_sign,
           verifiedBy: log.verified_by,
           remarks: log.remarks || '',
+          comment: log.comment || '',
           checkedBy: log.operator_name,
           timestamp: timestamp,
           status: log.status as 'pending' | 'approved' | 'rejected',
@@ -630,6 +542,28 @@ export default function ELogBookPage() {
     }
   }, [logs, filters, activeFilterCount]);
 
+  const pendingDraftLogs = useMemo(
+    () => filteredLogs.filter((log) => log.status === 'pending' || log.status === 'draft'),
+    [filteredLogs],
+  );
+  const pendingDraftIds = useMemo(() => pendingDraftLogs.map((log) => log.id), [pendingDraftLogs]);
+  const allPendingSelected =
+    pendingDraftIds.length > 0 && pendingDraftIds.every((id) => selectedLogIds.includes(id));
+  const handleSelectAllPending = () => {
+    if (allPendingSelected) {
+      setSelectedLogIds((prev) => prev.filter((id) => !pendingDraftIds.includes(id)));
+    } else {
+      setSelectedLogIds((prev) => {
+        const next = new Set(prev);
+        pendingDraftIds.forEach((id) => next.add(id));
+        return Array.from(next);
+      });
+    }
+  };
+  const handleToggleLogSelection = (id: string) => {
+    setSelectedLogIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
@@ -715,15 +649,8 @@ export default function ELogBookPage() {
             return;
           }
 
-          if (changes.length > 0) {
-            const timeStr = format(now, 'HH:mm');
-            const autoNotes = changes.map((c) => `${c} at ${timeStr}`).join('\n');
-            const updatedRemarks = formData.remarks
-              ? `${formData.remarks}\n${autoNotes}`
-              : autoNotes;
-            // Update local formData so the combined remarks are sent to the backend
-            formData.remarks = updatedRemarks;
-          }
+          // We only enforce that remarks are filled when pump/fan status changes.
+          // The remarks text itself is exactly what the operator types.
         }
 
         const coolingTowerPumpStatus = encodePumpPair(
@@ -816,8 +743,13 @@ export default function ELogBookPage() {
           remarks: formData.remarks || undefined,
         };
         
-        await chillerLogAPI.create(logData);
-        toast.success('Chiller entry saved successfully');
+        if (editingLogId) {
+          await chillerLogAPI.update(editingLogId, logData);
+          toast.success('Chiller entry updated successfully');
+        } else {
+          await chillerLogAPI.create(logData);
+          toast.success('Chiller entry saved successfully');
+        }
       }
       // Handle boiler entries
       else if (formData.equipmentType === 'boiler') {
@@ -923,20 +855,21 @@ export default function ELogBookPage() {
     }
   };
 
-  const handleApprove = async (id: string) => {
-    setApproveConfirmOpen(false);
+  const handleApprove = async (id: string, remarks: string) => {
+    setApproveCommentOpen(false);
+    setApprovalComment('');
     try {
       const log = logs.find(l => l.id === id);
       if (!log) return;
 
       if (log.equipmentType === 'chemical') {
-        await chemicalPrepAPI.approve(id, 'approve');
+        await chemicalPrepAPI.approve(id, 'approve', remarks);
       } else if (log.equipmentType === 'boiler') {
-        await boilerLogAPI.approve(id, 'approve');
+        await boilerLogAPI.approve(id, 'approve', remarks);
       } else if (log.equipmentType === 'chiller') {
-        await chillerLogAPI.approve(id, 'approve');
+        await chillerLogAPI.approve(id, 'approve', remarks);
       } else if (log.equipmentType === 'compressor') {
-        await compressorLogAPI.approve(id, 'approve');
+        await compressorLogAPI.approve(id, 'approve', remarks);
       }
       
       toast.success('Entry approved successfully');
@@ -948,7 +881,7 @@ export default function ELogBookPage() {
   };
 
   const handleApproveClick = (id: string) => {
-    setSelectedLogId(id);
+    setSelectedLogIds([id]);
     setApproveConfirmOpen(true);
   };
 
@@ -979,6 +912,84 @@ export default function ELogBookPage() {
   const handleRejectClick = (id: string) => {
     setSelectedLogId(id);
     setRejectConfirmOpen(true);
+  };
+
+  const handleEditLog = (log: ELogBook) => {
+    // Only chiller entries are shown on this page
+    setEditingLogId(log.id);
+
+    const initialPumps = decodePumpPair(log.coolingTowerPumpStatus);
+    const initialChilled = decodePumpPair(log.chilledWaterPumpStatus);
+    const initialFans = decodeFanTriple(log.coolingTowerFanStatus);
+
+    setFormData((prev) => ({
+      ...prev,
+      equipmentType: 'chiller',
+      equipmentId: log.equipmentId,
+      chillerSupplyTemp: log.chillerSupplyTemp != null ? String(log.chillerSupplyTemp) : '',
+      chillerReturnTemp: log.chillerReturnTemp != null ? String(log.chillerReturnTemp) : '',
+      coolingTowerSupplyTemp: log.coolingTowerSupplyTemp != null ? String(log.coolingTowerSupplyTemp) : '',
+      coolingTowerReturnTemp: log.coolingTowerReturnTemp != null ? String(log.coolingTowerReturnTemp) : '',
+      ctDifferentialTemp: log.ctDifferentialTemp != null ? String(log.ctDifferentialTemp) : '',
+      chillerWaterInletPressure: log.chillerWaterInletPressure != null ? String(log.chillerWaterInletPressure) : '',
+      chillerMakeupWaterFlow: log.chillerMakeupWaterFlow != null ? String(log.chillerMakeupWaterFlow) : '',
+      evapWaterInletPressure: log.evapWaterInletPressure != null ? String(log.evapWaterInletPressure) : '',
+      evapWaterOutletPressure: log.evapWaterOutletPressure != null ? String(log.evapWaterOutletPressure) : '',
+      evapEnteringWaterTemp: log.evapEnteringWaterTemp != null ? String(log.evapEnteringWaterTemp) : '',
+      evapLeavingWaterTemp: log.evapLeavingWaterTemp != null ? String(log.evapLeavingWaterTemp) : '',
+      evapApproachTemp: log.evapApproachTemp != null ? String(log.evapApproachTemp) : '',
+      condWaterInletPressure: log.condWaterInletPressure != null ? String(log.condWaterInletPressure) : '',
+      condWaterOutletPressure: log.condWaterOutletPressure != null ? String(log.condWaterOutletPressure) : '',
+      condEnteringWaterTemp: log.condEnteringWaterTemp != null ? String(log.condEnteringWaterTemp) : '',
+      condLeavingWaterTemp: log.condLeavingWaterTemp != null ? String(log.condLeavingWaterTemp) : '',
+      condApproachTemp: log.condApproachTemp != null ? String(log.condApproachTemp) : '',
+      chillerControlSignal: log.chillerControlSignal != null ? String(log.chillerControlSignal) : '',
+      avgMotorCurrent: log.avgMotorCurrent != null ? String(log.avgMotorCurrent) : '',
+      compressorRunningTimeMin: log.compressorRunningTimeMin != null ? String(log.compressorRunningTimeMin) : '',
+      starterEnergyKwh: log.starterEnergyKwh != null ? String(log.starterEnergyKwh) : '',
+      coolingTowerPump1: initialPumps ? initialPumps.p1 : 'OFF',
+      coolingTowerPump2: initialPumps ? initialPumps.p2 : 'OFF',
+      chilledWaterPump1: initialChilled ? initialChilled.p1 : 'OFF',
+      chilledWaterPump2: initialChilled ? initialChilled.p2 : 'OFF',
+      coolingTowerFan1: initialFans ? initialFans.f1 : 'OFF',
+      coolingTowerFan2: initialFans ? initialFans.f2 : 'OFF',
+      coolingTowerFan3: initialFans ? initialFans.f3 : 'OFF',
+      coolingTowerPumpStatus: log.coolingTowerPumpStatus || '',
+      chilledWaterPumpStatus: log.chilledWaterPumpStatus || '',
+      coolingTowerFanStatus: log.coolingTowerFanStatus || '',
+      coolingTowerBlowoffValveStatus: log.coolingTowerBlowoffValveStatus || '',
+      coolingTowerBlowdownTimeMin:
+        log.coolingTowerBlowdownTimeMin != null ? String(log.coolingTowerBlowdownTimeMin) : '',
+      coolingTowerChemicalName: log.coolingTowerChemicalName || '',
+      coolingTowerChemicalQtyPerDay:
+        log.coolingTowerChemicalQtyPerDay != null ? String(log.coolingTowerChemicalQtyPerDay) : '',
+      chilledWaterPumpChemicalName: log.chilledWaterPumpChemicalName || '',
+      chilledWaterPumpChemicalQtyKg:
+        log.chilledWaterPumpChemicalQtyKg != null ? String(log.chilledWaterPumpChemicalQtyKg) : '',
+      coolingTowerFanChemicalName: log.coolingTowerFanChemicalName || '',
+      coolingTowerFanChemicalQtyKg:
+        log.coolingTowerFanChemicalQtyKg != null ? String(log.coolingTowerFanChemicalQtyKg) : '',
+      recordingFrequency: log.recordingFrequency || '',
+      operatorSign: log.operatorSign || '',
+      verifiedBy: log.verifiedBy || '',
+      remarks: log.remarks || '',
+    }));
+
+    setIsDialogOpen(true);
+  };
+
+  const handleSaveComment = async (logId: string, comment: string) => {
+    if (editingCommentLogId !== logId) return;
+    setEditingCommentLogId(null);
+    try {
+      await chillerLogAPI.patch(logId, { comment: comment || '' });
+      toast.success('Comment updated');
+      await refreshLogs();
+    } catch (error: any) {
+      toast.error(error?.response?.data?.detail?.[0] || error?.message || 'Failed to update comment');
+      setEditingCommentLogId(logId);
+      setEditingCommentValue(comment);
+    }
   };
 
   const handleDelete = async (id: string) => {
@@ -1170,8 +1181,12 @@ export default function ELogBookPage() {
         {/* Actions Bar */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Badge variant="pending">{logs.filter(l => l.status === 'pending').length} Pending</Badge>
-            <Badge variant="success">{logs.filter(l => l.status === 'approved').length} Approved</Badge>
+            <Badge variant="pending">
+              {logs.filter(l => l.status === 'pending' || l.status === 'draft').length} Pending
+            </Badge>
+            <Badge variant="success">
+              {logs.filter(l => l.status === 'approved').length} Approved
+            </Badge>
           </div>
 
           <div className="flex items-center gap-2">
@@ -1314,9 +1329,35 @@ export default function ELogBookPage() {
             </Dialog>
 
             {/* New Entry Dialog */}
-            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+            <Dialog
+              open={isDialogOpen}
+              onOpenChange={(open) => {
+                setIsDialogOpen(open);
+                if (!open) {
+                  // Reset edit mode when dialog closes
+                  setEditingLogId(null);
+                  return;
+                }
+                // For new entries, auto-fill operator/verified fields.
+                if (open && !editingLogId) {
+                  const now = new Date();
+                  const operatorLabel = user?.name || user?.email || 'Operator';
+                  const verifierLabel = user?.name || user?.email || 'Supervisor';
+                  setFormData((prev) => ({
+                    ...prev,
+                    operatorSign: `${operatorLabel} - ${format(now, 'dd/MM/yyyy HH:mm')}`,
+                    verifiedBy: `${verifierLabel} - ${format(now, 'dd/MM/yyyy HH:mm')}`,
+                  }));
+                }
+              }}
+            >
             <DialogTrigger asChild>
-              <Button variant="accent">
+              <Button
+                variant="accent"
+                onClick={() => {
+                  setEditingLogId(null);
+                }}
+              >
                 <Plus className="w-4 h-4 mr-2" />
                 New Entry
               </Button>
@@ -1409,44 +1450,67 @@ export default function ELogBookPage() {
                   {formData.equipmentType !== 'chemical' && (
                     <div className="space-y-2">
                       <Label>Equipment ID *</Label>
-                      <Select
-                        value={formData.equipmentId}
-                        onValueChange={(v) => {
-                          setFormData((prev) => ({
-                            ...prev,
-                            equipmentId: v,
-                          }));
-                          if (formData.equipmentType === 'chiller') {
-                            const today = format(new Date(), 'yyyy-MM-dd');
-                            const key = `${v}_${today}`;
-                            const firstLog = firstChillerLogByDay[key];
-                            if (firstLog) {
-                              const initialPumps = decodePumpPair(
-                                firstLog.coolingTowerPumpStatus,
-                              );
-                              const initialChilled = decodePumpPair(
-                                firstLog.chilledWaterPumpStatus,
-                              );
-                              const initialFans = decodeFanTriple(
-                                firstLog.coolingTowerFanStatus,
-                              );
-                              setFormData((prev) => ({
-                                ...prev,
-                                coolingTowerPump1: initialPumps ? initialPumps.p1 : 'OFF',
-                                coolingTowerPump2: initialPumps ? initialPumps.p2 : 'OFF',
-                                chilledWaterPump1: initialChilled ? initialChilled.p1 : 'OFF',
-                                chilledWaterPump2: initialChilled ? initialChilled.p2 : 'OFF',
-                                coolingTowerFan1: initialFans ? initialFans.f1 : 'OFF',
-                                coolingTowerFan2: initialFans ? initialFans.f2 : 'OFF',
-                                coolingTowerFan3: initialFans ? initialFans.f3 : 'OFF',
-                                coolingTowerBlowoffValveStatus:
-                                  firstLog.coolingTowerBlowoffValveStatus || '',
-                              }));
+                        <Select
+                          value={formData.equipmentId}
+                          onValueChange={(v) => {
+                            setFormData((prev) => ({
+                              ...prev,
+                              equipmentId: v,
+                            }));
+                            if (formData.equipmentType === 'chiller') {
+                              const today = format(new Date(), 'yyyy-MM-dd');
+                              const key = `${v}_${today}`;
+                              const firstLog = firstChillerLogByDay[key];
+                              if (firstLog) {
+                                const initialPumps = decodePumpPair(
+                                  firstLog.coolingTowerPumpStatus,
+                                );
+                                const initialChilled = decodePumpPair(
+                                  firstLog.chilledWaterPumpStatus,
+                                );
+                                const initialFans = decodeFanTriple(
+                                  firstLog.coolingTowerFanStatus,
+                                );
+                                setFormData((prev) => ({
+                                  ...prev,
+                                  coolingTowerPump1: initialPumps ? initialPumps.p1 : 'OFF',
+                                  coolingTowerPump2: initialPumps ? initialPumps.p2 : 'OFF',
+                                  chilledWaterPump1: initialChilled ? initialChilled.p1 : 'OFF',
+                                  chilledWaterPump2: initialChilled ? initialChilled.p2 : 'OFF',
+                                  coolingTowerFan1: initialFans ? initialFans.f1 : 'OFF',
+                                  coolingTowerFan2: initialFans ? initialFans.f2 : 'OFF',
+                                  coolingTowerFan3: initialFans ? initialFans.f3 : 'OFF',
+                                  coolingTowerBlowoffValveStatus:
+                                    firstLog.coolingTowerBlowoffValveStatus || '',
+                                  coolingTowerBlowdownTimeMin:
+                                    firstLog.coolingTowerBlowdownTimeMin || '',
+                                  coolingTowerChemicalName:
+                                    firstLog.coolingTowerChemicalName || '',
+                                  coolingTowerChemicalQtyPerDay:
+                                    firstLog.coolingTowerChemicalQtyPerDay !== undefined &&
+                                    firstLog.coolingTowerChemicalQtyPerDay !== null
+                                      ? String(firstLog.coolingTowerChemicalQtyPerDay)
+                                      : '',
+                                  chilledWaterPumpChemicalName:
+                                    firstLog.chilledWaterPumpChemicalName || '',
+                                  chilledWaterPumpChemicalQtyKg:
+                                    firstLog.chilledWaterPumpChemicalQtyKg !== undefined &&
+                                    firstLog.chilledWaterPumpChemicalQtyKg !== null
+                                      ? String(firstLog.chilledWaterPumpChemicalQtyKg)
+                                      : '',
+                                  coolingTowerFanChemicalName:
+                                    firstLog.coolingTowerFanChemicalName || '',
+                                  coolingTowerFanChemicalQtyKg:
+                                    firstLog.coolingTowerFanChemicalQtyKg !== undefined &&
+                                    firstLog.coolingTowerFanChemicalQtyKg !== null
+                                      ? String(firstLog.coolingTowerFanChemicalQtyKg)
+                                      : '',
+                                }));
+                              }
                             }
-                          }
-                        }}
-                        disabled={!formData.equipmentType}
-                      >
+                          }}
+                          disabled={!formData.equipmentType}
+                        >
                         <SelectTrigger>
                           <SelectValue placeholder="Select ID" />
                         </SelectTrigger>
@@ -2164,6 +2228,12 @@ export default function ELogBookPage() {
 
                     {/* Footer Section - equipment status and chemicals */}
                     <div className="border-t pt-4 mt-2 space-y-4">
+                      {!canEditRunningSection && (
+                        <p className="text-sm text-muted-foreground">
+                          Pump/fan running status, blow down time and chemical quantities are set by the first
+                          reading of the day. Subsequent entries can view but cannot change these values.
+                        </p>
+                      )}
                       <div className="grid grid-cols-2 gap-4">
                         <div className="space-y-2">
                           <Label>Cooling Tower Pump</Label>
@@ -2179,6 +2249,7 @@ export default function ELogBookPage() {
                                       ? 'default'
                                       : 'outline'
                                   }
+                                  disabled={!canEditRunningSection}
                                   onClick={() =>
                                     setFormData((prev) => ({
                                       ...prev,
@@ -2196,6 +2267,7 @@ export default function ELogBookPage() {
                                       ? 'default'
                                       : 'outline'
                                   }
+                                  disabled={!canEditRunningSection}
                                   onClick={() =>
                                     setFormData((prev) => ({
                                       ...prev,
@@ -2218,6 +2290,7 @@ export default function ELogBookPage() {
                                       ? 'default'
                                       : 'outline'
                                   }
+                                  disabled={!canEditRunningSection}
                                   onClick={() =>
                                     setFormData((prev) => ({
                                       ...prev,
@@ -2235,6 +2308,7 @@ export default function ELogBookPage() {
                                       ? 'default'
                                       : 'outline'
                                   }
+                                  disabled={!canEditRunningSection}
                                   onClick={() =>
                                     setFormData((prev) => ({
                                       ...prev,
@@ -2262,6 +2336,7 @@ export default function ELogBookPage() {
                                       ? 'default'
                                       : 'outline'
                                   }
+                                  disabled={!canEditRunningSection}
                                   onClick={() =>
                                     setFormData((prev) => ({
                                       ...prev,
@@ -2279,6 +2354,7 @@ export default function ELogBookPage() {
                                       ? 'default'
                                       : 'outline'
                                   }
+                                  disabled={!canEditRunningSection}
                                   onClick={() =>
                                     setFormData((prev) => ({
                                       ...prev,
@@ -2301,6 +2377,7 @@ export default function ELogBookPage() {
                                       ? 'default'
                                       : 'outline'
                                   }
+                                  disabled={!canEditRunningSection}
                                   onClick={() =>
                                     setFormData((prev) => ({
                                       ...prev,
@@ -2318,6 +2395,7 @@ export default function ELogBookPage() {
                                       ? 'default'
                                       : 'outline'
                                   }
+                                  disabled={!canEditRunningSection}
                                   onClick={() =>
                                     setFormData((prev) => ({
                                       ...prev,
@@ -2348,6 +2426,7 @@ export default function ELogBookPage() {
                                       ? 'default'
                                       : 'outline'
                                   }
+                                  disabled={!canEditRunningSection}
                                   onClick={() =>
                                     setFormData((prev) => ({
                                       ...prev,
@@ -2365,6 +2444,7 @@ export default function ELogBookPage() {
                                       ? 'default'
                                       : 'outline'
                                   }
+                                  disabled={!canEditRunningSection}
                                   onClick={() =>
                                     setFormData((prev) => ({
                                       ...prev,
@@ -2387,6 +2467,7 @@ export default function ELogBookPage() {
                                       ? 'default'
                                       : 'outline'
                                   }
+                                  disabled={!canEditRunningSection}
                                   onClick={() =>
                                     setFormData((prev) => ({
                                       ...prev,
@@ -2404,6 +2485,7 @@ export default function ELogBookPage() {
                                       ? 'default'
                                       : 'outline'
                                   }
+                                  disabled={!canEditRunningSection}
                                   onClick={() =>
                                     setFormData((prev) => ({
                                       ...prev,
@@ -2426,6 +2508,7 @@ export default function ELogBookPage() {
                                       ? 'default'
                                       : 'outline'
                                   }
+                                  disabled={!canEditRunningSection}
                                   onClick={() =>
                                     setFormData((prev) => ({
                                       ...prev,
@@ -2443,6 +2526,7 @@ export default function ELogBookPage() {
                                       ? 'default'
                                       : 'outline'
                                   }
+                                  disabled={!canEditRunningSection}
                                   onClick={() =>
                                     setFormData((prev) => ({
                                       ...prev,
@@ -2463,6 +2547,7 @@ export default function ELogBookPage() {
                             min={0}
                             step="1"
                             value={formData.coolingTowerBlowdownTimeMin}
+                            disabled={!canEditRunningSection}
                             onChange={(e) =>
                               setFormData({
                                 ...formData,
@@ -2516,6 +2601,7 @@ export default function ELogBookPage() {
                             <Input
                               type="text"
                               value={formData.coolingTowerChemicalName}
+                              disabled={!canEditRunningSection}
                               onChange={(e) =>
                                 setFormData({
                                   ...formData,
@@ -2530,6 +2616,7 @@ export default function ELogBookPage() {
                             <Input
                               type="text"
                               value={formData.chilledWaterPumpChemicalName}
+                              disabled={!canEditRunningSection}
                               onChange={(e) =>
                                 setFormData({
                                   ...formData,
@@ -2544,6 +2631,7 @@ export default function ELogBookPage() {
                             <Input
                               type="text"
                               value={formData.coolingTowerFanChemicalName}
+                              disabled={!canEditRunningSection}
                               onChange={(e) =>
                                 setFormData({
                                   ...formData,
@@ -2564,6 +2652,7 @@ export default function ELogBookPage() {
                               min={0}
                               step="0.01"
                               value={formData.coolingTowerChemicalQtyPerDay}
+                              disabled={!canEditRunningSection}
                               onChange={(e) =>
                                 setFormData({
                                   ...formData,
@@ -2580,6 +2669,7 @@ export default function ELogBookPage() {
                               min={0}
                               step="0.01"
                               value={formData.chilledWaterPumpChemicalQtyKg}
+                              disabled={!canEditRunningSection}
                               onChange={(e) =>
                                 setFormData({
                                   ...formData,
@@ -2596,6 +2686,7 @@ export default function ELogBookPage() {
                               min={0}
                               step="0.01"
                               value={formData.coolingTowerFanChemicalQtyKg}
+                              disabled={!canEditRunningSection}
                               onChange={(e) =>
                                 setFormData({
                                   ...formData,
@@ -2929,32 +3020,56 @@ export default function ELogBookPage() {
           </div>
         </div>
 
-        {/* Logs Table */}
+        {/* Logs Table - horizontal scroll when wide */}
         <div className="bg-card rounded-lg border border-border overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
+          <div className="border-b px-4 py-2 flex justify-between items-center">
+            <span className="text-sm font-medium">{filteredLogs.length} entries</span>
+            {selectedLogIds.length > 0 && user?.role !== 'operator' && (
+              <Button
+                type="button"
+                size="sm"
+                className="bg-green-600 hover:bg-green-700 text-white"
+                onClick={() => setApproveConfirmOpen(true)}
+              >
+                <CheckCircle className="w-4 h-4 mr-2" />
+                Approve selected ({selectedLogIds.length})
+              </Button>
+            )}
+          </div>
+          <div className="overflow-x-auto overflow-y-visible">
+            <table className="min-w-full text-sm" style={{ minWidth: '1320px' }}>
               <thead className="bg-muted/50">
                 <tr>
-                  <th className="px-3 py-2 text-left">Date</th>
-                  <th className="px-3 py-2 text-left">Time</th>
-                  <th className="px-3 py-2 text-left">Equipment</th>
-                  <th className="px-3 py-2 text-left">Readings</th>
-                  <th className="px-3 py-2 text-left">Remarks</th>
-                  <th className="px-3 py-2 text-left">Checked By</th>
-                  <th className="px-3 py-2 text-left">Status</th>
-                  <th className="px-3 py-2 text-left">Actions</th>
+                  <th className="px-3 py-2 text-left font-semibold w-12">
+                    {pendingDraftIds.length > 0 && user?.role !== 'operator' && (
+                      <Checkbox
+                        checked={allPendingSelected}
+                        onCheckedChange={handleSelectAllPending}
+                        className="data-[state=checked]:bg-accent data-[state=checked]:border-accent"
+                      />
+                    )}
+                  </th>
+                  <th className="px-3 py-2 text-left font-semibold w-[110px]">Date</th>
+                  <th className="px-3 py-2 text-left font-semibold w-[100px]">Time</th>
+                  <th className="px-3 py-2 text-left font-semibold w-[150px]">Equipment</th>
+                  <th className="px-3 py-2 text-left font-semibold min-w-[210px]">Readings</th>
+                  <th className="px-3 py-2 text-center font-semibold min-w-[170px]">Remarks</th>
+                  <th className="px-3 py-2 text-left font-semibold min-w-[170px]">Comment</th>
+                  <th className="px-3 py-2 text-left font-semibold w-[140px]">Checked By</th>
+                  <th className="px-3 py-2 text-left font-semibold w-[110px]">Status</th>
+                  <th className="px-3 py-2 text-left font-semibold w-[140px]">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
                 {isLoading ? (
                   <tr>
-                    <td colSpan={8} className="px-4 py-12 text-center text-muted-foreground">
+                    <td colSpan={10} className="px-4 py-12 text-center text-muted-foreground">
                       <p className="text-sm">Loading entries...</p>
                     </td>
                   </tr>
                 ) : filteredLogs.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="px-4 py-12 text-center text-muted-foreground">
+                    <td colSpan={10} className="px-4 py-12 text-center text-muted-foreground">
                       <p className="text-sm">
                         {activeFilterCount > 0 
                           ? 'No records found matching the selected filters'
@@ -2970,6 +3085,15 @@ export default function ELogBookPage() {
                 ) : (
                   filteredLogs.map((log) => (
                     <tr key={log.id} className="hover:bg-muted/30 transition-colors">
+                      <td className="px-4 py-3 align-middle">
+                        {(log.status === 'pending' || log.status === 'draft') && user?.role !== 'operator' ? (
+                          <Checkbox
+                            checked={selectedLogIds.includes(log.id)}
+                            onCheckedChange={() => handleToggleLogSelection(log.id)}
+                            className="data-[state=checked]:bg-accent data-[state=checked]:border-accent"
+                          />
+                        ) : null}
+                      </td>
                       <td className="px-4 py-3">
                         <span className="text-sm text-foreground">{log.date}</span>
                       </td>
@@ -3135,8 +3259,35 @@ export default function ELogBookPage() {
                           )}
                         </div>
                       </td>
-                      <td className="px-4 py-3">
-                        <span className="text-sm text-muted-foreground">{log.remarks || '-'}</span>
+                      <td className="px-4 py-3 max-w-xs min-w-[170px] align-middle text-center">
+                        <p className="text-xs text-muted-foreground whitespace-pre-wrap leading-snug line-clamp-3 inline-block text-left">
+                          {log.remarks || '-'}
+                        </p>
+                      </td>
+                      <td className="px-4 py-2 align-middle">
+                        {editingCommentLogId === log.id ? (
+                          <Textarea
+                            className="min-h-[60px] min-w-[180px] text-sm py-2"
+                            value={editingCommentValue}
+                            onChange={(e) => setEditingCommentValue(e.target.value)}
+                            onBlur={() => handleSaveComment(log.id, editingCommentValue)}
+                            autoFocus
+                          />
+                        ) : (
+                          <div
+                            className="min-h-[36px] min-w-[120px] px-2 py-1.5 text-sm text-foreground whitespace-pre-wrap cursor-pointer hover:bg-muted/50 rounded border border-transparent hover:border-border transition-colors"
+                            onClick={() => {
+                              setEditingCommentLogId(log.id);
+                              setEditingCommentValue(log.comment ?? '');
+                            }}
+                          >
+                            {log.comment ? (
+                              <span className="block">{log.comment}</span>
+                            ) : (
+                              <span className="text-muted-foreground/50">&nbsp;</span>
+                            )}
+                          </div>
+                        )}
                       </td>
                       <td className="px-4 py-3">
                         <span className="text-sm text-foreground">{log.checkedBy}</span>
@@ -3148,23 +3299,50 @@ export default function ELogBookPage() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
-                          {(log.status === 'pending' || log.status === 'draft') && user?.role !== 'operator' && (
+                          {user?.role !== 'operator' && (
                             <>
                               <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => handleApproveClick(log.id)}
-                                className="h-7 text-xs"
+                                variant="ghost"
+                                size="icon"
+                                className={cn(
+                                  'h-7 w-7',
+                                  log.status === 'pending' || log.status === 'draft'
+                                    ? 'text-green-600 hover:text-green-700 hover:bg-green-500/10'
+                                    : 'opacity-40 cursor-not-allowed'
+                                )}
+                                title={log.status === 'pending' || log.status === 'draft' ? 'Approve' : 'Approved'}
+                                onClick={() => {
+                                  if (log.status === 'pending' || log.status === 'draft') handleApproveClick(log.id);
+                                }}
+                                disabled={log.status !== 'pending' && log.status !== 'draft'}
                               >
-                                Approve
+                                <CheckCircle className="w-4 h-4" />
                               </Button>
                               <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => handleRejectClick(log.id)}
-                                className="h-7 text-xs text-destructive hover:text-destructive"
+                                variant="ghost"
+                                size="icon"
+                                className={cn(
+                                  'h-7 w-7',
+                                  log.status === 'pending' || log.status === 'draft'
+                                    ? 'text-destructive hover:text-destructive hover:bg-destructive/10'
+                                    : 'opacity-40 cursor-not-allowed'
+                                )}
+                                title={log.status === 'pending' || log.status === 'draft' ? 'Reject' : 'Rejected'}
+                                onClick={() => {
+                                  if (log.status === 'pending' || log.status === 'draft') handleRejectClick(log.id);
+                                }}
+                                disabled={log.status !== 'pending' && log.status !== 'draft'}
                               >
-                                Reject
+                                <XCircle className="w-4 h-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7"
+                                title="Edit entry"
+                                onClick={() => handleEditLog(log)}
+                              >
+                                <Edit className="w-4 h-4" />
                               </Button>
                             </>
                           )}
@@ -3188,26 +3366,119 @@ export default function ELogBookPage() {
         </div>
       </div>
 
-      {/* Approve Confirmation Alert */}
+      {/* Step 1: Approve confirmation alert */}
       <AlertDialog open={approveConfirmOpen} onOpenChange={setApproveConfirmOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Confirm Approval</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to approve this entry? This action cannot be undone.
+              {selectedLogIds.length <= 1
+                ? 'Are you sure you want to approve this entry? This action cannot be undone.'
+                : `Are you sure you want to approve these ${selectedLogIds.length} entries? This action cannot be undone.`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={() => selectedLogId && handleApprove(selectedLogId)}
               className="bg-green-600 hover:bg-green-700 text-white"
+              onClick={() => {
+                setApproveConfirmOpen(false);
+                setApproveCommentOpen(true);
+              }}
             >
-              Approve
+              OK
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Step 2: Mandatory comment */}
+      <Dialog
+        open={approveCommentOpen}
+        onOpenChange={(open) => {
+          setApproveCommentOpen(open);
+          if (!open) {
+            setApprovalComment('');
+            setSelectedLogIds([]);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Approval Comment (Required)</DialogTitle>
+            <DialogDescription>
+              Please enter a comment for this approval.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="approval-comment">Comment <span className="text-destructive">*</span></Label>
+              <Textarea
+                id="approval-comment"
+                value={approvalComment}
+                onChange={(e) => setApprovalComment(e.target.value)}
+                placeholder="Enter approval comment..."
+                rows={3}
+                className="resize-none"
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setApproveCommentOpen(false);
+                  setApprovalComment('');
+                  setSelectedLogIds([]);
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                className="bg-green-600 hover:bg-green-700 text-white"
+                onClick={async () => {
+                  const comment = approvalComment.trim();
+                  if (!comment) {
+                    toast.error('Comment is required for approval');
+                    return;
+                  }
+                  const ids = [...selectedLogIds];
+                  if (ids.length === 0) return;
+                  if (ids.length === 1) {
+                    handleApprove(ids[0], comment);
+                    setSelectedLogIds([]);
+                    return;
+                  }
+                  try {
+                    for (const id of ids) {
+                      const log = logs.find((l) => l.id === id);
+                      if (!log) continue;
+                      if (log.equipmentType === 'chemical') {
+                        await chemicalPrepAPI.approve(id, 'approve', comment);
+                      } else if (log.equipmentType === 'boiler') {
+                        await boilerLogAPI.approve(id, 'approve', comment);
+                      } else if (log.equipmentType === 'chiller') {
+                        await chillerLogAPI.approve(id, 'approve', comment);
+                      } else if (log.equipmentType === 'compressor') {
+                        await compressorLogAPI.approve(id, 'approve', comment);
+                      }
+                    }
+                    setApproveCommentOpen(false);
+                    setApprovalComment('');
+                    setSelectedLogIds([]);
+                    await refreshLogs();
+                    toast.success(`${ids.length} entries approved successfully.`);
+                  } catch (error: any) {
+                    console.error('Error approving entries:', error);
+                    toast.error(error?.message || 'Failed to approve some entries');
+                  }
+                }}
+              >
+                Approve
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Reject Confirmation Alert */}
       <AlertDialog open={rejectConfirmOpen} onOpenChange={setRejectConfirmOpen}>

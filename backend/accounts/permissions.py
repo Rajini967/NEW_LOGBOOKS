@@ -108,7 +108,7 @@ class CanApproveReports(permissions.BasePermission):
 
 
 class CanLogEntries(permissions.BasePermission):
-    """Permission to log entries (Super Admin, Manager, Operator)."""
+    """Permission to log entries (Super Admin, Admin/Manager, Supervisor, Operator)."""
     
     def has_permission(self, request, view):
         return (
@@ -117,6 +117,7 @@ class CanLogEntries(permissions.BasePermission):
             request.user.role in [
                 UserRole.SUPER_ADMIN,
                 UserRole.MANAGER,
+                UserRole.SUPERVISOR,
                 UserRole.OPERATOR
             ]
         )

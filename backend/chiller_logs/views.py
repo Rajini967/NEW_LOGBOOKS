@@ -181,7 +181,7 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
         from django.utils import timezone
         log.approved_at = timezone.now()
         if remarks:
-            log.remarks = remarks
+            log.comment = remarks
         log.save()
         
         # Create report entry when approved

@@ -49,7 +49,7 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
         from django.utils import timezone
         prep.approved_at = timezone.now()
         if remarks:
-            prep.remarks = remarks
+            prep.comment = remarks
         prep.save()
         
         # Create report entry when approved

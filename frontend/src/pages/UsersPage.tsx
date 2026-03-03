@@ -19,7 +19,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
-import { Plus, Users, Shield, Mail, User, Edit, Trash2, Lock } from 'lucide-react';
+import { Plus, Users, Shield, Mail, User, Edit, Trash2, Lock, Eye, EyeOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { userAPI } from '@/lib/api';
 import { User as UserType } from '@/types';
@@ -34,7 +34,7 @@ const roleLabels: Record<string, string> = {
   supervisor: 'Supervisor',
   client: 'Client',
   customer: 'Client',
-  manager: 'Manager',
+  manager: 'Admin',
   super_admin: 'Super Admin',
 };
 
@@ -54,6 +54,8 @@ export default function UsersPage() {
   const [isEditMode, setIsEditMode] = useState(false);
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showPasswordConfirm, setShowPasswordConfirm] = useState(false);
   
   const [formData, setFormData] = useState({
     email: '',
@@ -300,15 +302,26 @@ export default function UsersPage() {
                     <Lock className="w-4 h-4 inline mr-2" />
                     Password {!isEditMode && <span className="text-destructive">*</span>}
                   </Label>
-                  <Input
-                    id="password"
-                    type="password"
-                    value={formData.password}
-                    onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                    placeholder={isEditMode ? "Leave empty to keep current password" : "Enter password"}
-                    required={!isEditMode}
-                    autoComplete="new-password"
-                  />
+                  <div className="relative">
+                    <Input
+                      id="password"
+                      type={showPassword ? 'text' : 'password'}
+                      value={formData.password}
+                      onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                      placeholder={isEditMode ? "Leave empty to keep current password" : "Enter password"}
+                      required={!isEditMode}
+                      autoComplete="new-password"
+                      className="pr-10"
+                    />
+                    <button
+                      type="button"
+                      className="absolute inset-y-0 right-0 flex items-center pr-3 text-muted-foreground hover:text-foreground"
+                      onClick={() => setShowPassword((prev) => !prev)}
+                      aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    >
+                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
                   <p className="text-xs text-muted-foreground">
                     {isEditMode 
                       ? 'Leave empty to keep the current password. Otherwise, password must contain at least 8 characters.'
@@ -322,15 +335,26 @@ export default function UsersPage() {
                       <Lock className="w-4 h-4 inline mr-2" />
                       Password confirmation {!isEditMode && <span className="text-destructive">*</span>}
                     </Label>
-                    <Input
-                      id="password_confirm"
-                      type="password"
-                      value={formData.password_confirm}
-                      onChange={(e) => setFormData({ ...formData, password_confirm: e.target.value })}
-                      placeholder="Enter the same password as before, for verification"
-                      required={!isEditMode || !!formData.password}
-                      autoComplete="new-password"
-                    />
+                    <div className="relative">
+                      <Input
+                        id="password_confirm"
+                        type={showPasswordConfirm ? 'text' : 'password'}
+                        value={formData.password_confirm}
+                        onChange={(e) => setFormData({ ...formData, password_confirm: e.target.value })}
+                        placeholder="Enter the same password as before, for verification"
+                        required={!isEditMode || !!formData.password}
+                        autoComplete="new-password"
+                        className="pr-10"
+                      />
+                      <button
+                        type="button"
+                        className="absolute inset-y-0 right-0 flex items-center pr-3 text-muted-foreground hover:text-foreground"
+                        onClick={() => setShowPasswordConfirm((prev) => !prev)}
+                        aria-label={showPasswordConfirm ? 'Hide password confirmation' : 'Show password confirmation'}
+                      >
+                        {showPasswordConfirm ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
                     <p className="text-xs text-muted-foreground">
                       Enter the same password as before, for verification.
                     </p>
@@ -351,16 +375,16 @@ export default function UsersPage() {
                       <SelectValue placeholder="Select role" />
                     </SelectTrigger>
                     <SelectContent>
-                      {/* Super Admin can create Manager, Supervisor, Operator, Client (not Super Admin) */}
+                      {/* Super Admin can create Admin, Supervisor, Operator, Client (not Super Admin) */}
                       {currentUser?.role === 'super_admin' && (
                         <>
-                          <SelectItem value="manager">Manager</SelectItem>
+                          <SelectItem value="manager">Admin</SelectItem>
                           <SelectItem value="supervisor">Supervisor</SelectItem>
                           <SelectItem value="operator">Operator</SelectItem>
                           <SelectItem value="client">Client</SelectItem>
                         </>
                       )}
-                      {/* Manager can only create Supervisor, Operator, Client */}
+                      {/* Admin (manager) can only create Supervisor, Operator, Client */}
                       {currentUser?.role === 'manager' && (
                         <>
                           <SelectItem value="supervisor">Supervisor</SelectItem>
