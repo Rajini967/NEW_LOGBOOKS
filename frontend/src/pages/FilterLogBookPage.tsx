@@ -23,10 +23,10 @@ import {
 import { useAuth } from "@/contexts/AuthContext";
 import { format } from "date-fns";
 import { toast } from "sonner";
-import { filterLogAPI } from "@/lib/api";
+import { filterCategoryAPI, filterLogAPI } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { Link } from "react-router-dom";
-import { Clock, Save, Filter, X, Plus, Trash2, CheckCircle, XCircle, Edit, History } from "lucide-react";
+import { Link, useNavigate } from "react-router-dom";
+import { Clock, Save, Filter, X, Plus, Trash2, CheckCircle, XCircle, Edit, History, ArrowLeft } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   AlertDialog,
@@ -39,7 +39,12 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
-type FilterCategory = "hvac" | "water_system" | "compressed_air" | "nitrogen_air";
+type FilterCategory = string;
+
+interface FilterCategoryOption {
+  value: string;
+  label: string;
+}
 
 interface FilterLog {
   id: string;
@@ -66,6 +71,7 @@ interface FilterLog {
 
 const FilterLogBookPage: React.FC = () => {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [logs, setLogs] = useState<FilterLog[]>([]);
   const [filteredLogs, setFilteredLogs] = useState<FilterLog[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -82,6 +88,7 @@ const FilterLogBookPage: React.FC = () => {
   const [editingCommentLogId, setEditingCommentLogId] = useState<string | null>(null);
   const [editingCommentValue, setEditingCommentValue] = useState("");
   const [editingLogId, setEditingLogId] = useState<string | null>(null);
+  const [categoryOptions, setCategoryOptions] = useState<FilterCategoryOption[]>([]);
 
   const [formData, setFormData] = useState({
     equipmentId: "",
@@ -110,6 +117,21 @@ const FilterLogBookPage: React.FC = () => {
     fromTime: "",
     toTime: "",
   });
+
+  const loadCategories = async () => {
+    try {
+      const data = await filterCategoryAPI.list();
+      const options: FilterCategoryOption[] = (data as any[])
+        .filter((c) => c.is_active)
+        .map((c) => ({
+          value: c.name as string,
+          label: c.name as string,
+        }));
+      setCategoryOptions(options);
+    } catch (error) {
+      console.error("Error loading filter categories:", error);
+    }
+  };
 
   const refreshLogs = async () => {
     try {
@@ -158,7 +180,8 @@ const FilterLogBookPage: React.FC = () => {
   };
 
   useEffect(() => {
-    refreshLogs();
+    void loadCategories();
+    void refreshLogs();
   }, []);
 
   const uniqueCheckedBy = useMemo(() => {
@@ -534,12 +557,27 @@ const FilterLogBookPage: React.FC = () => {
   const approvedLogs = filteredLogs.filter((log) => log.status === "approved");
   const rejectedLogs = filteredLogs.filter((log) => log.status === "rejected");
 
+  const isFilterAdmin =
+    user && (user.role === "manager" || user.role === "super_admin");
+
   return (
     <>
       <Header
         title="Filter Log Book"
         subtitle="Manage filter installation, integrity, cleaning and replacement logs"
       />
+      <div className="px-4 pt-2">
+        <button
+          type="button"
+          onClick={() =>
+            navigate(isFilterAdmin ? "/e-log-book/filter" : "/e-log-book")
+          }
+          className="inline-flex items-center text-sm text-muted-foreground hover:text-foreground"
+        >
+          <ArrowLeft className="w-4 h-4 mr-1" />
+          Back
+        </button>
+      </div>
       <main className="p-4 space-y-4">
         {/* Header + status counters + actions (one line, like other logbooks) */}
         <div className="flex justify-between items-center">
@@ -679,11 +717,13 @@ const FilterLogBookPage: React.FC = () => {
                         <SelectTrigger>
                           <SelectValue placeholder="Select category" />
                         </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="hvac">HVAC</SelectItem>
-                          <SelectItem value="water_system">Water system</SelectItem>
-                          <SelectItem value="compressed_air">Compressed air</SelectItem>
-                          <SelectItem value="nitrogen_air">Nitrogen air</SelectItem>
+                        <SelectContent className="max-h-48 overflow-y-auto">
+                          {categoryOptions.length > 0 &&
+                            categoryOptions.map((opt) => (
+                              <SelectItem key={opt.value} value={opt.value}>
+                                {opt.label}
+                              </SelectItem>
+                            ))}
                         </SelectContent>
                       </Select>
                     </div>
@@ -951,15 +991,17 @@ const FilterLogBookPage: React.FC = () => {
                     }))
                   }
                 >
-                  <SelectTrigger>
+                 <SelectTrigger>
                     <SelectValue placeholder="All categories" />
                   </SelectTrigger>
-                  <SelectContent>
+                 <SelectContent className="max-h-48 overflow-y-auto">
                     <SelectItem value="all">All</SelectItem>
-                    <SelectItem value="hvac">HVAC</SelectItem>
-                    <SelectItem value="water_system">Water system</SelectItem>
-                    <SelectItem value="compressed_air">Compressed air</SelectItem>
-                    <SelectItem value="nitrogen_air">Nitrogen air</SelectItem>
+                  {categoryOptions.length > 0 &&
+                    categoryOptions.map((opt) => (
+                      <SelectItem key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -1372,20 +1414,30 @@ const FilterLogBookPage: React.FC = () => {
                       </td>
                       <td className="px-3 py-2 align-top">{log.checkedBy}</td>
                       <td className="px-3 py-2 align-top">
-                        <div className="flex flex-col gap-1">
+                        <div className="flex flex-wrap items-center gap-2">
                           <Badge
-                            variant={getStatusBadgeVariant(log.status)}
+                            variant={
+                              log.has_corrections && !log.corrects_id
+                                ? "destructive"
+                                : log.corrects_id
+                                ? "warning"
+                                : getStatusBadgeVariant(log.status)
+                            }
                             className="w-fit text-xs"
                           >
-                            {getStatusLabel(log.status)}
+                            {log.has_corrections && !log.corrects_id
+                              ? "Rejected"
+                              : log.corrects_id
+                              ? "Pending"
+                              : getStatusLabel(log.status)}
                           </Badge>
                           {log.corrects_id && (
-                            <span className="text-[10px] text-amber-700">
+                            <span className="text-[10px] text-amber-700 whitespace-nowrap">
                               Correction entry
                             </span>
                           )}
                           {log.has_corrections && !log.corrects_id && (
-                            <span className="text-[10px] text-emerald-700">
+                            <span className="text-[10px] text-emerald-700 whitespace-nowrap">
                               Has corrections
                             </span>
                           )}

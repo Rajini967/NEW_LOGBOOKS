@@ -49,6 +49,11 @@ export interface LogbookField {
     };
     highlightColor?: string | Record<string, string>; // 'red' or { PASS: 'green', FAIL: 'red' }
     decimalPlaces?: number;
+    /**
+     * When true on a select field, render a cascading
+     * Department → Category → Equipment selector backed by Equipment Master.
+     */
+    equipmentSelector?: boolean;
   };
 }
 

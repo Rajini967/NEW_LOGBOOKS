@@ -400,17 +400,27 @@ class UserReportViewSet(viewsets.ReadOnlyModelViewSet):
         # Super Admin can see all active, non-deleted users
         if user.role == UserRole.SUPER_ADMIN:
             qs = User.all_objects.filter(is_deleted=False)
-        # Manager/Admin can see Supervisor, Operator, Client
+        # Manager/Admin should see Admin, Supervisor, Operator, Client
         elif user.role == UserRole.MANAGER:
             qs = User.all_objects.filter(
                 is_deleted=False,
-                role__in=[UserRole.SUPERVISOR, UserRole.OPERATOR, UserRole.CLIENT],
+                role__in=[
+                    UserRole.MANAGER,
+                    UserRole.SUPERVISOR,
+                    UserRole.OPERATOR,
+                    UserRole.CLIENT,
+                ],
             )
-        # Supervisor can see Operator and Client for reporting
+        # Supervisor can see Admin, Supervisor, Operator, Client for reporting
         elif user.role == UserRole.SUPERVISOR:
             qs = User.all_objects.filter(
                 is_deleted=False,
-                role__in=[UserRole.SUPERVISOR, UserRole.OPERATOR, UserRole.CLIENT],
+                role__in=[
+                    UserRole.MANAGER,
+                    UserRole.SUPERVISOR,
+                    UserRole.OPERATOR,
+                    UserRole.CLIENT,
+                ],
             )
         else:
             return User.objects.none()
@@ -444,7 +454,10 @@ class UserActivityReportViewSet(viewsets.ReadOnlyModelViewSet):
         if user.role not in [UserRole.SUPERVISOR, UserRole.MANAGER, UserRole.SUPER_ADMIN]:
             return UserActivityLog.objects.none()
 
-        qs = UserActivityLog.objects.select_related("user").all()
+        # Exclude Super Admin activity from the report
+        qs = UserActivityLog.objects.select_related("user").exclude(
+            user__role=UserRole.SUPER_ADMIN
+        )
 
         # Filters
         from_date = self.request.query_params.get("from_date")

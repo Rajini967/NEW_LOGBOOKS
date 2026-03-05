@@ -1,10 +1,11 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
 import { LogbookField } from '@/types/logbook-config';
+import { departmentAPI, equipmentAPI, equipmentCategoryAPI } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
 interface FieldWithValidationProps {
@@ -46,7 +47,141 @@ export function FieldWithValidation({
   const limitInfo = field.metadata?.limit;
   const columnSpan = field.display?.columnSpan || 1;
 
+  const isEquipmentSelector =
+    field.type === 'select' && field.metadata?.equipmentSelector;
+
+  interface Option {
+    id: string;
+    name: string;
+  }
+
+  interface EquipmentOption {
+    id: string;
+    equipment_number: string;
+    name: string;
+  }
+
+  const [equipmentDepartments, setEquipmentDepartments] = useState<Option[]>([]);
+  const [equipmentCategories, setEquipmentCategories] = useState<Option[]>([]);
+  const [selectedDept, setSelectedDept] = useState<string>('');
+  const [selectedCategory, setSelectedCategory] = useState<string>('');
+  const [equipmentOptions, setEquipmentOptions] = useState<EquipmentOption[]>([]);
+
+  useEffect(() => {
+    if (!isEquipmentSelector) return;
+
+    const loadLookups = async () => {
+      try {
+        const [departments, categories] = await Promise.all([
+          departmentAPI.list(),
+          equipmentCategoryAPI.list(),
+        ]);
+        setEquipmentDepartments(departments);
+        setEquipmentCategories(categories);
+      } catch (err) {
+        // Silent failure; DynamicForm will surface API issues elsewhere if needed
+        // eslint-disable-next-line no-console
+        console.error('Failed to load equipment master lookups', err);
+      }
+    };
+
+    loadLookups();
+  }, [isEquipmentSelector]);
+
+  useEffect(() => {
+    if (!isEquipmentSelector) return;
+    if (!selectedDept && !selectedCategory) {
+      setEquipmentOptions([]);
+      return;
+    }
+
+    const loadEquipment = async () => {
+      try {
+        const params: { department?: string; category?: string } = {};
+        if (selectedDept) params.department = selectedDept;
+        if (selectedCategory) params.category = selectedCategory;
+        const list = await equipmentAPI.list(params);
+        setEquipmentOptions(list);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('Failed to load equipment options', err);
+      }
+    };
+
+    loadEquipment();
+  }, [isEquipmentSelector, selectedDept, selectedCategory]);
+
   const renderField = () => {
+    if (isEquipmentSelector) {
+      return (
+        <div className="space-y-2">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+            <Select
+              value={selectedDept}
+              onValueChange={(v) => {
+                setSelectedDept(v);
+                // Reset equipment selection when filters change
+                onChange('');
+              }}
+              disabled={disabled}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select department" />
+              </SelectTrigger>
+              <SelectContent>
+                {equipmentDepartments.map((dept) => (
+                  <SelectItem key={dept.id} value={dept.id}>
+                    {dept.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            <Select
+              value={selectedCategory}
+              onValueChange={(v) => {
+                setSelectedCategory(v);
+                onChange('');
+              }}
+              disabled={disabled}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select category" />
+              </SelectTrigger>
+              <SelectContent>
+                {equipmentCategories.map((cat) => (
+                  <SelectItem key={cat.id} value={cat.id}>
+                    {cat.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            <Select
+              value={value || ''}
+              onValueChange={onChange}
+              disabled={disabled || equipmentOptions.length === 0}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select equipment" />
+              </SelectTrigger>
+              <SelectContent>
+                {equipmentOptions.map((opt) => (
+                  <SelectItem key={opt.id} value={opt.equipment_number}>
+                    {opt.equipment_number} – {opt.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Select Department and Category to filter the Equipment list. The field
+            will store the selected equipment number.
+          </p>
+        </div>
+      );
+    }
+
     switch (field.type) {
       case 'text':
         return (

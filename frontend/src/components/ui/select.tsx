@@ -74,7 +74,8 @@ const SelectContent = React.forwardRef<
       position={position}
       {...props}
     >
-      <SelectScrollUpButton />
+      {/* Hide top scroll arrow button for a cleaner scrollbar-only dropdown */}
+      {/* <SelectScrollUpButton /> */}
       <SelectPrimitive.Viewport
         className={cn(
           "p-1",
@@ -84,7 +85,8 @@ const SelectContent = React.forwardRef<
       >
         {children}
       </SelectPrimitive.Viewport>
-      <SelectScrollDownButton />
+      {/* Hide bottom scroll arrow button for a cleaner scrollbar-only dropdown */}
+      {/* <SelectScrollDownButton /> */}
     </SelectPrimitive.Content>
   </SelectPrimitive.Portal>
 ));
@@ -138,6 +140,4 @@ export {
   SelectLabel,
   SelectItem,
   SelectSeparator,
-  SelectScrollUpButton,
-  SelectScrollDownButton,
 };

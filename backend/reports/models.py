@@ -73,6 +73,7 @@ class AuditEvent(models.Model):
         ("limit_update", "Limit Update"),
         ("config_update", "Configuration Update"),
         ("log_update", "Log Update"),
+        ("log_correction", "Log Correction"),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

@@ -304,6 +304,261 @@ export const siteAPI = {
   },
 };
 
+// Department API functions
+export const departmentAPI = {
+  list: async () => {
+    const response = await api.get('/departments/');
+    if ((response.data as any).results) {
+      return (response.data as any).results;
+    }
+    return Array.isArray(response.data) ? response.data : [];
+  },
+
+  get: async (id: string) => {
+    const response = await api.get(`/departments/${id}/`);
+    return response.data;
+  },
+
+  create: async (data: { name: string; client_id?: string; is_active?: boolean }) => {
+    const response = await api.post('/departments/', data);
+    return response.data;
+  },
+
+  update: async (id: string, data: any) => {
+    const response = await api.put(`/departments/${id}/`, data);
+    return response.data;
+  },
+
+  delete: async (id: string) => {
+    await api.delete(`/departments/${id}/`);
+  },
+};
+
+// Equipment Category API functions
+export const equipmentCategoryAPI = {
+  list: async () => {
+    const response = await api.get('/equipment-categories/');
+    if ((response.data as any).results) {
+      return (response.data as any).results;
+    }
+    return Array.isArray(response.data) ? response.data : [];
+  },
+
+  get: async (id: string) => {
+    const response = await api.get(`/equipment-categories/${id}/`);
+    return response.data;
+  },
+
+  create: async (data: { name: string; client_id?: string; is_active?: boolean }) => {
+    const response = await api.post('/equipment-categories/', data);
+    return response.data;
+  },
+
+  update: async (id: string, data: any) => {
+    const response = await api.put(`/equipment-categories/${id}/`, data);
+    return response.data;
+  },
+
+  delete: async (id: string) => {
+    await api.delete(`/equipment-categories/${id}/`);
+  },
+};
+
+// Equipment API functions
+export const equipmentAPI = {
+  list: async (params?: { department?: string; category?: string }) => {
+    const response = await api.get('/equipment/', { params });
+    if ((response.data as any).results) {
+      return (response.data as any).results;
+    }
+    return Array.isArray(response.data) ? response.data : [];
+  },
+
+  get: async (id: string) => {
+    const response = await api.get(`/equipment/${id}/`);
+    return response.data;
+  },
+
+  create: async (data: {
+    equipment_number: string;
+    name: string;
+    capacity?: string | null;
+    department: string;
+    category: string;
+    site_id?: string | null;
+    client_id?: string;
+    is_active?: boolean;
+  }) => {
+    const response = await api.post('/equipment/', data);
+    return response.data;
+  },
+
+  update: async (id: string, data: any) => {
+    const response = await api.put(`/equipment/${id}/`, data);
+    return response.data;
+  },
+
+  delete: async (id: string) => {
+    await api.delete(`/equipment/${id}/`);
+  },
+};
+
+// Filter Master API functions
+export const filterCategoryAPI = {
+  list: async () => {
+    const response = await api.get("/filter-categories/");
+    if ((response.data as any).results) {
+      return (response.data as any).results;
+    }
+    return Array.isArray(response.data) ? response.data : [];
+  },
+
+  get: async (id: string) => {
+    const response = await api.get(`/filter-categories/${id}/`);
+    return response.data;
+  },
+
+  create: async (data: {
+    name: string;
+    description?: string;
+    client_id?: string;
+    is_active?: boolean;
+  }) => {
+    const response = await api.post("/filter-categories/", data);
+    return response.data;
+  },
+
+  update: async (id: string, data: any) => {
+    const response = await api.put(`/filter-categories/${id}/`, data);
+    return response.data;
+  },
+
+  delete: async (id: string) => {
+    await api.delete(`/filter-categories/${id}/`);
+  },
+};
+
+export const filterMasterAPI = {
+  list: async (params?: { status?: string }) => {
+    const response = await api.get("/filters/", { params });
+    if ((response.data as any).results) {
+      return (response.data as any).results;
+    }
+    return Array.isArray(response.data) ? response.data : [];
+  },
+
+  get: async (id: string) => {
+    const response = await api.get(`/filters/${id}/`);
+    return response.data;
+  },
+
+  create: async (data: FormData) => {
+    const response = await api.post("/filters/", data, {
+      headers: {
+        "Content-Type": "multipart/form-data",
+      },
+    });
+    return response.data;
+  },
+
+  update: async (id: string, data: FormData) => {
+    const response = await api.put(`/filters/${id}/`, data, {
+      headers: {
+        "Content-Type": "multipart/form-data",
+      },
+    });
+    return response.data;
+  },
+
+  approve: async (id: string) => {
+    const response = await api.post(`/filters/${id}/approve/`);
+    return response.data;
+  },
+
+  reject: async (id: string) => {
+    const response = await api.post(`/filters/${id}/reject/`);
+    return response.data;
+  },
+
+  delete: async (id: string) => {
+    await api.delete(`/filters/${id}/`);
+  },
+};
+
+export const filterAssignmentAPI = {
+  list: async (params?: { equipment?: string }) => {
+    const response = await api.get("/filter-assignments/", { params });
+    if ((response.data as any).results) {
+      return (response.data as any).results;
+    }
+    return Array.isArray(response.data) ? response.data : [];
+  },
+
+  create: async (data: {
+    filter: string;
+    equipment: string;
+    area_category?: string;
+    tag_info?: string;
+  }) => {
+    const response = await api.post("/filter-assignments/", data);
+    return response.data;
+  },
+
+  update: async (id: string, data: any) => {
+    const response = await api.put(`/filter-assignments/${id}/`, data);
+    return response.data;
+  },
+
+  delete: async (id: string) => {
+    await api.delete(`/filter-assignments/${id}/`);
+  },
+};
+
+export const filterScheduleAPI = {
+  list: async (params?: { overdue?: boolean }) => {
+    const queryParams: any = {};
+    if (params?.overdue) {
+      queryParams.overdue = "true";
+    }
+    const response = await api.get("/filter-schedules/", {
+      params: queryParams,
+    });
+    if ((response.data as any).results) {
+      return (response.data as any).results;
+    }
+    return Array.isArray(response.data) ? response.data : [];
+  },
+
+  create: async (data: {
+    assignment: string;
+    schedule_type: "replacement" | "cleaning" | "integrity";
+    frequency_days?: number;
+    next_due_date?: string;
+    last_done_date?: string | null;
+  }) => {
+    const response = await api.post("/filter-schedules/", data);
+    return response.data;
+  },
+
+  update: async (id: string, data: any) => {
+    const response = await api.put(`/filter-schedules/${id}/`, data);
+    return response.data;
+  },
+
+  delete: async (id: string) => {
+    await api.delete(`/filter-schedules/${id}/`);
+  },
+
+  overdueSummary: async () => {
+    const response = await api.get("/filter-schedules/overdue-summary/");
+    return response.data as {
+      replacement?: number;
+      cleaning?: number;
+      integrity?: number;
+    };
+  },
+};
+
 // Instrument API functions
 export const instrumentAPI = {
   list: async () => {

@@ -15,16 +15,9 @@ class FilterLog(models.Model):
         ('pending_secondary_approval', 'Pending secondary approval'),
     ]
 
-    CATEGORY_CHOICES = [
-        ('hvac', 'HVAC'),
-        ('water_system', 'Water system'),
-        ('compressed_air', 'Compressed air'),
-        ('nitrogen_air', 'Nitrogen air'),
-    ]
-
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     equipment_id = models.CharField(max_length=100, db_index=True)
-    category = models.CharField(max_length=32, choices=CATEGORY_CHOICES)
+    category = models.CharField(max_length=100)
     filter_no = models.CharField(max_length=100)
     filter_micron = models.CharField(max_length=100, blank=True, null=True)
     filter_size = models.CharField(max_length=100, blank=True, null=True)

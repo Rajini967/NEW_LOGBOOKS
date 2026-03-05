@@ -1,0 +1,155 @@
+from datetime import date
+
+from django.db.models import Count
+from django.utils import timezone
+from rest_framework import status, viewsets
+from rest_framework.decorators import action
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+
+from accounts.permissions import IsManagerOrSuperAdmin
+
+from .models import FilterCategory, FilterMaster, FilterAssignment, FilterSchedule
+from .serializers import (
+    FilterCategorySerializer,
+    FilterMasterSerializer,
+    FilterAssignmentSerializer,
+    FilterScheduleSerializer,
+)
+
+
+class FilterCategoryViewSet(viewsets.ModelViewSet):
+    queryset = FilterCategory.objects.all()
+    serializer_class = FilterCategorySerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_permissions(self):
+        if self.action in ["create", "update", "partial_update", "destroy"]:
+            return [IsAuthenticated(), IsManagerOrSuperAdmin()]
+        return [IsAuthenticated()]
+
+
+class FilterMasterViewSet(viewsets.ModelViewSet):
+    queryset = FilterMaster.objects.select_related("category", "created_by", "approved_by").all()
+    serializer_class = FilterMasterSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_permissions(self):
+        if self.action in ["create", "update", "partial_update", "destroy", "approve", "reject"]:
+            return [IsAuthenticated(), IsManagerOrSuperAdmin()]
+        return [IsAuthenticated()]
+
+    def create(self, request, *args, **kwargs):
+        """
+        Create a new filter in pending status.
+        """
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
+    @action(detail=True, methods=["post"])
+    def approve(self, request, pk=None):
+        """
+        Approve a pending filter.
+        """
+        instance: FilterMaster = self.get_object()
+        if instance.status not in ["pending", "rejected"]:
+            return Response(
+                {"detail": "Only pending or rejected filters can be approved."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        instance.status = "approved"
+        instance.approved_by = request.user
+        instance.approved_at = timezone.now()
+        instance.save(update_fields=["status", "approved_by", "approved_at", "updated_at"])
+
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data)
+
+    def destroy(self, request, *args, **kwargs):
+        """
+        Allow deleting filters only before they are approved.
+        """
+        instance: FilterMaster = self.get_object()
+        if instance.status == "approved":
+            return Response(
+                {"detail": "Approved filters cannot be deleted."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return super().destroy(request, *args, **kwargs)
+
+    @action(detail=True, methods=["post"])
+    def reject(self, request, pk=None):
+        """
+        Reject a pending filter.
+        """
+        instance: FilterMaster = self.get_object()
+        if instance.status not in ["pending"]:
+            return Response(
+                {"detail": "Only pending filters can be rejected."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        instance.status = "rejected"
+        instance.approved_by = request.user
+        instance.approved_at = timezone.now()
+        instance.save(update_fields=["status", "approved_by", "approved_at", "updated_at"])
+
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data)
+
+
+class FilterAssignmentViewSet(viewsets.ModelViewSet):
+    queryset = FilterAssignment.objects.select_related("filter", "equipment").all()
+    serializer_class = FilterAssignmentSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_permissions(self):
+        if self.action in ["create", "update", "partial_update", "destroy"]:
+            return [IsAuthenticated(), IsManagerOrSuperAdmin()]
+        return [IsAuthenticated()]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        equipment_id = self.request.query_params.get("equipment")
+        if equipment_id:
+            qs = qs.filter(equipment_id=equipment_id)
+        return qs
+
+
+class FilterScheduleViewSet(viewsets.ModelViewSet):
+    queryset = FilterSchedule.objects.select_related("assignment", "assignment__equipment").all()
+    serializer_class = FilterScheduleSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_permissions(self):
+        if self.action in ["create", "update", "partial_update", "destroy"]:
+            return [IsAuthenticated(), IsManagerOrSuperAdmin()]
+        return [IsAuthenticated()]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        overdue_param = self.request.query_params.get("overdue")
+        if overdue_param == "true":
+            today = date.today()
+            qs = qs.filter(next_due_date__lt=today).exclude(status="completed")
+        return qs
+
+    @action(detail=False, methods=["get"], url_path="overdue-summary")
+    def overdue_summary(self, request):
+        """
+        Return counts of overdue schedules grouped by schedule type.
+        """
+        today = date.today()
+        qs = (
+            FilterSchedule.objects.filter(next_due_date__lt=today)
+            .exclude(status="completed")
+            .values("schedule_type")
+            .annotate(count=Count("id"))
+        )
+        summary = {row["schedule_type"]: row["count"] for row in qs}
+        return Response(summary)
+

@@ -51,6 +51,8 @@ INSTALLED_APPS = [
     'air_validation',
     'test_certificates',
     'reports',
+    'equipment',
+    'filter_master',
 ]
 
 MIDDLEWARE = [

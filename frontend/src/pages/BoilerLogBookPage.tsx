@@ -1147,25 +1147,41 @@ const BoilerLogBookPage: React.FC = () => {
                     </td>
                     <td className="px-3 py-2">{log.checkedBy}</td>
                     <td className="px-3 py-2">
-                      <div className="flex flex-col gap-1">
+                      <div className="flex flex-wrap items-center gap-2">
                         <Badge
                           variant={
-                            log.status === "approved"
+                            log.has_corrections && !log.corrects_id
+                              ? "destructive"
+                              : log.corrects_id
+                              ? "warning"
+                              : log.status === "approved"
                               ? "success"
                               : log.status === "rejected"
                               ? "destructive"
-                              : log.status === "pending_secondary_approval"
-                              ? "secondary"
-                              : "secondary"
+                              : log.status === "pending" || log.status === "pending_secondary_approval"
+                              ? "warning"
+                              : "outline"
                           }
                         >
-                          {log.status === "pending_secondary_approval" ? "Pending" : log.status}
+                          {log.has_corrections && !log.corrects_id
+                            ? "Rejected"
+                            : log.corrects_id
+                            ? "Pending"
+                            : log.status === "pending_secondary_approval" || log.status === "pending"
+                            ? "Pending"
+                            : log.status === "rejected"
+                            ? "Rejected"
+                            : log.status === "approved"
+                            ? "Approved"
+                            : log.status === "draft"
+                            ? "Draft"
+                            : log.status}
                         </Badge>
                         {log.corrects_id && (
-                          <span className="text-[11px] text-muted-foreground">Correction entry</span>
+                          <span className="text-[10px] text-amber-700 whitespace-nowrap">Correction entry</span>
                         )}
                         {log.has_corrections && !log.corrects_id && (
-                          <span className="text-[11px] text-muted-foreground">Has corrections</span>
+                          <span className="text-[10px] text-emerald-700 whitespace-nowrap">Has corrections</span>
                         )}
                       </div>
                     </td>

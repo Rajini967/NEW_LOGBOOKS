@@ -54,6 +54,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const location = useLocation();
   const [hvacExpanded, setHvacExpanded] = useState(false);
   const [eLogBookExpanded, setELogBookExpanded] = useState(false);
+  const [equipmentExpanded, setEquipmentExpanded] = useState(false);
 
   // Auto-expand HVAC section if any child route is active
   useEffect(() => {
@@ -68,6 +69,14 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
     const isELogBookChildActive = location.pathname.startsWith('/e-log-book/');
     if (isELogBookChildActive) {
       setELogBookExpanded(true);
+    }
+  }, [location.pathname]);
+
+  // Auto-expand Equipment Master section if any child route is active
+  useEffect(() => {
+    const isEquipmentChildActive = location.pathname.startsWith('/equipment/');
+    if (isEquipmentChildActive) {
+      setEquipmentExpanded(true);
     }
   }, [location.pathname]);
 
@@ -90,10 +99,10 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   ];
 
   const eLogBookItems = [
-    { path: '/e-log-book/chiller', icon: Thermometer, label: 'Chiller', roles: ['operator', 'supervisor', 'super_admin', 'manager'] },
-    { path: '/e-log-book/boiler', icon: Gauge, label: 'Boiler', roles: ['operator', 'supervisor', 'super_admin', 'manager'] },
-    { path: '/e-log-book/chemical', icon: Droplets, label: 'Chemical', roles: ['operator', 'supervisor', 'super_admin', 'manager'] },
-    { path: '/e-log-book/filter', icon: Filter, label: 'Filter Log Book', roles: ['operator', 'supervisor', 'super_admin', 'manager'] },
+    { id: 'chiller', path: '/e-log-book/chiller', icon: Thermometer, label: 'Chiller', roles: ['operator', 'supervisor', 'super_admin', 'manager'] },
+    { id: 'boiler', path: '/e-log-book/boiler', icon: Gauge, label: 'Boiler', roles: ['operator', 'supervisor', 'super_admin', 'manager'] },
+    { id: 'chemical', path: '/e-log-book/chemical', icon: Droplets, label: 'Chemical', roles: ['operator', 'supervisor', 'super_admin', 'manager'] },
+    { id: 'filter', path: '/e-log-book/filter', icon: Filter, label: 'Filter', roles: ['operator', 'supervisor', 'super_admin', 'manager'] },
   ];
 
   const filteredItems = navItems.filter(
@@ -110,6 +119,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
   const isHvacActive = location.pathname === '/hvac-validation' || location.pathname.startsWith('/hvac-validation/');
   const isELogBookActive = location.pathname === '/e-log-book' || location.pathname.startsWith('/e-log-book/');
+  const isEquipmentActive = location.pathname.startsWith('/equipment/');
 
   return (
     <aside
@@ -201,6 +211,88 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           );
         })()}
 
+        {/* Equipment Master Section (collapsible, like E Log Book) */}
+        {user && ['super_admin', 'manager'].includes(user.role) && (
+          <div className="space-y-1">
+            <div className="space-y-1">
+              <div className="relative">
+                <Link
+                  to="/equipment"
+                  className={cn(
+                    'flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200',
+                    isEquipmentActive
+                      ? 'bg-sidebar-primary text-sidebar-primary-foreground'
+                      : 'text-sidebar-foreground hover:bg-sidebar-accent'
+                  )}
+                >
+                  <Wrench className="w-5 h-5 shrink-0" />
+                  {!collapsed && (
+                    <span className="text-sm font-medium flex-1">Equipment Master</span>
+                  )}
+                </Link>
+                {!collapsed && (
+                  <button
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setEquipmentExpanded(!equipmentExpanded);
+                    }}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 hover:bg-sidebar-accent/50 rounded"
+                  >
+                    {equipmentExpanded ? (
+                      <ChevronUp className="w-4 h-4" />
+                    ) : (
+                      <ChevronDown className="w-4 h-4" />
+                    )}
+                  </button>
+                )}
+              </div>
+
+              {/* Equipment Master Sub-items */}
+              {!collapsed && equipmentExpanded && (
+                <div className="ml-4 space-y-1 border-l border-sidebar-border pl-2">
+                  <Link
+                    to="/equipment/departments"
+                    className={cn(
+                      'flex items-center gap-3 px-3 py-2 rounded-lg transition-all duration-200 text-sm',
+                      location.pathname === '/equipment/departments'
+                        ? 'bg-sidebar-primary text-sidebar-primary-foreground'
+                        : 'text-sidebar-foreground hover:bg-sidebar-accent'
+                    )}
+                  >
+                    <Wrench className="w-4 h-4 shrink-0" />
+                    <span className="font-medium">Departments</span>
+                  </Link>
+                  <Link
+                    to="/equipment/categories"
+                    className={cn(
+                      'flex items-center gap-3 px-3 py-2 rounded-lg transition-all duration-200 text-sm',
+                      location.pathname === '/equipment/categories'
+                        ? 'bg-sidebar-primary text-sidebar-primary-foreground'
+                        : 'text-sidebar-foreground hover:bg-sidebar-accent'
+                    )}
+                  >
+                    <Filter className="w-4 h-4 shrink-0" />
+                    <span className="font-medium">Equipment Categories</span>
+                  </Link>
+                  <Link
+                    to="/equipment/list"
+                    className={cn(
+                      'flex items-center gap-3 px-3 py-2 rounded-lg transition-all duration-200 text-sm',
+                      location.pathname === '/equipment/list'
+                        ? 'bg-sidebar-primary text-sidebar-primary-foreground'
+                        : 'text-sidebar-foreground hover:bg-sidebar-accent'
+                    )}
+                  >
+                    <Gauge className="w-4 h-4 shrink-0" />
+                    <span className="font-medium">Equipment List</span>
+                  </Link>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* E Log Book Section */}
         {user && navItems[2].roles.includes(user.role) && (
           <div className="space-y-1">
@@ -243,11 +335,25 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
               {!collapsed && eLogBookExpanded && filteredELogBookItems.length > 0 && (
                 <div className="ml-4 space-y-1 border-l border-sidebar-border pl-2">
                   {filteredELogBookItems.map((item) => {
-                    const isActive = location.pathname === item.path;
+                    const isFilterItem = item.id === 'filter';
+                    const isFilterAdmin =
+                      user && (user.role === 'manager' || user.role === 'super_admin');
+
+                    const targetPath =
+                      isFilterItem && user
+                        ? isFilterAdmin
+                          ? '/e-log-book/filter'
+                          : '/e-log-book/filter/entry'
+                        : item.path;
+
+                    const isActive = isFilterItem
+                      ? location.pathname.startsWith('/e-log-book/filter')
+                      : location.pathname === targetPath;
+
                     return (
                       <Link
                         key={item.path}
-                        to={item.path}
+                        to={targetPath}
                         className={cn(
                           'flex items-center gap-3 px-3 py-2 rounded-lg transition-all duration-200 text-sm',
                           isActive

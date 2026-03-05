@@ -3,7 +3,7 @@ import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
-import { AuthProvider } from "@/contexts/AuthContext";
+import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import LoginPage from "./pages/LoginPage";
 import ForgotPasswordPage from "./pages/ForgotPasswordPage";
@@ -14,6 +14,10 @@ import ELogBookPage from "./pages/ELogBookPage";
 import BoilerLogBookPage from "./pages/BoilerLogBookPage";
 import ChemicalLogBookPage from "./pages/ChemicalLogBookPage";
 import FilterLogBookPage from "./pages/FilterLogBookPage";
+import FilterLogBookHomePage from "./pages/FilterLogBookHomePage";
+import FilterLogBookSettingsPage from "./pages/FilterLogBookSettingsPage";
+import FilterCategoriesPage from "./pages/FilterCategoriesPage";
+import FilterRegisterPage from "./pages/FilterRegisterPage";
 import HVACValidationPage from "./pages/HVACValidationPage";
 import AirVelocityTestPage from "./pages/AirVelocityTestPage";
 import FilterIntegrityTestPage from "./pages/FilterIntegrityTestPage";
@@ -21,6 +25,10 @@ import RecoveryTestPage from "./pages/RecoveryTestPage";
 import DifferentialPressureTestPage from "./pages/DifferentialPressureTestPage";
 import NVPCTestPage from "./pages/NVPCTestPage";
 import InstrumentsPage from "./pages/InstrumentsPage";
+import DepartmentsPage from "./pages/DepartmentsPage";
+import EquipmentCategoriesPage from "./pages/EquipmentCategoriesPage";
+import EquipmentListPage from "./pages/EquipmentListPage";
+import EquipmentMasterLandingPage from "./pages/EquipmentMasterLandingPage";
 import ReportsPage from "./pages/ReportsPage";
 import UsersPage from "./pages/UsersPage";
 import SettingsPage from "./pages/SettingsPage";
@@ -28,6 +36,29 @@ import LogbookBuilderPage from "./pages/LogbookBuilderPage";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
+
+const isFilterAdmin = (role?: string) =>
+  role === "manager" || role === "super_admin";
+
+function AdminFilterLandingRoute() {
+  const { user, isLoading } = useAuth();
+
+  if (isLoading) return null;
+  if (!user || !isFilterAdmin(user.role)) {
+    return <Navigate to="/e-log-book/filter/entry" replace />;
+  }
+  return <FilterLogBookHomePage />;
+}
+
+function AdminFilterSettingsRoute() {
+  const { user, isLoading } = useAuth();
+
+  if (isLoading) return null;
+  if (!user || !isFilterAdmin(user.role)) {
+    return <Navigate to="/e-log-book/filter/entry" replace />;
+  }
+  return <FilterLogBookSettingsPage />;
+}
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
@@ -48,7 +79,11 @@ const App = () => (
               <Route path="/e-log-book/chiller" element={<ELogBookPage equipmentType="chiller" />} />
               <Route path="/e-log-book/boiler" element={<BoilerLogBookPage />} />
               <Route path="/e-log-book/chemical" element={<ChemicalLogBookPage />} />
-              <Route path="/e-log-book/filter" element={<FilterLogBookPage />} />
+              <Route path="/e-log-book/filter" element={<AdminFilterLandingRoute />} />
+              <Route path="/e-log-book/filter/entry" element={<FilterLogBookPage />} />
+              <Route path="/e-log-book/filter/settings" element={<AdminFilterSettingsRoute />} />
+              <Route path="/e-log-book/filter/settings/categories" element={<FilterCategoriesPage />} />
+              <Route path="/e-log-book/filter/settings/register" element={<FilterRegisterPage />} />
               <Route path="/hvac-validation" element={<HVACValidationPage />} />
               <Route path="/hvac-validation/air-velocity-test" element={<AirVelocityTestPage />} />
               <Route path="/hvac-validation/filter-integrity-test" element={<FilterIntegrityTestPage />} />
@@ -56,6 +91,10 @@ const App = () => (
               <Route path="/hvac-validation/differential-pressure-test" element={<DifferentialPressureTestPage />} />
               <Route path="/hvac-validation/nvpc-test" element={<NVPCTestPage />} />
               <Route path="/instruments" element={<InstrumentsPage />} />
+              <Route path="/equipment" element={<EquipmentMasterLandingPage />} />
+              <Route path="/equipment/departments" element={<DepartmentsPage />} />
+              <Route path="/equipment/categories" element={<EquipmentCategoriesPage />} />
+              <Route path="/equipment/list" element={<EquipmentListPage />} />
               <Route path="/reports" element={<ReportsPage />} />
               <Route path="/logbook-builder" element={<LogbookBuilderPage />} />
               <Route path="/users" element={<UsersPage />} />

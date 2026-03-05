@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Header } from '@/components/layout/Header';
 import { Thermometer, Gauge, Droplets, Filter as FilterIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useAuth } from '@/contexts/AuthContext';
 
 interface EquipmentModule {
   id: string;
@@ -50,6 +51,9 @@ const equipmentModules: EquipmentModule[] = [
 
 export default function ELogBookLandingPage() {
   const navigate = useNavigate();
+  const { user } = useAuth();
+
+  const isFilterAdmin = user && (user.role === 'manager' || user.role === 'super_admin');
 
   return (
     <div className="min-h-screen">
@@ -65,7 +69,17 @@ export default function ELogBookLandingPage() {
             return (
               <button
                 key={module.id}
-                onClick={() => navigate(module.path)}
+                onClick={() => {
+                  if (module.id === 'filter') {
+                    if (isFilterAdmin) {
+                      navigate('/e-log-book/filter');
+                    } else {
+                      navigate('/e-log-book/filter/entry');
+                    }
+                  } else {
+                    navigate(module.path);
+                  }
+                }}
                 className={cn(
                   'bg-card rounded-lg border border-border p-6',
                   'hover:border-accent hover:shadow-lg',

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Header } from '@/components/layout/Header';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -141,6 +141,13 @@ const typeLabels = {
   nvpc: 'NVPC Test',
 };
 
+const auditEventLabels: Record<string, string> = {
+  limit_update: 'Limit Update',
+  config_update: 'Config Update',
+  log_update: 'Log Update',
+  log_correction: 'Log Correction',
+};
+
 export default function ReportsPage() {
   const { user } = useAuth();
 
@@ -196,6 +203,18 @@ export default function ReportsPage() {
   const [userReportRoleFilter, setUserReportRoleFilter] = useState<string>('all');
   const [userReportActiveFilter, setUserReportActiveFilter] = useState<string>('all');
   const [userReportActivityDate, setUserReportActivityDate] = useState<string>('');
+
+  // Client-side filter so Role and Status dropdowns always show the correct subset (fixes Admin showing all, Super Admin not showing)
+  const filteredUserReports = useMemo(() => {
+    let list = userReports;
+    if (userReportRoleFilter !== 'all') {
+      list = list.filter((u) => u.role === userReportRoleFilter);
+    }
+    if (userReportActiveFilter !== 'all') {
+      list = list.filter((u) => (userReportActiveFilter === 'true') === u.is_active);
+    }
+    return list;
+  }, [userReports, userReportRoleFilter, userReportActiveFilter]);
 
   const [activityRows, setActivityRows] = useState<UserActivityRow[]>([]);
   const [activityLoading, setActivityLoading] = useState(false);
@@ -281,11 +300,26 @@ export default function ReportsPage() {
   }, [loadReportsFromAPI]);
 
   const loadUserReports = useCallback(
-    async (params?: { role?: string; is_active?: string }) => {
+    async (params?: { role?: string; is_active?: string; activity_date?: string }) => {
       try {
         setUserReportsLoading(true);
         const data = await reportsAPI.listUsers(params);
-        setUserReports(data);
+
+        // Normalize is_active to a strict boolean so status
+        // badges and filters correctly show Active/Inactive
+        const normalizedData: UserReport[] = data.map((u: any) => ({
+          ...u,
+          is_active:
+            u.is_active === true ||
+            u.is_active === 1 ||
+            u.is_active === '1' ||
+            u.is_active === 'true' ||
+            u.is_active === 'True' ||
+            u.is_active === 'ACTIVE' ||
+            u.is_active === 'Active',
+        }));
+
+        setUserReports(normalizedData);
       } catch (error) {
         console.error('Error loading user management reports:', error);
         toast.error('Failed to load user management report');
@@ -366,7 +400,9 @@ export default function ReportsPage() {
   // Lazy-load data when switching tabs
   useEffect(() => {
     if (activeTab === 'user-management' && canSeeUserReports && userReports.length === 0) {
-      loadUserReports();
+      const roleParam = userReportRoleFilter === 'all' ? undefined : userReportRoleFilter;
+      const activeParam = userReportActiveFilter === 'all' ? undefined : userReportActiveFilter;
+      loadUserReports({ role: roleParam, is_active: activeParam });
     } else if (activeTab === 'user-activity' && canSeeActivity && activityRows.length === 0) {
       loadUserActivity();
     } else if (activeTab === 'audit-trail' && canSeeAudit && auditRows.length === 0) {
@@ -1748,7 +1784,6 @@ export default function ReportsPage() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All</SelectItem>
-                    <SelectItem value="super_admin">Super Admin</SelectItem>
                     <SelectItem value="manager">Admin</SelectItem>
                     <SelectItem value="supervisor">Supervisor</SelectItem>
                     <SelectItem value="operator">Operator</SelectItem>
@@ -1809,7 +1844,7 @@ export default function ReportsPage() {
                 variant="outline"
                 size="sm"
                 onClick={() => {
-                  const rowsHtml = userReports
+                  const rowsHtml = filteredUserReports
                     .map(
                       (u) => `
                         <tr>
@@ -1932,7 +1967,7 @@ export default function ReportsPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
-                      {userReports.map((u) => (
+                      {filteredUserReports.map((u) => (
                         <tr key={u.id} className="hover:bg-muted/30 transition-colors">
                           <td className="px-4 py-3 text-sm">{u.email}</td>
                           <td className="px-4 py-3 text-sm">{u.role_display}</td>
@@ -1958,7 +1993,7 @@ export default function ReportsPage() {
                           </td>
                         </tr>
                       ))}
-                      {userReports.length === 0 && (
+                      {filteredUserReports.length === 0 && (
                         <tr>
                           <td
                             colSpan={6}
@@ -2153,7 +2188,9 @@ export default function ReportsPage() {
                               : ''}
                           </td>
                           <td className="px-4 py-3 text-sm">{row.user_email}</td>
-                          <td className="px-4 py-3 text-sm capitalize">{row.event_type}</td>
+                          <td className="px-4 py-3 text-sm">
+                            {auditEventLabels[row.event_type] ?? row.event_type}
+                          </td>
                           <td className="px-4 py-3 text-sm">{row.ip_address}</td>
                           <td className="px-4 py-3 text-sm truncate max-w-xs">
                             {row.user_agent}
@@ -2213,6 +2250,7 @@ export default function ReportsPage() {
                     <SelectItem value="limit_update">Limit Update</SelectItem>
                     <SelectItem value="config_update">Config Update</SelectItem>
                     <SelectItem value="log_update">Log Update</SelectItem>
+                    <SelectItem value="log_correction">Log Correction</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
