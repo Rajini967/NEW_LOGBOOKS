@@ -36,7 +36,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Plus, Thermometer, Gauge, Droplets, Save, Clock, Trash2, Filter, X, CheckCircle, XCircle, Edit, History } from 'lucide-react';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
-import { logbookAPI, chemicalPrepAPI, chillerLogAPI, boilerLogAPI, compressorLogAPI } from '@/lib/api';
+import { logbookAPI, chemicalPrepAPI, chillerLogAPI, boilerLogAPI, compressorLogAPI, chemicalMasterAPI } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { LogbookSchema } from '@/types/logbook-config';
 import { FieldWithValidation } from '@/components/logbook/FieldWithValidation';
@@ -194,18 +194,6 @@ const equipmentList = {
   chemical: ['EN0001-MGF', 'EN0002-RO', 'EN0003-PW', 'EN0004-Other', 'EN0005-Other'],
 };
 
-const chemicals = [
-  { name: 'NaOCl – Sodium Hypochlorite', stockConcentration: 99 },
-  { name: 'NaOH – Sodium Hydroxide', stockConcentration: 95 },
-  { name: 'SMBS – Sodium Metabisulfite', stockConcentration: 50 },
-  { name: 'NaCl – Sodium Chloride', stockConcentration: 100 },
-  { name: 'HCl – Hydrochloric Acid', stockConcentration: 37 },
-  { name: 'Citric Acid (C₆H₈O₇) – Citric Acid', stockConcentration: 100 },
-  { name: 'Nitric Acid (HNO₃) – Nitric Acid', stockConcentration: 70 },
-  { name: 'Hydrogen Peroxide (H₂O₂) – Hydrogen Peroxide', stockConcentration: 30 },
-  { name: 'Antiscalant', stockConcentration: 100 },
-];
-
 export default function ELogBookPage() {
   // This page is now dedicated to the Chiller log book only.
   // Boiler and Chemical have their own independent pages.
@@ -218,6 +206,7 @@ export default function ELogBookPage() {
   const [firstChillerLogByDay, setFirstChillerLogByDay] = useState<Record<string, ELogBook>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [chemicalOptions, setChemicalOptions] = useState<{ id: string; label: string }[]>([]);
   const [formData, setFormData] = useState({
     equipmentType: 'chiller' as 'chiller',
     equipmentId: '',
@@ -350,6 +339,25 @@ export default function ELogBookPage() {
     return () => {
       window.removeEventListener('logbookSaved', handleLogbookSaved);
     };
+  }, []);
+
+  // Load shared chemical list for cooling tower chemical dropdown (no hardcoded list)
+  useEffect(() => {
+    (async () => {
+      try {
+        const data = await chemicalMasterAPI.list();
+        const opts = (data as any[]).map((c) => ({
+          id: String((c as any).id),
+          label: `${(c as any).location_label ?? (c as any).location ?? ''} – ${(c as any).formula} – ${
+            (c as any).name
+          }`,
+        }));
+        setChemicalOptions(opts);
+      } catch (error) {
+        // Cooling tower chemical list is a helper; log but don't block the whole page
+        console.error('Failed to load chemical master list for cooling tower section:', error);
+      }
+    })();
   }, []);
 
   // Update selected schema when equipment type changes
@@ -2966,33 +2974,25 @@ export default function ELogBookPage() {
                         </Select>
                       </div>
 
-                      <div className="space-y-2">
-                        <Label>Chemical name *</Label>
-                        <Select
-                          value={formData.chemicalName}
-                          onValueChange={(v) => setFormData({ ...formData, chemicalName: v })}
-                        >
-                          <SelectTrigger>
-                            <SelectValue placeholder="Select chemical" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {chemicals.map((chem) => (
-                              <SelectItem key={chem.name} value={chem.name}>
-                                {chem.name}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
+                    <div className="space-y-2">
+                      <Label>Chemical name *</Label>
+                      <Select
+                        value={formData.chemicalName}
+                        onValueChange={(v) => setFormData({ ...formData, chemicalName: v })}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select chemical" />
+                        </SelectTrigger>
+                          <SelectContent className="max-h-60 overflow-y-auto">
+                          {chemicalOptions.map((chem) => (
+                            <SelectItem key={chem.id} value={chem.label}>
+                              {chem.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </div>
-
-                    {formData.chemicalName && (
-                      <div className="bg-accent/10 rounded-lg p-3 border border-accent/20">
-                        <p className="text-sm text-accent font-medium">
-                          Chemical %: {chemicals.find(c => c.name === formData.chemicalName)?.stockConcentration}%
-                        </p>
-                      </div>
-                    )}
+                  </div>
 
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-2">

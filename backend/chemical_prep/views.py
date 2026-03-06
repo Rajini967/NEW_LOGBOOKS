@@ -3,10 +3,63 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import ValidationError
-from .models import ChemicalPreparation
-from .serializers import ChemicalPreparationSerializer
+from django.db import models
+from .models import Chemical, ChemicalStock, ChemicalPreparation, ChemicalAssignment
+from .serializers import (
+    ChemicalSerializer,
+    ChemicalStockSerializer,
+    ChemicalAssignmentSerializer,
+    ChemicalPreparationSerializer,
+)
 from accounts.permissions import CanLogEntries, CanApproveReports
 from reports.utils import log_limit_change
+
+
+class ChemicalViewSet(viewsets.ReadOnlyModelViewSet):
+    """Read-only viewset for chemical master data."""
+
+    permission_classes = [IsAuthenticated]
+    serializer_class = ChemicalSerializer
+    queryset = Chemical.objects.filter(is_active=True).order_by("location", "name")
+
+
+class ChemicalStockViewSet(viewsets.ReadOnlyModelViewSet):
+    """Read-only viewset for chemical stock and pricing."""
+
+    permission_classes = [IsAuthenticated]
+    serializer_class = ChemicalStockSerializer
+    queryset = ChemicalStock.objects.select_related("chemical").all()
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        chemical_id = self.request.query_params.get("chemical")
+        if chemical_id:
+            qs = qs.filter(chemical_id=chemical_id)
+        location = self.request.query_params.get("location")
+        if location:
+            qs = qs.filter(chemical__location=location)
+        return qs
+
+
+class ChemicalAssignmentViewSet(viewsets.ModelViewSet):
+    """Manage assignments of chemicals to equipment."""
+
+    permission_classes = [IsAuthenticated, CanLogEntries]
+    serializer_class = ChemicalAssignmentSerializer
+    queryset = ChemicalAssignment.objects.select_related("chemical", "created_by").all()
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        chemical_id = self.request.query_params.get("chemical")
+        if chemical_id:
+            qs = qs.filter(chemical_id=chemical_id)
+        equipment_name = self.request.query_params.get("equipment_name")
+        if equipment_name:
+            qs = qs.filter(equipment_name__icontains=equipment_name)
+        return qs
 
 
 class ChemicalPreparationViewSet(viewsets.ModelViewSet):
@@ -24,10 +77,46 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
         return [IsAuthenticated()]
     
     def perform_create(self, serializer):
-        """Set operator when creating a preparation."""
+        """
+        Set operator when creating a preparation and enforce stock availability.
+
+        Business rule: when a chemical preparation is logged with a chemical and
+        chemical quantity, ensure there is enough ChemicalStock available.
+        """
+        validated = dict(serializer.validated_data)
+        chemical = validated.get("chemical")
+        chemical_name = validated.get("chemical_name")
+        requested_qty_g = validated.get("chemical_qty")
+
+        # If chemical FK is not provided but name is, try to resolve from master
+        if chemical is None and chemical_name:
+            chemical = Chemical.objects.filter(
+                name=chemical_name, is_active=True
+            ).first()
+
+        if chemical is not None and requested_qty_g is not None:
+            # chemical_qty is stored in grams; convert to kilograms for stock check
+            requested_qty_kg = requested_qty_g / 1000.0
+            total_available = (
+                ChemicalStock.objects.filter(chemical=chemical)
+                .aggregate(total=models.Sum("available_qty_kg"))
+                .get("total")
+                or 0.0
+            )
+            if requested_qty_kg > total_available:
+                raise ValidationError(
+                    {
+                        "chemical_qty": [
+                            f"Not enough stock available for {chemical.name}; "
+                            f"available: {total_available:.3f} kg, "
+                            f"requested: {requested_qty_kg:.3f} kg."
+                        ]
+                    }
+                )
+
         serializer.save(
             operator=self.request.user,
-            operator_name=self.request.user.name or self.request.user.email
+            operator_name=self.request.user.name or self.request.user.email,
         )
 
     def update(self, request, *args, **kwargs):

@@ -62,7 +62,9 @@ class FilterMaster(models.Model):
         max_length=32,
         unique=True,
         editable=False,
-        help_text="System-generated filter identifier, e.g. FMT-0001.",
+        blank=True,
+        null=True,
+        help_text="System-generated filter identifier (e.g. FMT-0001), assigned upon approval.",
     )
     category = models.ForeignKey(
         FilterCategory,
@@ -187,6 +189,15 @@ class FilterSchedule(models.Model):
     frequency_days = models.PositiveIntegerField(blank=True, null=True)
     next_due_date = models.DateField(blank=True, null=True)
     last_done_date = models.DateField(blank=True, null=True)
+    is_approved = models.BooleanField(default=False)
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="approved_filter_schedules",
+    )
+    approved_at = models.DateTimeField(blank=True, null=True)
     status = models.CharField(
         max_length=16,
         choices=STATUS_CHOICES,

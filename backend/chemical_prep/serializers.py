@@ -1,5 +1,84 @@
 from rest_framework import serializers
-from .models import ChemicalPreparation
+from .models import Chemical, ChemicalStock, ChemicalPreparation, ChemicalAssignment
+
+
+class ChemicalSerializer(serializers.ModelSerializer):
+    location_label = serializers.CharField(
+        source="get_location_display", read_only=True
+    )
+
+    class Meta:
+        model = Chemical
+        fields = [
+            "id",
+            "location",
+            "location_label",
+            "formula",
+            "name",
+            "category",
+            "is_active",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
+
+
+class ChemicalStockSerializer(serializers.ModelSerializer):
+    chemical_name = serializers.CharField(source="chemical.name", read_only=True)
+    chemical_formula = serializers.CharField(
+        source="chemical.formula", read_only=True
+    )
+    location = serializers.CharField(
+        source="chemical.get_location_display", read_only=True
+    )
+
+    class Meta:
+        model = ChemicalStock
+        fields = [
+            "id",
+            "chemical",
+            "chemical_name",
+            "chemical_formula",
+            "location",
+            "available_qty_kg",
+            "unit",
+            "price_per_unit",
+            "site",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
+
+
+class ChemicalAssignmentSerializer(serializers.ModelSerializer):
+    chemical_name = serializers.CharField(source="chemical.name", read_only=True)
+    chemical_formula = serializers.CharField(
+        source="chemical.formula", read_only=True
+    )
+    location = serializers.CharField(
+        source="chemical.get_location_display", read_only=True
+    )
+    created_by_name = serializers.CharField(
+        source="created_by.name", read_only=True
+    )
+
+    class Meta:
+        model = ChemicalAssignment
+        fields = [
+            "id",
+            "chemical",
+            "chemical_name",
+            "chemical_formula",
+            "location",
+            "equipment_name",
+            "category",
+            "is_active",
+            "created_by",
+            "created_by_name",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "created_by", "created_by_name", "created_at", "updated_at"]
 
 
 class ChemicalPreparationSerializer(serializers.ModelSerializer):
@@ -12,7 +91,7 @@ class ChemicalPreparationSerializer(serializers.ModelSerializer):
     class Meta:
         model = ChemicalPreparation
         fields = [
-            'id', 'equipment_name', 'chemical_name', 'chemical_category',
+            'id', 'equipment_name', 'chemical', 'chemical_name', 'chemical_category',
             'chemical_percent', 'chemical_concentration', 'solution_concentration', 'water_qty', 'chemical_qty',
             'batch_no', 'done_by',
             'remarks', 'comment', 'checked_by', 'operator_id', 'operator_name', 'status',

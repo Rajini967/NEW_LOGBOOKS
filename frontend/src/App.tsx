@@ -13,11 +13,15 @@ import ELogBookLandingPage from "./pages/ELogBookLandingPage";
 import ELogBookPage from "./pages/ELogBookPage";
 import BoilerLogBookPage from "./pages/BoilerLogBookPage";
 import ChemicalLogBookPage from "./pages/ChemicalLogBookPage";
+import ChemicalHomePage from "./pages/ChemicalHomePage";
+import ChemicalStockPage from "./pages/ChemicalStockPage";
+import ChemicalAssignmentPage from "./pages/ChemicalAssignmentPage";
 import FilterLogBookPage from "./pages/FilterLogBookPage";
 import FilterLogBookHomePage from "./pages/FilterLogBookHomePage";
 import FilterLogBookSettingsPage from "./pages/FilterLogBookSettingsPage";
 import FilterCategoriesPage from "./pages/FilterCategoriesPage";
 import FilterRegisterPage from "./pages/FilterRegisterPage";
+import FilterScheduleApprovalsPage from "./pages/FilterScheduleApprovalsPage";
 import HVACValidationPage from "./pages/HVACValidationPage";
 import AirVelocityTestPage from "./pages/AirVelocityTestPage";
 import FilterIntegrityTestPage from "./pages/FilterIntegrityTestPage";
@@ -40,6 +44,9 @@ const queryClient = new QueryClient();
 const isFilterAdmin = (role?: string) =>
   role === "manager" || role === "super_admin";
 
+const isChemicalAdmin = (role?: string) =>
+  role === "manager" || role === "super_admin";
+
 function AdminFilterLandingRoute() {
   const { user, isLoading } = useAuth();
 
@@ -60,6 +67,16 @@ function AdminFilterSettingsRoute() {
   return <FilterLogBookSettingsPage />;
 }
 
+function ChemicalLandingRoute() {
+  const { user, isLoading } = useAuth();
+
+  if (isLoading) return null;
+  if (!user || !isChemicalAdmin(user.role)) {
+    return <Navigate to="/e-log-book/chemical/entry" replace />;
+  }
+  return <ChemicalHomePage />;
+}
+
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <AuthProvider>
@@ -78,12 +95,16 @@ const App = () => (
               <Route path="/e-log-book" element={<ELogBookLandingPage />} />
               <Route path="/e-log-book/chiller" element={<ELogBookPage equipmentType="chiller" />} />
               <Route path="/e-log-book/boiler" element={<BoilerLogBookPage />} />
-              <Route path="/e-log-book/chemical" element={<ChemicalLogBookPage />} />
+              <Route path="/e-log-book/chemical" element={<ChemicalLandingRoute />} />
+              <Route path="/e-log-book/chemical/entry" element={<ChemicalLogBookPage />} />
+              <Route path="/e-log-book/chemical/stock" element={<ChemicalStockPage />} />
+              <Route path="/e-log-book/chemical/assignment" element={<ChemicalAssignmentPage />} />
               <Route path="/e-log-book/filter" element={<AdminFilterLandingRoute />} />
               <Route path="/e-log-book/filter/entry" element={<FilterLogBookPage />} />
               <Route path="/e-log-book/filter/settings" element={<AdminFilterSettingsRoute />} />
               <Route path="/e-log-book/filter/settings/categories" element={<FilterCategoriesPage />} />
               <Route path="/e-log-book/filter/settings/register" element={<FilterRegisterPage />} />
+              <Route path="/e-log-book/filter/settings/schedules" element={<FilterScheduleApprovalsPage />} />
               <Route path="/hvac-validation" element={<HVACValidationPage />} />
               <Route path="/hvac-validation/air-velocity-test" element={<AirVelocityTestPage />} />
               <Route path="/hvac-validation/filter-integrity-test" element={<FilterIntegrityTestPage />} />

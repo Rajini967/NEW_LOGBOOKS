@@ -140,18 +140,6 @@ class FilterMasterSerializer(serializers.ModelSerializer):
         if user and user.is_authenticated:
             validated_data["created_by"] = user
 
-        # Generate unique filter_id
-        # Simple loop to avoid race condition if two are created at once.
-        for _ in range(5):
-            candidate = self._generate_filter_id()
-            if not FilterMaster.objects.filter(filter_id=candidate).exists():
-                validated_data["filter_id"] = candidate
-                break
-        else:
-            raise serializers.ValidationError(
-                {"detail": "Unable to generate a unique filter ID. Please try again."}
-            )
-
         return super().create(validated_data)
 
 
@@ -229,6 +217,9 @@ class FilterScheduleSerializer(serializers.ModelSerializer):
             "frequency_days",
             "next_due_date",
             "last_done_date",
+            "is_approved",
+            "approved_by",
+            "approved_at",
             "status",
             "assignment_info",
             "created_at",
@@ -238,20 +229,22 @@ class FilterScheduleSerializer(serializers.ModelSerializer):
             "id",
             "status",
             "assignment_info",
+            "is_approved",
+            "approved_by",
+            "approved_at",
             "created_at",
             "updated_at",
         ]
 
     def create(self, validated_data):
         """
-        Auto-start schedule: compute next_due_date from assignment date + frequency_days
-        if next_due_date not explicitly provided.
+        Create schedule in pending-approval state.
+        Start (set next_due_date) only after approval.
         """
-        assignment: FilterAssignment = validated_data["assignment"]
-        freq = validated_data.get("frequency_days")
-        if validated_data.get("next_due_date") is None and freq:
-            base = assignment.assigned_at.date()
-            validated_data["next_due_date"] = base + timedelta(days=int(freq))
+        validated_data["is_approved"] = False
+        validated_data["approved_by"] = None
+        validated_data["approved_at"] = None
+        validated_data["next_due_date"] = None
         return super().create(validated_data)
 
     def update(self, instance: FilterSchedule, validated_data):
@@ -261,8 +254,8 @@ class FilterScheduleSerializer(serializers.ModelSerializer):
         """
         freq = validated_data.get("frequency_days", instance.frequency_days)
         next_due = validated_data.get("next_due_date", instance.next_due_date)
-        if next_due is None and freq:
-            base = instance.assignment.assigned_at.date()
+        if instance.is_approved and next_due is None and freq:
+            base = instance.approved_at.date() if instance.approved_at else instance.assignment.assigned_at.date()
             validated_data["next_due_date"] = base + timedelta(days=int(freq))
         return super().update(instance, validated_data)
 

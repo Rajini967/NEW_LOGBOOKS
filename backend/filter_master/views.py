@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 
 from django.db.models.deletion import ProtectedError
 from django.db.models import Count
@@ -83,10 +83,24 @@ class FilterMasterViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Generate a filter_id on first approval if missing
+        if not instance.filter_id:
+            serializer_for_id = self.get_serializer(instance)
+            for _ in range(5):
+                candidate = serializer_for_id._generate_filter_id()
+                if not FilterMaster.objects.filter(filter_id=candidate).exists():
+                    instance.filter_id = candidate
+                    break
+            else:
+                return Response(
+                    {"detail": "Unable to generate a unique filter ID. Please try again."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
         instance.status = "approved"
         instance.approved_by = request.user
         instance.approved_at = timezone.now()
-        instance.save(update_fields=["status", "approved_by", "approved_at", "updated_at"])
+        instance.save(update_fields=["filter_id", "status", "approved_by", "approved_at", "updated_at"])
 
         create_report_entry(
             report_type="filter_register",
@@ -162,7 +176,7 @@ class FilterScheduleViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_permissions(self):
-        if self.action in ["create", "update", "partial_update", "destroy"]:
+        if self.action in ["create", "update", "partial_update", "destroy", "approve", "reject"]:
             return [IsAuthenticated(), IsManagerOrSuperAdmin()]
         return [IsAuthenticated()]
 
@@ -171,14 +185,19 @@ class FilterScheduleViewSet(viewsets.ModelViewSet):
         equipment_id = self.request.query_params.get("equipment")
         if equipment_id:
             qs = qs.filter(assignment__equipment_id=equipment_id)
+        approval_param = self.request.query_params.get("approval")
+        if approval_param == "pending":
+            qs = qs.filter(is_approved=False)
+        elif approval_param == "approved":
+            qs = qs.filter(is_approved=True)
         overdue_param = self.request.query_params.get("overdue")
         if overdue_param == "true":
             today = date.today()
             # Ensure status reflects overdue state for crossed due dates
-            FilterSchedule.objects.filter(next_due_date__lt=today).exclude(
+            FilterSchedule.objects.filter(is_approved=True, next_due_date__lt=today).exclude(
                 status__in=["completed", "overdue"]
             ).update(status="overdue")
-            qs = qs.filter(next_due_date__lt=today).exclude(status="completed")
+            qs = qs.filter(is_approved=True, next_due_date__lt=today).exclude(status="completed")
         return qs
 
     @action(detail=False, methods=["get"], url_path="overdue-summary")
@@ -188,15 +207,48 @@ class FilterScheduleViewSet(viewsets.ModelViewSet):
         """
         today = date.today()
         # Ensure status reflects overdue state for crossed due dates
-        FilterSchedule.objects.filter(next_due_date__lt=today).exclude(
+        FilterSchedule.objects.filter(is_approved=True, next_due_date__lt=today).exclude(
             status__in=["completed", "overdue"]
         ).update(status="overdue")
         qs = (
-            FilterSchedule.objects.filter(next_due_date__lt=today)
+            FilterSchedule.objects.filter(is_approved=True, next_due_date__lt=today)
             .exclude(status="completed")
             .values("schedule_type")
             .annotate(count=Count("id"))
         )
         summary = {row["schedule_type"]: row["count"] for row in qs}
         return Response(summary)
+
+    @action(detail=True, methods=["post"])
+    def approve(self, request, pk=None):
+        instance: FilterSchedule = self.get_object()
+        if instance.is_approved:
+            return Response({"detail": "Schedule is already approved."}, status=status.HTTP_400_BAD_REQUEST)
+        if not instance.frequency_days:
+            return Response({"detail": "Frequency (days) is required to approve a schedule."}, status=status.HTTP_400_BAD_REQUEST)
+
+        instance.is_approved = True
+        instance.approved_by = request.user
+        instance.approved_at = timezone.now()
+        instance.next_due_date = instance.approved_at.date() + timedelta(days=int(instance.frequency_days))
+        instance.status = "active"
+        instance.save(
+            update_fields=[
+                "is_approved",
+                "approved_by",
+                "approved_at",
+                "next_due_date",
+                "status",
+                "updated_at",
+            ]
+        )
+        return Response(self.get_serializer(instance).data)
+
+    @action(detail=True, methods=["post"])
+    def reject(self, request, pk=None):
+        instance: FilterSchedule = self.get_object()
+        if instance.is_approved:
+            return Response({"detail": "Approved schedules cannot be rejected."}, status=status.HTTP_400_BAD_REQUEST)
+        instance.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 

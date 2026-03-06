@@ -134,6 +134,62 @@ const FilterLogBookPage: React.FC = () => {
     time: "",
   });
 
+  const updateInstalledAndDueDates = (installedDate: string) => {
+    if (!installedDate) {
+      setFormData((prev) => ({
+        ...prev,
+        installedDate: "",
+      }));
+      return;
+    }
+
+    const base = new Date(installedDate);
+    if (Number.isNaN(base.getTime())) {
+      setFormData((prev) => ({ ...prev, installedDate }));
+      return;
+    }
+
+    const addDays = (d: Date, days: number) => {
+      const copy = new Date(d.getTime());
+      copy.setDate(copy.getDate() + days);
+      return copy;
+    };
+
+    const addMonths = (d: Date, months: number) => {
+      const copy = new Date(d.getTime());
+      const day = copy.getDate();
+      copy.setMonth(copy.getMonth() + months);
+      if (copy.getDate() !== day) {
+        copy.setDate(0);
+      }
+      return copy;
+    };
+
+    const addYears = (d: Date, years: number) => {
+      const copy = new Date(d.getTime());
+      const day = copy.getDate();
+      copy.setFullYear(copy.getFullYear() + years);
+      if (copy.getDate() !== day) {
+        copy.setDate(0);
+      }
+      return copy;
+    };
+
+    const fmt = (d: Date) => d.toISOString().slice(0, 10);
+
+    const integrityDue = addDays(addMonths(base, 6), 15);
+    const cleaningDue = addDays(addMonths(base, 6), 15);
+    const replacementDue = addDays(addYears(base, 1), 30);
+
+    setFormData((prev) => ({
+      ...prev,
+      installedDate,
+      integrityDueDate: prev.integrityDueDate || fmt(integrityDue),
+      cleaningDueDate: prev.cleaningDueDate || fmt(cleaningDue),
+      replacementDueDate: prev.replacementDueDate || fmt(replacementDue),
+    }));
+  };
+
   const [filters, setFilters] = useState({
     fromDate: "",
     toDate: "",
@@ -905,12 +961,7 @@ const FilterLogBookPage: React.FC = () => {
                       <Input
                         type="date"
                         value={formData.installedDate}
-                        onChange={(e) =>
-                          setFormData({
-                            ...formData,
-                            installedDate: e.target.value,
-                          })
-                        }
+                        onChange={(e) => updateInstalledAndDueDates(e.target.value)}
                       />
                     </div>
                     <div className="space-y-2">
@@ -1517,6 +1568,11 @@ const FilterLogBookPage: React.FC = () => {
                         {log.category === "water_system" && "Water system"}
                         {log.category === "compressed_air" && "Compressed air"}
                         {log.category === "nitrogen_air" && "Nitrogen air"}
+                        {log.category &&
+                          !["hvac", "water_system", "compressed_air", "nitrogen_air"].includes(
+                            log.category,
+                          ) &&
+                          log.category}
                       </td>
                       <td className="px-3 py-2 align-top text-center text-sm whitespace-nowrap min-w-[150px]">
                         {log.filterNo}

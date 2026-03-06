@@ -16,7 +16,7 @@ import {
 import { useAuth } from "@/contexts/AuthContext";
 import { format } from "date-fns";
 import { toast } from "sonner";
-import { chemicalPrepAPI } from "@/lib/api";
+import { chemicalPrepAPI, chemicalMasterAPI, chemicalAssignmentAPI } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Link } from "react-router-dom";
 import { Clock, Save, Filter, X, Plus, Trash2, CheckCircle, XCircle, Edit, History } from "lucide-react";
@@ -38,6 +38,14 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+
+const equipmentNames = [
+  { id: "EN0001", name: "EN0001 -MGF" },
+  { id: "EN0002", name: "EN0002 -RO" },
+  { id: "EN0003", name: "EN0003 -PW" },
+  { id: "EN0004", name: "EN0004 -Other" },
+  { id: "EN0005", name: "EN0005 -Other" },
+];
 
 interface ChemicalPrepLog {
   id: string;
@@ -64,18 +72,6 @@ interface ChemicalPrepLog {
   corrects_id?: string;
   has_corrections?: boolean;
 }
-
-const CHEMICAL_NAMES = [
-  "NaOCl – Sodium Hypochlorite",
-  "NaOH – Sodium Hydroxide",
-  "SMBS – Sodium Metabisulfite",
-  "NaCl – Sodium Chloride",
-  "HCl – Hydrochloric Acid",
-  "Citric Acid (C₆H₈O₇) – Citric Acid",
-  "Nitric Acid (HNO₃) – Nitric Acid",
-  "Hydrogen Peroxide (H₂O₂) – Hydrogen Peroxide",
-  "Antiscalant",
-];
 
 const ChemicalLogBookPage: React.FC = () => {
   const { user } = useAuth();
@@ -120,6 +116,12 @@ const ChemicalLogBookPage: React.FC = () => {
     fromTime: "",
     toTime: "",
   });
+
+  const [chemicalNames, setChemicalNames] = useState<string[]>([]);
+  const [equipmentOptions, setEquipmentOptions] = useState<{ id: string; name: string }[]>([]);
+  const [assignments, setAssignments] = useState<
+    { equipment_name: string; category: "major" | "minor"; chemical_name: string; chemical_formula: string }[]
+  >([]);
 
   const refreshLogs = async () => {
     try {
@@ -171,6 +173,49 @@ const ChemicalLogBookPage: React.FC = () => {
 
   useEffect(() => {
     refreshLogs();
+  }, []);
+
+  // Load chemical names from backend master (no hardcoded list)
+  useEffect(() => {
+    (async () => {
+      try {
+        const data = await chemicalMasterAPI.list();
+        const names = (data as any[]).map(
+          (c) => `${(c as any).formula} – ${(c as any).name}`,
+        );
+        setChemicalNames(names);
+      } catch (error: any) {
+        console.error("Error loading chemicals:", error);
+        toast.error(error?.message || "Failed to load chemical list");
+      }
+    })();
+  }, []);
+
+  // Load equipment options and assignments so Equipment dropdown auto-fills category + chemical
+  useEffect(() => {
+    (async () => {
+      try {
+        const data = await chemicalAssignmentAPI.list();
+        const rows = (data as any[]).map((row) => ({
+          equipment_name: String((row as any).equipment_name ?? ""),
+          category: ((row as any).category || "major") as "major" | "minor",
+          chemical_name: String((row as any).chemical_name ?? ""),
+          chemical_formula: String((row as any).chemical_formula ?? ""),
+        }));
+        setAssignments(rows);
+        const seen = new Set<string>();
+        const eqOpts: { id: string; name: string }[] = [];
+        rows.forEach((r) => {
+          if (r.equipment_name && !seen.has(r.equipment_name)) {
+            seen.add(r.equipment_name);
+            eqOpts.push({ id: r.equipment_name, name: r.equipment_name });
+          }
+        });
+        setEquipmentOptions(eqOpts);
+      } catch (error) {
+        console.error("Error loading equipment assignments:", error);
+      }
+    })();
   }, []);
 
   const uniqueCheckedBy = useMemo(() => {
@@ -691,59 +736,57 @@ const ChemicalLogBookPage: React.FC = () => {
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label>Equipment Name *</Label>
-                      <Input
-                        type="text"
+                      <Select
                         value={formData.equipmentName}
-                        onChange={(e) =>
+                        onValueChange={(v) => {
+                          const assignment = assignments.find((a) => a.equipment_name === v);
                           setFormData({
                             ...formData,
-                            equipmentName: e.target.value,
-                          })
-                        }
-                        placeholder="e.g., EN0001-MGF"
-                      />
+                            equipmentName: v,
+                            chemicalCategory: assignment?.category ?? formData.chemicalCategory,
+                            chemicalName: assignment
+                              ? `${assignment.chemical_formula} – ${assignment.chemical_name}`
+                              : formData.chemicalName,
+                          });
+                        }}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select equipment" />
+                        </SelectTrigger>
+                        <SelectContent className="max-h-60 overflow-y-auto">
+                          {equipmentOptions.map((eq) => (
+                            <SelectItem key={eq.id} value={eq.name}>
+                              {eq.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </div>
                     <div className="space-y-2">
                       <Label>Chemical Category</Label>
-                      <Select
-                        value={formData.chemicalCategory}
-                        onValueChange={(v) =>
-                          setFormData({
-                            ...formData,
-                            chemicalCategory: v as "major" | "minor",
-                          })
+                      <Input
+                        type="text"
+                        value={
+                          formData.chemicalCategory === "minor"
+                            ? "Minor"
+                            : formData.chemicalCategory === "major"
+                              ? "Major"
+                              : ""
                         }
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select category" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="major">Major</SelectItem>
-                          <SelectItem value="minor">Minor</SelectItem>
-                        </SelectContent>
-                      </Select>
+                        disabled
+                        placeholder="Auto from equipment assignment"
+                      />
                     </div>
                   </div>
 
                   <div className="space-y-2">
                     <Label>Chemical Name *</Label>
-                    <Select
+                    <Input
+                      type="text"
                       value={formData.chemicalName}
-                      onValueChange={(v) =>
-                        setFormData({ ...formData, chemicalName: v })
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select chemical..." />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {CHEMICAL_NAMES.map((name) => (
-                          <SelectItem key={name} value={name}>
-                            {name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                      disabled
+                      placeholder="Auto from equipment assignment"
+                    />
                   </div>
 
                   <div className="space-y-2">

@@ -8,6 +8,13 @@ import { useAuth } from '@/contexts/AuthContext';
 import { filterScheduleAPI } from '@/lib/api';
 import { toast } from 'sonner';
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import {
   Thermometer,
   Gauge,
   Wind,
@@ -28,6 +35,7 @@ export default function DashboardPage() {
     cleaning?: number;
     integrity?: number;
   } | null>(null);
+  const [overdueDialogOpen, setOverdueDialogOpen] = useState(false);
 
   const overdueTotal = useMemo(() => {
     if (!overdueCounts) return 0;
@@ -52,6 +60,7 @@ export default function DashboardPage() {
           toast.warning(
             `Filter maintenance overdue: ${total} (Replacement ${data.replacement || 0}, Cleaning ${data.cleaning || 0}, Integrity ${data.integrity || 0})`
           );
+          setOverdueDialogOpen(true);
         }
       } catch {
         // Non-blocking: dashboard should still render
@@ -68,6 +77,21 @@ export default function DashboardPage() {
         title="Dashboard"
         subtitle={`Welcome back, ${user?.name || user?.email || 'User'}`}
       />
+
+      <Dialog open={overdueDialogOpen} onOpenChange={setOverdueDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Filter maintenance overdue</DialogTitle>
+            <DialogDescription>
+              {overdueCounts
+                ? `Replacement: ${overdueCounts.replacement || 0}, Cleaning: ${
+                    overdueCounts.cleaning || 0
+                  }, Integrity: ${overdueCounts.integrity || 0}`
+                : 'Some filter maintenance schedules are overdue.'}
+            </DialogDescription>
+          </DialogHeader>
+        </DialogContent>
+      </Dialog>
 
       <div className="p-6 space-y-6">
         {/* Quick Stats */}

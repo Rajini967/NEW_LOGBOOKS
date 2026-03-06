@@ -382,7 +382,10 @@ const FilterRegisterPage: React.FC = () => {
 
       toast({
         title: "Filter assigned",
-        description: "Assignment and schedules have been saved.",
+        description:
+          schedulePromises.length > 0
+            ? "Assignment saved. Maintenance schedules are pending approval."
+            : "Assignment saved.",
       });
       setIsAssignDialogOpen(false);
     } catch (error: any) {

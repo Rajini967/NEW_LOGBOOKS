@@ -515,13 +515,16 @@ export const filterAssignmentAPI = {
 };
 
 export const filterScheduleAPI = {
-  list: async (params?: { overdue?: boolean; equipment?: string }) => {
+  list: async (params?: { overdue?: boolean; equipment?: string; approval?: "pending" | "approved" }) => {
     const queryParams: any = {};
     if (params?.overdue) {
       queryParams.overdue = "true";
     }
     if (params?.equipment) {
       queryParams.equipment = params.equipment;
+    }
+    if (params?.approval) {
+      queryParams.approval = params.approval;
     }
     const response = await api.get("/filter-schedules/", {
       params: queryParams,
@@ -546,6 +549,15 @@ export const filterScheduleAPI = {
   update: async (id: string, data: any) => {
     const response = await api.put(`/filter-schedules/${id}/`, data);
     return response.data;
+  },
+
+  approve: async (id: string) => {
+    const response = await api.post(`/filter-schedules/${id}/approve/`);
+    return response.data;
+  },
+
+  reject: async (id: string) => {
+    await api.post(`/filter-schedules/${id}/reject/`);
   },
 
   delete: async (id: string) => {
@@ -646,6 +658,51 @@ export const chemicalPrepAPI = {
   correct: async (id: string, data: any) => {
     const response = await api.post(`/chemical-preps/${id}/correct/`, data);
     return response.data;
+  },
+};
+
+// Chemical master & stock API functions
+export const chemicalMasterAPI = {
+  list: async () => {
+    const response = await api.get('/chemicals/');
+    const data = response.data;
+    if (data && (data as any).results) {
+      return (data as any).results;
+    }
+    return Array.isArray(data) ? data : [];
+  },
+};
+
+export const chemicalStockAPI = {
+  list: async (params?: { chemical?: string; location?: string }) => {
+    const response = await api.get('/chemical-stock/', { params });
+    const data = response.data;
+    if (data && (data as any).results) {
+      return (data as any).results;
+    }
+    return Array.isArray(data) ? data : [];
+  },
+};
+
+export const chemicalAssignmentAPI = {
+  list: async () => {
+    const response = await api.get('/chemical-assignments/');
+    const data = response.data;
+    if (data && (data as any).results) {
+      return (data as any).results;
+    }
+    return Array.isArray(data) ? data : [];
+  },
+  create: async (data: {
+    chemical: string;
+    equipment_name: string;
+    category: 'major' | 'minor';
+  }) => {
+    const response = await api.post('/chemical-assignments/', data);
+    return response.data;
+  },
+  delete: async (id: string) => {
+    await api.delete(`/chemical-assignments/${id}/`);
   },
 };
 

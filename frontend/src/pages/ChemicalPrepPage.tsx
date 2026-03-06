@@ -33,7 +33,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Plus, Beaker, Calculator, Save, Clock, AlertCircle, Thermometer, Gauge, Trash2 } from 'lucide-react';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
-import { chemicalPrepAPI } from '@/lib/api';
+import { chemicalPrepAPI, chemicalMasterAPI, chemicalStockAPI, chemicalAssignmentAPI } from '@/lib/api';
 
 interface ChemicalPrep {
   id: string;
@@ -60,28 +60,6 @@ interface ChemicalPrep {
   operator_id?: string;
   approved_by_id?: string;
 }
-
-// TODO: Replace with API call to fetch chemical preparations
-const chemicals = [
-  { name: 'NaOCl – Sodium Hypochlorite', stockConcentration: 99, formula: 'NaOCl' },
-  { name: 'NaOH – Sodium Hydroxide', stockConcentration: 95, formula: 'NaOH' },
-  { name: 'SMBS – Sodium Metabisulfite', stockConcentration: 50, formula: 'SMBS' },
-  { name: 'NaCl – Sodium Chloride', stockConcentration: 100, formula: 'NaCl' },
-  { name: 'HCl – Hydrochloric Acid', stockConcentration: 37, formula: 'HCl' },
-  { name: 'Citric Acid (C₆H₈O₇) – Citric Acid', stockConcentration: 100, formula: 'C₆H₈O₇' },
-  { name: 'Nitric Acid (HNO₃) – Nitric Acid', stockConcentration: 70, formula: 'HNO₃' },
-  { name: 'Hydrogen Peroxide (H₂O₂) – Hydrogen Peroxide', stockConcentration: 30, formula: 'H₂O₂' },
-  { name: 'Antiscalant', stockConcentration: 100, formula: 'Antiscalant' },
-];
-
-// Equipment names matching the example document format
-const equipmentNames = [
-  { id: 'EN0001', name: 'EN0001 -MGF' },
-  { id: 'EN0002', name: 'EN0002 -RO' },
-  { id: 'EN0003', name: 'EN0003 -PW' },
-  { id: 'EN0004', name: 'EN0004 -Other' },
-  { id: 'EN0005', name: 'EN0005 -Other' },
-];
 
 // Boiler monitoring limits (NLT = Not Less Than)
 const boilerLimits = {
@@ -116,7 +94,95 @@ export default function ChemicalPrepPage() {
     remarks: '',
   });
   const [calculatedQuantity, setCalculatedQuantity] = useState<number | null>(null);
+  const [chemicalOptions, setChemicalOptions] = useState<
+    { id: string; label: string; name: string }[]
+  >([]);
+  const [assignments, setAssignments] = useState<
+    { id: string; chemical: string; equipment_name: string; category: 'major' | 'minor' }[]
+  >([]);
+  const [equipmentOptions, setEquipmentOptions] = useState<{ id: string; name: string }[]>([]);
+  const [selectedChemicalId, setSelectedChemicalId] = useState<string>('');
+  const [selectedStockInfo, setSelectedStockInfo] = useState<{
+    availableQtyKg: number | null;
+    unit: string | null;
+    pricePerUnit: number | null;
+    site: string | null;
+  } | null>(null);
 
+  // Load chemical master list from backend (no hardcoded names/formulas)
+  useEffect(() => {
+    (async () => {
+      try {
+        const data = await chemicalMasterAPI.list();
+        const opts = (data as any[]).map((c) => ({
+          id: String((c as any).id),
+          label: `${(c as any).location_label ?? (c as any).location ?? ''} – ${(c as any).formula} – ${
+            (c as any).name
+          }`,
+          name: String((c as any).name ?? ''),
+        }));
+        setChemicalOptions(opts);
+      } catch (error: any) {
+        toast.error(error?.message || 'Failed to load chemical master list.');
+      }
+    })();
+  }, []);
+
+  // Load chemical assignments to drive equipment dropdown (auto-fetched from Equipment Assignment page)
+  useEffect(() => {
+    (async () => {
+      try {
+        const data = await chemicalAssignmentAPI.list();
+        const rows = (data as any[]).map((row) => ({
+          id: String((row as any).id),
+          chemical: String((row as any).chemical),
+          equipment_name: String((row as any).equipment_name ?? ''),
+          category: ((row as any).category || 'major') as 'major' | 'minor',
+        }));
+        setAssignments(rows);
+        // Build unique equipment list
+        const seen = new Set<string>();
+        const eqOpts: { id: string; name: string }[] = [];
+        rows.forEach((r) => {
+          if (r.equipment_name && !seen.has(r.equipment_name)) {
+            seen.add(r.equipment_name);
+            eqOpts.push({ id: r.equipment_name, name: r.equipment_name });
+          }
+        });
+        setEquipmentOptions(eqOpts);
+      } catch (error: any) {
+        console.error('Failed to load chemical assignments:', error);
+        // Do not block the page; fall back to manual entry if needed
+      }
+    })();
+  }, []);
+
+  // Load stock information for selected chemical to enforce availability rule
+  useEffect(() => {
+    if (!selectedChemicalId) {
+      setSelectedStockInfo(null);
+      return;
+    }
+    (async () => {
+      try {
+        const stock = await chemicalStockAPI.list({ chemical: selectedChemicalId });
+        if (Array.isArray(stock) && stock.length > 0) {
+          const first = stock[0] as any;
+          setSelectedStockInfo({
+            availableQtyKg: first.available_qty_kg ?? null,
+            unit: first.unit ?? null,
+            pricePerUnit: first.price_per_unit ?? null,
+            site: first.site ?? null,
+          });
+        } else {
+          setSelectedStockInfo(null);
+        }
+      } catch (error: any) {
+        toast.error(error?.message || 'Failed to load stock details for selected chemical.');
+        setSelectedStockInfo(null);
+      }
+    })();
+  }, [selectedChemicalId]);
 
   // Auto-calculate chemical quantity when inputs change (for chemical type only)
   // Formula: Chemical Qty (g) = (Solution concentration % × Water Qty (L) × 1000) / Chemical %
@@ -128,15 +194,14 @@ export default function ChemicalPrepPage() {
       formData.solutionConcentration &&
       formData.waterQty
     ) {
-      const chemical = chemicals.find(c => c.name === formData.chemicalName);
-      if (chemical) {
-        const solutionConc = parseFloat(formData.solutionConcentration);
-        const waterQty = parseFloat(formData.waterQty);
-        const chemicalPercent = chemical.stockConcentration;
-
-        // Calculate chemical quantity in grams
+      const solutionConc = parseFloat(formData.solutionConcentration);
+      const waterQty = parseFloat(formData.waterQty);
+      if (!Number.isNaN(solutionConc) && !Number.isNaN(waterQty)) {
+        const chemicalPercent = 100; // Default to 100% if not provided by backend
         const chemicalQtyGrams = (solutionConc * waterQty * 1000) / chemicalPercent;
         setCalculatedQuantity(Math.round(chemicalQtyGrams * 100) / 100);
+      } else {
+        setCalculatedQuantity(null);
       }
     } else {
       setCalculatedQuantity(null);
@@ -153,6 +218,14 @@ export default function ChemicalPrepPage() {
     e.preventDefault();
 
     if (formData.logType === 'chemical') {
+      if (!formData.chemicalName) {
+        toast.error('Please select a chemical.');
+        return;
+      }
+      if (!selectedStockInfo) {
+        toast.error('No stock available for the selected chemical. Please update stock before logging preparation.');
+        return;
+      }
       if (formData.chemicalCategory === 'major' && !calculatedQuantity) {
         toast.error('Please fill Solution concentration and Water Qty to calculate Chemical Qty.');
         return;
@@ -173,6 +246,26 @@ export default function ChemicalPrepPage() {
           return;
         }
       }
+
+      // If we have a calculated chemical quantity and stock info, enforce that
+      // requested quantity (kg) does not exceed available stock.
+      if (
+        formData.chemicalCategory === 'major' &&
+        calculatedQuantity != null &&
+        selectedStockInfo?.availableQtyKg != null
+      ) {
+        const requestedKg = calculatedQuantity / 1000; // grams -> kg
+        if (requestedKg > selectedStockInfo.availableQtyKg) {
+          toast.error(
+            `Requested quantity (${requestedKg.toFixed(
+              3,
+            )} kg) exceeds available stock (${selectedStockInfo.availableQtyKg.toFixed(
+              3,
+            )} kg).`,
+          );
+          return;
+        }
+      }
     }
     if (formData.logType === 'boiler' && !formData.feedWaterTemp && !formData.oilTemp && !formData.steamTemp && !formData.steamPressure) {
       toast.error('Please fill in at least one boiler reading');
@@ -180,8 +273,6 @@ export default function ChemicalPrepPage() {
     }
 
     try {
-      const selectedChemical = formData.logType === 'chemical' ? chemicals.find(c => c.name === formData.chemicalName) : null;
-
       let solutionConcentrationValue: number | undefined;
       let waterQtyValue: number | undefined;
       if (formData.logType === 'chemical') {
@@ -196,8 +287,9 @@ export default function ChemicalPrepPage() {
       const prepData = {
         log_type: formData.logType,
         equipment_name: formData.logType === 'chemical' ? formData.equipmentName : undefined,
+        chemical: formData.logType === 'chemical' && selectedChemicalId ? selectedChemicalId : undefined,
         chemical_name: formData.logType === 'chemical' ? formData.chemicalName : undefined,
-        chemical_percent: formData.logType === 'chemical' ? selectedChemical?.stockConcentration : undefined,
+        chemical_percent: formData.logType === 'chemical' ? 100 : undefined,
         chemical_category: formData.logType === 'chemical' ? formData.chemicalCategory : undefined,
         solution_concentration: formData.logType === 'chemical' ? solutionConcentrationValue : undefined,
         water_qty: formData.logType === 'chemical' ? waterQtyValue : undefined,
@@ -218,6 +310,7 @@ export default function ChemicalPrepPage() {
         logType: 'chemical',
         equipmentName: '',
         chemicalName: '',
+        chemicalCategory: 'major',
         solutionConcentration: '',
         waterQty: '',
         feedWaterTemp: '',
@@ -383,7 +476,8 @@ export default function ChemicalPrepPage() {
     }
   };
 
-  const selectedChemical = formData.logType === 'chemical' ? chemicals.find(c => c.name === formData.chemicalName) : null;
+  const selectedChemicalPercent =
+    formData.logType === 'chemical' && formData.chemicalName ? 100 : null;
 
   return (
     <div className="min-h-screen">
@@ -475,13 +569,30 @@ export default function ChemicalPrepPage() {
                         <Label>EqP Name</Label>
                         <Select
                           value={formData.equipmentName}
-                          onValueChange={(v) => setFormData({ ...formData, equipmentName: v })}
+                          onValueChange={(v) => {
+                            const assignment = assignments.find(
+                              (a) => a.equipment_name === v,
+                            );
+                            const matched = assignment
+                              ? chemicalOptions.find(
+                                  (c) => c.id === assignment.chemical,
+                                )
+                              : null;
+                            setFormData((prev) => ({
+                              ...prev,
+                              equipmentName: v,
+                              chemicalCategory: assignment?.category ?? prev.chemicalCategory,
+                              chemicalName: matched?.name ?? prev.chemicalName,
+                            }));
+                            if (matched) setSelectedChemicalId(matched.id);
+                            else setSelectedChemicalId("");
+                          }}
                         >
                           <SelectTrigger>
                             <SelectValue placeholder="Select equipment" />
                           </SelectTrigger>
-                          <SelectContent>
-                            {equipmentNames.map((eq) => (
+                          <SelectContent className="max-h-60 overflow-y-auto">
+                            {equipmentOptions.map((eq) => (
                               <SelectItem key={eq.id} value={eq.name}>
                                 {eq.name}
                               </SelectItem>
@@ -494,21 +605,46 @@ export default function ChemicalPrepPage() {
                         <Label>Chemical name</Label>
                         <Select
                           value={formData.chemicalName}
-                          onValueChange={(v) => setFormData({ ...formData, chemicalName: v })}
+                          onValueChange={(v) => {
+                            setFormData({ ...formData, chemicalName: v });
+                            const opt = chemicalOptions.find((c) => c.name === v);
+                            setSelectedChemicalId(opt ? opt.id : '');
+                          }}
                         >
                           <SelectTrigger>
                             <SelectValue placeholder="Select chemical" />
                           </SelectTrigger>
-                          <SelectContent>
-                            {chemicals.map((chem) => (
-                              <SelectItem key={chem.name} value={chem.name}>
-                                {chem.name}
+                          <SelectContent className="max-h-60 overflow-y-auto">
+                            {chemicalOptions.map((chem) => (
+                              <SelectItem key={chem.id} value={chem.name}>
+                                {chem.label}
                               </SelectItem>
                             ))}
                           </SelectContent>
                         </Select>
                       </div>
                     </div>
+
+                    {formData.logType === 'chemical' && formData.chemicalName && (
+                      <div className="mt-2 text-sm text-muted-foreground">
+                        {selectedStockInfo ? (
+                          <>
+                            <span>
+                              Available stock: {selectedStockInfo.availableQtyKg ?? 0}{' '}
+                              {selectedStockInfo.unit ?? 'kg'} at price{' '}
+                              {selectedStockInfo.pricePerUnit ?? 0} per{' '}
+                              {selectedStockInfo.unit ?? 'kg'}
+                              {selectedStockInfo.site ? ` (site: ${selectedStockInfo.site})` : ''}
+                            </span>
+                          </>
+                        ) : (
+                          <span className="text-red-600">
+                            No stock available for this chemical. You cannot log preparation until
+                            stock is added.
+                          </span>
+                        )}
+                      </div>
+                    )}
 
                     <div className="space-y-2">
                       <Label>Chemical Category</Label>
@@ -531,10 +667,10 @@ export default function ChemicalPrepPage() {
                       </Select>
                     </div>
 
-                    {selectedChemical && (
+                    {selectedChemicalPercent !== null && (
                       <div className="bg-accent/10 rounded-lg p-3 border border-accent/20">
                         <p className="text-sm text-accent font-medium">
-                          Chemical %: {selectedChemical.stockConcentration}%
+                          Chemical %: {selectedChemicalPercent}%
                         </p>
                       </div>
                     )}

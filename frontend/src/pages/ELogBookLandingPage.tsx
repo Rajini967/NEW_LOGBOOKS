@@ -54,6 +54,7 @@ export default function ELogBookLandingPage() {
   const { user } = useAuth();
 
   const isFilterAdmin = user && (user.role === 'manager' || user.role === 'super_admin');
+  const isChemicalAdmin = user && (user.role === 'manager' || user.role === 'super_admin');
 
   return (
     <div className="min-h-screen">
@@ -75,6 +76,12 @@ export default function ELogBookLandingPage() {
                       navigate('/e-log-book/filter');
                     } else {
                       navigate('/e-log-book/filter/entry');
+                    }
+                  } else if (module.id === 'chemical') {
+                    if (isChemicalAdmin) {
+                      navigate('/e-log-book/chemical');
+                    } else {
+                      navigate('/e-log-book/chemical/entry');
                     }
                   } else {
                     navigate(module.path);
