@@ -23,7 +23,13 @@ import {
 import { useAuth } from "@/contexts/AuthContext";
 import { format } from "date-fns";
 import { toast } from "sonner";
-import { filterCategoryAPI, filterLogAPI } from "@/lib/api";
+import {
+  equipmentAPI,
+  filterAssignmentAPI,
+  filterCategoryAPI,
+  filterLogAPI,
+  filterScheduleAPI,
+} from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Link, useNavigate } from "react-router-dom";
 import { Clock, Save, Filter, X, Plus, Trash2, CheckCircle, XCircle, Edit, History, ArrowLeft } from "lucide-react";
@@ -46,6 +52,23 @@ interface FilterCategoryOption {
   label: string;
 }
 
+interface EquipmentOption {
+  id: string;
+  equipment_number: string;
+  name: string;
+}
+
+interface FilterAssignmentRow {
+  id: string;
+  filter: string;
+  filter_id: string;
+  filter_micron_size?: string;
+  filter_size_l?: number | null;
+  filter_size_w?: number | null;
+  filter_size_h?: number | null;
+  tag_info?: string | null;
+}
+
 interface FilterLog {
   id: string;
   equipmentId: string;
@@ -53,6 +76,7 @@ interface FilterLog {
   filterNo: string;
   filterMicron?: string;
   filterSize?: string;
+  tagInfo?: string;
   installedDate: string;
   integrityDoneDate?: string | null;
   integrityDueDate: string;
@@ -89,6 +113,8 @@ const FilterLogBookPage: React.FC = () => {
   const [editingCommentValue, setEditingCommentValue] = useState("");
   const [editingLogId, setEditingLogId] = useState<string | null>(null);
   const [categoryOptions, setCategoryOptions] = useState<FilterCategoryOption[]>([]);
+  const [equipmentOptions, setEquipmentOptions] = useState<EquipmentOption[]>([]);
+  const [selectedEquipmentUuid, setSelectedEquipmentUuid] = useState<string>("");
 
   const [formData, setFormData] = useState({
     equipmentId: "",
@@ -96,6 +122,7 @@ const FilterLogBookPage: React.FC = () => {
     filterNo: "",
     filterMicron: "",
     filterSize: "",
+    tagInfo: "",
     installedDate: "",
     integrityDoneDate: "",
     cleaningDoneDate: "",
@@ -133,6 +160,71 @@ const FilterLogBookPage: React.FC = () => {
     }
   };
 
+  const loadEquipment = async () => {
+    try {
+      const data = await equipmentAPI.list();
+      const options: EquipmentOption[] = (data as any[])
+        .filter((e) => e.is_active !== false)
+        .map((e) => ({
+          id: e.id,
+          equipment_number: e.equipment_number,
+          name: e.name,
+        }));
+      setEquipmentOptions(options);
+    } catch (error) {
+      console.error("Error loading equipment:", error);
+    }
+  };
+
+  const formatFilterSize = (a: FilterAssignmentRow) => {
+    const parts = [a.filter_size_l, a.filter_size_w, a.filter_size_h].filter(
+      (v) => v != null
+    );
+    if (parts.length === 3) return `${parts[0]} × ${parts[1]} × ${parts[2]}`;
+    return "";
+  };
+
+  const onEquipmentSelected = async (equipmentUuid: string) => {
+    setSelectedEquipmentUuid(equipmentUuid);
+    const eq = equipmentOptions.find((e) => e.id === equipmentUuid);
+    setFormData((prev) => ({
+      ...prev,
+      equipmentId: eq?.equipment_number || prev.equipmentId,
+    }));
+
+    try {
+      const assignments = (await filterAssignmentAPI.list({
+        equipment: equipmentUuid,
+      })) as FilterAssignmentRow[];
+      const active = assignments?.[0];
+      if (active) {
+        setFormData((prev) => ({
+          ...prev,
+          filterNo: prev.filterNo?.trim() ? prev.filterNo : active.filter_id || "",
+          filterMicron:
+            prev.filterMicron?.trim() ? prev.filterMicron : active.filter_micron_size || "",
+          filterSize: prev.filterSize?.trim() ? prev.filterSize : formatFilterSize(active),
+          tagInfo: prev.tagInfo?.trim() ? prev.tagInfo : active.tag_info || "",
+        }));
+      }
+    } catch {
+      // ignore
+    }
+
+    try {
+      const overdue = await filterScheduleAPI.list({
+        equipment: equipmentUuid,
+        overdue: true,
+      });
+      if (Array.isArray(overdue) && overdue.length > 0) {
+        const types = Array.from(new Set(overdue.map((s: any) => s.schedule_type))).join(", ");
+        toast.warning(`Maintenance overdue for this equipment: ${types}`);
+      }
+    } catch {
+      // ignore
+    }
+  };
+
   const refreshLogs = async () => {
     try {
       setIsLoading(true);
@@ -151,6 +243,7 @@ const FilterLogBookPage: React.FC = () => {
           filterNo: log.filter_no,
           filterMicron: log.filter_micron || "",
           filterSize: log.filter_size || "",
+          tagInfo: log.tag_info || "",
           installedDate: log.installed_date,
           integrityDoneDate: log.integrity_done_date,
           integrityDueDate: log.integrity_due_date,
@@ -181,6 +274,7 @@ const FilterLogBookPage: React.FC = () => {
 
   useEffect(() => {
     void loadCategories();
+    void loadEquipment();
     void refreshLogs();
   }, []);
 
@@ -308,12 +402,14 @@ const FilterLogBookPage: React.FC = () => {
   );
 
   const resetForm = () => {
+    setSelectedEquipmentUuid("");
     setFormData({
       equipmentId: "",
       category: "hvac",
       filterNo: "",
       filterMicron: "",
       filterSize: "",
+      tagInfo: "",
       installedDate: "",
       integrityDoneDate: "",
       cleaningDoneDate: "",
@@ -335,12 +431,15 @@ const FilterLogBookPage: React.FC = () => {
   const handleEditLog = (log: FilterLog) => {
     const timestampStr = format(log.timestamp, "yyyy-MM-dd'T'HH:mm");
     const [datePart, timePart] = timestampStr.split("T");
+    const match = equipmentOptions.find((e) => e.equipment_number === log.equipmentId);
+    setSelectedEquipmentUuid(match?.id || "");
     setFormData({
       equipmentId: log.equipmentId,
       category: log.category,
       filterNo: log.filterNo,
       filterMicron: log.filterMicron || "",
       filterSize: log.filterSize || "",
+      tagInfo: log.tagInfo || "",
       installedDate: log.installedDate,
       integrityDoneDate: log.integrityDoneDate || "",
       cleaningDoneDate: log.cleaningDoneDate || "",
@@ -377,6 +476,7 @@ const FilterLogBookPage: React.FC = () => {
         filter_no: formData.filterNo,
         filter_micron: formData.filterMicron || null,
         filter_size: formData.filterSize || null,
+        tag_info: formData.tagInfo || null,
         installed_date: formData.installedDate || format(timestampStr, "yyyy-MM-dd"),
         integrity_done_date: formData.integrityDoneDate || null,
         cleaning_done_date: formData.cleaningDoneDate || null,
@@ -691,17 +791,26 @@ const FilterLogBookPage: React.FC = () => {
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label>Equipment Name *</Label>
-                      <Input
-                        type="text"
-                        value={formData.equipmentId}
-                        onChange={(e) =>
-                          setFormData({
-                            ...formData,
-                            equipmentId: e.target.value,
-                          })
-                        }
-                        placeholder="e.g., EN0001-MGF"
-                      />
+                      <Select
+                        value={selectedEquipmentUuid}
+                        onValueChange={(value) => void onEquipmentSelected(value)}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select equipment" />
+                        </SelectTrigger>
+                        <SelectContent className="max-h-60 overflow-y-auto">
+                          {equipmentOptions.map((eq) => (
+                            <SelectItem key={eq.id} value={eq.id}>
+                              {eq.equipment_number} – {eq.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {formData.equipmentId ? (
+                        <div className="text-xs text-muted-foreground">
+                          Selected: {formData.equipmentId}
+                        </div>
+                      ) : null}
                     </div>
                     <div className="space-y-2">
                       <Label>Category</Label>
@@ -741,6 +850,21 @@ const FilterLogBookPage: React.FC = () => {
                         })
                       }
                       placeholder="e.g., F-001"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>Tag Information (auto-fetched)</Label>
+                    <Input
+                      type="text"
+                      value={formData.tagInfo}
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          tagInfo: e.target.value,
+                        })
+                      }
+                      placeholder="Auto-filled from assignment (editable)"
                     />
                   </div>
 
@@ -1311,13 +1435,13 @@ const FilterLogBookPage: React.FC = () => {
                   <th className="px-3 py-2 text-center align-middle w-[130px]">
                     Category
                   </th>
-                  <th className="px-3 py-2 text-center align-middle w-[140px]">
+                  <th className="px-3 py-2 text-center align-middle w-[160px]">
                     Filter number
                   </th>
-                  <th className="px-3 py-2 text-center align-middle w-[130px]">
+                  <th className="px-3 py-2 text-center align-middle w-[120px]">
                     Filter micron
                   </th>
-                  <th className="px-3 py-2 text-center align-middle w-[130px]">
+                  <th className="px-3 py-2 text-center align-middle w-[180px]">
                     Filter size
                   </th>
                   <th className="px-3 py-2 text-center align-middle w-[140px]">
@@ -1388,15 +1512,21 @@ const FilterLogBookPage: React.FC = () => {
                       <td className="px-3 py-2 align-top">{dateStr}</td>
                       <td className="px-3 py-2 align-top">{timeStr}</td>
                       <td className="px-3 py-2 align-top">{log.equipmentId}</td>
-                      <td className="px-3 py-2 align-top">
+                      <td className="px-3 py-2 align-top text-center text-sm whitespace-nowrap min-w-[150px]">
                         {log.category === "hvac" && "HVAC"}
                         {log.category === "water_system" && "Water system"}
                         {log.category === "compressed_air" && "Compressed air"}
                         {log.category === "nitrogen_air" && "Nitrogen air"}
                       </td>
-                      <td className="px-3 py-2 align-top">{log.filterNo}</td>
-                      <td className="px-3 py-2 align-top">{log.filterMicron}</td>
-                      <td className="px-3 py-2 align-top">{log.filterSize}</td>
+                      <td className="px-3 py-2 align-top text-center text-sm whitespace-nowrap min-w-[150px]">
+                        {log.filterNo}
+                      </td>
+                      <td className="px-3 py-2 align-top text-center text-sm whitespace-nowrap min-w-[100px]">
+                        {log.filterMicron}
+                      </td>
+                      <td className="px-3 py-2 align-top text-center text-xs whitespace-nowrap min-w-[160px]">
+                        {log.filterSize}
+                      </td>
                       <td className="px-3 py-2 align-top">{log.installedDate}</td>
                       <td className="px-3 py-2 align-top">
                         {log.integrityDoneDate || <span className="text-xs text-muted-foreground">-</span>}

@@ -20,10 +20,13 @@ interface FilterCategory {
   id: string;
   name: string;
   description?: string | null;
+  micron_costs?: Record<string, number> | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;
 }
+
+const MICRON_OPTIONS = ["0.2", "0.45", "1", "3", "5", "10", "20", "100"] as const;
 
 const FilterCategoriesPage: React.FC = () => {
   const { toast } = useToast();
@@ -36,6 +39,7 @@ const FilterCategoriesPage: React.FC = () => {
   );
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [micronCosts, setMicronCosts] = useState<Record<string, string>>({});
   const [isActive, setIsActive] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -43,6 +47,7 @@ const FilterCategoriesPage: React.FC = () => {
     setEditingCategory(null);
     setName("");
     setDescription("");
+    setMicronCosts({});
     setIsActive(true);
   };
 
@@ -55,6 +60,13 @@ const FilterCategoriesPage: React.FC = () => {
     setEditingCategory(category);
     setName(category.name);
     setDescription(category.description || "");
+    const existing = category.micron_costs || {};
+    const next: Record<string, string> = {};
+    MICRON_OPTIONS.forEach((m) => {
+      const v = (existing as any)[m];
+      next[m] = v == null ? "" : String(v);
+    });
+    setMicronCosts(next);
     setIsActive(category.is_active);
     setIsDialogOpen(true);
   };
@@ -91,10 +103,20 @@ const FilterCategoriesPage: React.FC = () => {
 
     setIsSubmitting(true);
     try {
+      const micron_costs: Record<string, number> = {};
+      Object.entries(micronCosts).forEach(([k, v]) => {
+        const trimmed = String(v ?? "").trim();
+        if (!trimmed) return;
+        const num = Number(trimmed);
+        if (!Number.isFinite(num)) return;
+        micron_costs[k] = num;
+      });
+
       if (editingCategory) {
         await filterCategoryAPI.update(editingCategory.id, {
           name: name.trim(),
           description: description.trim() || null,
+          micron_costs,
           is_active: isActive,
         });
         toast({
@@ -104,6 +126,7 @@ const FilterCategoriesPage: React.FC = () => {
         await filterCategoryAPI.create({
           name: name.trim(),
           description: description.trim() || undefined,
+          micron_costs,
           is_active: isActive,
         });
         toast({
@@ -316,6 +339,29 @@ const FilterCategoriesPage: React.FC = () => {
                   onChange={(e) => setDescription(e.target.value)}
                   placeholder="Optional description"
                 />
+              </div>
+
+              <div className="space-y-2">
+                <div className="text-sm font-medium text-foreground">
+                  Cost per micron size (optional)
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  {MICRON_OPTIONS.map((m) => (
+                    <div key={m} className="space-y-1">
+                      <label className="text-xs text-muted-foreground">{m} µ</label>
+                      <Input
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        value={micronCosts[m] ?? ""}
+                        onChange={(e) =>
+                          setMicronCosts((prev) => ({ ...prev, [m]: e.target.value }))
+                        }
+                        placeholder="Cost"
+                      />
+                    </div>
+                  ))}
+                </div>
               </div>
 
               <div className="flex items-center justify-between">

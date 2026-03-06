@@ -23,6 +23,7 @@ class FilterLogSerializer(serializers.ModelSerializer):
             'filter_no',
             'filter_micron',
             'filter_size',
+            'tag_info',
             'installed_date',
             'integrity_done_date',
             'integrity_due_date',

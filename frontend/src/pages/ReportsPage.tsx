@@ -62,6 +62,7 @@ type ApprovedReportType =
   | 'utility'
   | 'chemical'
   | 'validation'
+  | 'filter_register'
   | 'air_velocity'
   | 'filter_integrity'
   | 'recovery'
@@ -123,6 +124,7 @@ const typeIcons = {
   utility: FileText,
   chemical: FileText,
   validation: FileText,
+  filter_register: FileText,
   air_velocity: FileText,
   filter_integrity: FileText,
   recovery: FileText,
@@ -134,6 +136,7 @@ const typeLabels = {
   utility: 'E Log Book',
   chemical: 'Chemical Prep',
   validation: 'HVAC Validation',
+  filter_register: 'Filter Register',
   air_velocity: 'Air Velocity Test',
   filter_integrity: 'Filter Integrity Test',
   recovery: 'Recovery Test',

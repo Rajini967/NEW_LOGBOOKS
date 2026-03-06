@@ -26,7 +26,18 @@ class ReportViewSet(viewsets.ReadOnlyModelViewSet):
         # All roles see only approved reports (Report rows are created on approval only)
         # Customers additionally restricted to certain report types
         if self.request.user.role == 'customer':
-            queryset = queryset.filter(report_type__in=['utility', 'validation', 'air_velocity', 'filter_integrity', 'recovery', 'differential_pressure', 'nvpc'])
+            queryset = queryset.filter(
+                report_type__in=[
+                    'utility',
+                    'validation',
+                    'filter_register',
+                    'air_velocity',
+                    'filter_integrity',
+                    'recovery',
+                    'differential_pressure',
+                    'nvpc',
+                ]
+            )
         
         return queryset.order_by('-approved_at')
 

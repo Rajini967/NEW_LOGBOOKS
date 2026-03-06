@@ -1,5 +1,6 @@
 from datetime import date
 
+from django.db.models.deletion import ProtectedError
 from django.db.models import Count
 from django.utils import timezone
 from rest_framework import status, viewsets
@@ -8,6 +9,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from accounts.permissions import IsManagerOrSuperAdmin
+from reports.utils import create_report_entry
 
 from .models import FilterCategory, FilterMaster, FilterAssignment, FilterSchedule
 from .serializers import (
@@ -27,6 +29,26 @@ class FilterCategoryViewSet(viewsets.ModelViewSet):
         if self.action in ["create", "update", "partial_update", "destroy"]:
             return [IsAuthenticated(), IsManagerOrSuperAdmin()]
         return [IsAuthenticated()]
+
+    def destroy(self, request, *args, **kwargs):
+        """
+        Categories cannot be deleted if they are referenced by any registered filter
+        (FilterMaster.category uses PROTECT). Return a user-friendly error instead
+        of a 500 traceback.
+        """
+        instance: FilterCategory = self.get_object()
+        try:
+            return super().destroy(request, *args, **kwargs)
+        except ProtectedError:
+            return Response(
+                {
+                    "detail": (
+                        "This category cannot be deleted because it is already used by one or more filters. "
+                        "Deactivate it instead."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
 
 class FilterMasterViewSet(viewsets.ModelViewSet):
@@ -65,6 +87,20 @@ class FilterMasterViewSet(viewsets.ModelViewSet):
         instance.approved_by = request.user
         instance.approved_at = timezone.now()
         instance.save(update_fields=["status", "approved_by", "approved_at", "updated_at"])
+
+        create_report_entry(
+            report_type="filter_register",
+            source_id=str(instance.id),
+            source_table="filter_master",
+            title=f"Filter Register: {instance.filter_id}",
+            site=instance.client_id or "N/A",
+            created_by=getattr(instance.created_by, "email", None)
+            or getattr(instance.created_by, "name", None)
+            or "System",
+            created_at=instance.created_at,
+            approved_by=request.user,
+            remarks=None,
+        )
 
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
@@ -132,9 +168,16 @@ class FilterScheduleViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = super().get_queryset()
+        equipment_id = self.request.query_params.get("equipment")
+        if equipment_id:
+            qs = qs.filter(assignment__equipment_id=equipment_id)
         overdue_param = self.request.query_params.get("overdue")
         if overdue_param == "true":
             today = date.today()
+            # Ensure status reflects overdue state for crossed due dates
+            FilterSchedule.objects.filter(next_due_date__lt=today).exclude(
+                status__in=["completed", "overdue"]
+            ).update(status="overdue")
             qs = qs.filter(next_due_date__lt=today).exclude(status="completed")
         return qs
 
@@ -144,6 +187,10 @@ class FilterScheduleViewSet(viewsets.ModelViewSet):
         Return counts of overdue schedules grouped by schedule type.
         """
         today = date.today()
+        # Ensure status reflects overdue state for crossed due dates
+        FilterSchedule.objects.filter(next_due_date__lt=today).exclude(
+            status__in=["completed", "overdue"]
+        ).update(status="overdue")
         qs = (
             FilterSchedule.objects.filter(next_due_date__lt=today)
             .exclude(status="completed")

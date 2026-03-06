@@ -21,6 +21,7 @@ class FilterLog(models.Model):
     filter_no = models.CharField(max_length=100)
     filter_micron = models.CharField(max_length=100, blank=True, null=True)
     filter_size = models.CharField(max_length=100, blank=True, null=True)
+    tag_info = models.CharField(max_length=255, blank=True, null=True)
 
     installed_date = models.DateField()
     integrity_done_date = models.DateField(blank=True, null=True)

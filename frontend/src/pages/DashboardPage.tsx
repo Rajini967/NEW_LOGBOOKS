@@ -1,10 +1,12 @@
-import React from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Header } from '@/components/layout/Header';
 import { MetricCard } from '@/components/dashboard/MetricCard';
 import { RecentActivity } from '@/components/dashboard/RecentActivity';
 import { ConsumptionChart } from '@/components/dashboard/ConsumptionChart';
 import { EquipmentStatus } from '@/components/dashboard/EquipmentStatus';
 import { useAuth } from '@/contexts/AuthContext';
+import { filterScheduleAPI } from '@/lib/api';
+import { toast } from 'sonner';
 import {
   Thermometer,
   Gauge,
@@ -20,6 +22,45 @@ export default function DashboardPage() {
 
   const isOperator = user?.role === 'operator';
   const isCustomer = user?.role === 'customer' || user?.role === 'client';
+
+  const [overdueCounts, setOverdueCounts] = useState<{
+    replacement?: number;
+    cleaning?: number;
+    integrity?: number;
+  } | null>(null);
+
+  const overdueTotal = useMemo(() => {
+    if (!overdueCounts) return 0;
+    return (
+      (overdueCounts.replacement || 0) +
+      (overdueCounts.cleaning || 0) +
+      (overdueCounts.integrity || 0)
+    );
+  }, [overdueCounts]);
+
+  useEffect(() => {
+    if (isCustomer) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await filterScheduleAPI.overdueSummary();
+        if (cancelled) return;
+        setOverdueCounts(data);
+        const total =
+          (data.replacement || 0) + (data.cleaning || 0) + (data.integrity || 0);
+        if (total > 0) {
+          toast.warning(
+            `Filter maintenance overdue: ${total} (Replacement ${data.replacement || 0}, Cleaning ${data.cleaning || 0}, Integrity ${data.integrity || 0})`
+          );
+        }
+      } catch {
+        // Non-blocking: dashboard should still render
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isCustomer]);
 
   return (
     <div className="min-h-screen">
@@ -80,9 +121,9 @@ export default function DashboardPage() {
           />
           <MetricCard
             title="Active Alerts"
-            value={2}
+            value={overdueTotal || 0}
             icon={AlertTriangle}
-            status="critical"
+            status={overdueTotal > 0 ? 'critical' : 'normal'}
           />
           <MetricCard
             title="Compliance Score"

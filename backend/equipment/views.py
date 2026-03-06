@@ -1,5 +1,7 @@
-from rest_framework import viewsets
+from django.db.models.deletion import ProtectedError
+from rest_framework import status, viewsets
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
 
 from accounts.permissions import IsManagerOrSuperAdmin
 
@@ -35,6 +37,25 @@ class EquipmentCategoryViewSet(viewsets.ModelViewSet):
         if self.action in ["create", "update", "partial_update", "destroy"]:
             return [IsAuthenticated(), IsManagerOrSuperAdmin()]
         return [IsAuthenticated()]
+
+    def destroy(self, request, *args, **kwargs):
+        """
+        Prevent deleting categories that are in use by Equipment (PROTECT FK).
+        Return a clear 400 error instead of a 500 traceback.
+        """
+        instance: EquipmentCategory = self.get_object()
+        try:
+            return super().destroy(request, *args, **kwargs)
+        except ProtectedError:
+            return Response(
+                {
+                    "detail": (
+                        "This equipment category cannot be deleted because it is already used by one or more equipment records. "
+                        "Deactivate it instead."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
 
 class EquipmentViewSet(viewsets.ModelViewSet):

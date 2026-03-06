@@ -515,10 +515,13 @@ export const filterAssignmentAPI = {
 };
 
 export const filterScheduleAPI = {
-  list: async (params?: { overdue?: boolean }) => {
+  list: async (params?: { overdue?: boolean; equipment?: string }) => {
     const queryParams: any = {};
     if (params?.overdue) {
       queryParams.overdue = "true";
+    }
+    if (params?.equipment) {
+      queryParams.equipment = params.equipment;
     }
     const response = await api.get("/filter-schedules/", {
       params: queryParams,

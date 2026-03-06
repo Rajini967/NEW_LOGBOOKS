@@ -64,6 +64,8 @@ interface EquipmentOption {
   id: string;
   equipment_number: string;
   name: string;
+  site_id?: string | null;
+  capacity?: string | null;
 }
 
 const MICRON_OPTIONS = ["0.2", "0.45", "1", "3", "5", "10", "20", "100"];
@@ -150,6 +152,8 @@ const FilterRegisterPage: React.FC = () => {
           id: item.id,
           equipment_number: item.equipment_number,
           name: item.name,
+          site_id: item.site_id ?? null,
+          capacity: item.capacity ?? null,
         }))
       );
     } catch (error: any) {
@@ -159,6 +163,22 @@ const FilterRegisterPage: React.FC = () => {
         variant: "destructive",
       });
     }
+  };
+
+  const applyEquipmentAutomationDetails = (equipmentId: string) => {
+    const eq = equipmentOptions.find((e) => e.id === equipmentId);
+    if (!eq) return;
+    const parts = [
+      `${eq.equipment_number} – ${eq.name}`,
+      eq.site_id ? `Site: ${eq.site_id}` : null,
+      eq.capacity ? `Capacity: ${eq.capacity}` : null,
+    ].filter(Boolean);
+    const autoTag = parts.join(" | ");
+    setAssignForm((prev) => ({
+      ...prev,
+      equipment: equipmentId,
+      tag_info: prev.tag_info?.trim() ? prev.tag_info : autoTag,
+    }));
   };
 
   useEffect(() => {
@@ -813,9 +833,7 @@ const FilterRegisterPage: React.FC = () => {
                 </label>
                 <Select
                   value={assignForm.equipment}
-                  onValueChange={(value) =>
-                    setAssignForm((prev) => ({ ...prev, equipment: value }))
-                  }
+                  onValueChange={(value) => applyEquipmentAutomationDetails(value)}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Select equipment" />

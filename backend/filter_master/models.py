@@ -14,6 +14,12 @@ class FilterCategory(models.Model):
     name = models.CharField(max_length=255, unique=True)
     client_id = models.CharField(max_length=100, db_index=True, default="svu-enterprises")
     description = models.TextField(blank=True, null=True)
+    micron_costs = models.JSONField(
+        blank=True,
+        null=True,
+        default=dict,
+        help_text="Optional mapping of micron size to cost, e.g. {'0.2': 100, '0.45': 80}.",
+    )
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

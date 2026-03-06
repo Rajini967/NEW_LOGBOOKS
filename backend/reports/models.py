@@ -13,6 +13,7 @@ class Report(models.Model):
         ('utility', 'E Log Book'),
         ('chemical', 'Chemical Prep'),
         ('validation', 'HVAC Validation'),
+        ('filter_register', 'Filter Register'),
         ('air_velocity', 'Air Velocity Test'),
         ('filter_integrity', 'Filter Integrity Test'),
         ('recovery', 'Recovery Test'),
