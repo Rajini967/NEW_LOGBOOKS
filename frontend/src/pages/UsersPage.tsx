@@ -19,11 +19,12 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
-import { Plus, Users, Shield, Mail, User, Edit, Trash2, Lock, Eye, EyeOff } from 'lucide-react';
+import { Plus, Users, Shield, Mail, User, Edit, Trash2, Lock, LockOpen, Eye, EyeOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { userAPI } from '@/lib/api';
 import { User as UserType } from '@/types';
 import { useAuth } from '@/contexts/AuthContext';
+import { PasswordRequirementHints } from '@/components/PasswordRequirementHints';
 
 interface UserData extends UserType {
   site?: string;
@@ -137,7 +138,13 @@ export default function UsersPage() {
           role: '',
           is_active: true,
         });
-        toast.success('User updated successfully');
+        if (formData.password) {
+          toast.success('Password changed successfully.');
+        } else if (formData.is_active === false) {
+          toast.success('User account becomes inactive.');
+        } else {
+          toast.success('User updated successfully.');
+        }
       } else {
         // Create new user
         const newUser = await userAPI.create({
@@ -148,8 +155,8 @@ export default function UsersPage() {
           is_active: formData.is_active,
         });
 
-    setUsers([newUser, ...users]);
-    setIsDialogOpen(false);
+        setUsers([newUser, ...users]);
+        setIsDialogOpen(false);
         setFormData({
           email: '',
           password: '',
@@ -157,7 +164,7 @@ export default function UsersPage() {
           role: '',
           is_active: true,
         });
-    toast.success('User created successfully');
+        toast.success('User created and role assigned successfully.');
       }
     } catch (error: any) {
       console.error('Create user error:', error);
@@ -170,7 +177,10 @@ export default function UsersPage() {
         
         // Handle validation errors (field-specific)
         if (errorData.email) {
-          errorMessage = Array.isArray(errorData.email) ? errorData.email[0] : errorData.email;
+          const emailErr = Array.isArray(errorData.email) ? errorData.email[0] : errorData.email;
+          errorMessage = typeof emailErr === 'string' && (emailErr.includes('already exists') || emailErr.toLowerCase().includes('duplicate'))
+            ? 'Duplicate email not allowed.'
+            : emailErr;
         } else if (errorData.password) {
           errorMessage = Array.isArray(errorData.password) ? errorData.password[0] : errorData.password;
         } else if (errorData.password_confirm) {
@@ -209,6 +219,19 @@ export default function UsersPage() {
       toast.success('User deleted successfully');
     } catch (error: any) {
       const errorMessage = error?.response?.data?.error || error?.response?.data?.detail || 'Failed to delete user';
+      toast.error(errorMessage);
+    }
+  };
+
+  const handleUnlock = async (userId: string) => {
+    try {
+      await userAPI.unlock(userId);
+      const response = await userAPI.list();
+      const userList = Array.isArray(response) ? response : (response.results || response);
+      setUsers(userList);
+      toast.success('User unlocked successfully.');
+    } catch (error: any) {
+      const errorMessage = error?.response?.data?.error || error?.response?.data?.detail || error?.message || 'Failed to unlock user';
       toast.error(errorMessage);
     }
   };
@@ -268,7 +291,7 @@ export default function UsersPage() {
                 Add User
               </Button>
             </DialogTrigger>
-            <DialogContent className="sm:max-w-[450px]">
+            <DialogContent className="sm:max-w-[560px] max-h-[85vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle className="flex items-center gap-2">
                   <Users className="w-5 h-5" />
@@ -322,11 +345,14 @@ export default function UsersPage() {
                       {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
                   </div>
-                  <p className="text-xs text-muted-foreground">
-                    {isEditMode 
-                      ? 'Leave empty to keep the current password. Otherwise, password must contain at least 8 characters.'
-                      : 'Your password must contain at least 8 characters.'}
-                  </p>
+                  {(!isEditMode || formData.password) && (
+                    <PasswordRequirementHints password={formData.password} className="mt-2" compact />
+                  )}
+                  {isEditMode && !formData.password && (
+                    <p className="text-xs text-muted-foreground">
+                      Leave empty to keep the current password.
+                    </p>
+                  )}
                 </div>
 
                 {(!isEditMode || formData.password) && (
@@ -477,12 +503,27 @@ export default function UsersPage() {
                       </Badge>
                     </td>
                     <td className="px-4 py-3">
-                      <Badge variant={user.is_active ? 'success' : 'secondary'}>
-                        {user.is_active ? 'Active' : 'Inactive'}
-                      </Badge>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <Badge variant={user.is_active ? 'success' : 'secondary'}>
+                          {user.is_active ? 'Active' : 'Inactive'}
+                        </Badge>
+                        {user.is_locked && (
+                          <Badge variant="warning">Locked</Badge>
+                        )}
+                      </div>
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1">
+                        {user.is_locked && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleUnlock(user.id)}
+                            title="Unlock user"
+                          >
+                            <LockOpen className="w-4 h-4" />
+                          </Button>
+                        )}
                         <Button 
                           variant="ghost" 
                           size="icon"

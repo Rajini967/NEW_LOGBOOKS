@@ -93,6 +93,27 @@ class ChemicalAssignment(models.Model):
         Chemical,
         on_delete=models.PROTECT,
         related_name="assignments",
+        blank=True,
+        null=True,
+        help_text="Optional link to chemical master; use chemical_name when entering manually.",
+    )
+    chemical_name = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        help_text="Chemical name when entered manually (no dropdown).",
+    )
+    chemical_formula = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text="Optional formula when entered manually.",
+    )
+    location = models.CharField(
+        max_length=64,
+        blank=True,
+        null=True,
+        help_text="Location when entered manually (e.g. Water system, Cooling towers).",
     )
     equipment_name = models.CharField(
         max_length=255,
@@ -118,10 +139,11 @@ class ChemicalAssignment(models.Model):
         db_table = "chemical_assignments"
         verbose_name = "Chemical Assignment"
         verbose_name_plural = "Chemical Assignments"
-        ordering = ["equipment_name", "chemical__name"]
+        ordering = ["equipment_name", "chemical_name"]
 
     def __str__(self) -> str:  # pragma: no cover - trivial
-        return f"{self.equipment_name} -> {self.chemical} ({self.category})"
+        name = self.chemical_name or (self.chemical.name if self.chemical_id else "")
+        return f"{self.equipment_name} -> {name} ({self.category})"
 
 
 class ChemicalPreparation(models.Model):

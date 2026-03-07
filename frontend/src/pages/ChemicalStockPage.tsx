@@ -1,10 +1,21 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Header } from "@/components/layout/Header";
-import { ArrowLeft, Loader2 } from "lucide-react";
+import { ArrowLeft, Loader2, Plus } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { chemicalStockAPI } from "@/lib/api";
 import { toast } from "sonner";
+import { useAuth } from "@/contexts/AuthContext";
 
 interface ChemicalStockRow {
   id: string;
@@ -19,9 +30,22 @@ interface ChemicalStockRow {
 
 const ChemicalStockPage: React.FC = () => {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const isAdmin = user?.role === "manager" || user?.role === "super_admin";
+
   const [rows, setRows] = useState<ChemicalStockRow[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [locationFilter, setLocationFilter] = useState<"all" | "water_system" | "cooling_towers" | "boiler">("all");
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createSubmitting, setCreateSubmitting] = useState(false);
+  const [createForm, setCreateForm] = useState({
+    location: "",
+    chemicalName: "",
+    chemicalFormula: "",
+    stock: "",
+    price: "",
+    site: "",
+  });
 
   const load = async (location?: "water_system" | "cooling_towers" | "boiler") => {
     setIsLoading(true);
@@ -49,6 +73,62 @@ const ChemicalStockPage: React.FC = () => {
     }
   }, [locationFilter]);
 
+  const handleCreateSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const location = createForm.location.trim();
+    const chemicalName = createForm.chemicalName.trim();
+    const chemicalFormula = createForm.chemicalFormula.trim();
+    if (!location) {
+      toast.error("Location is required.");
+      return;
+    }
+    if (!chemicalName) {
+      toast.error("Chemical name is required.");
+      return;
+    }
+    if (!chemicalFormula) {
+      toast.error("Chemical formula is required.");
+      return;
+    }
+    const stock = createForm.stock.trim() ? parseFloat(createForm.stock) : 0;
+    if (Number.isNaN(stock) || stock < 0) {
+      toast.error("Stock must be a number >= 0.");
+      return;
+    }
+    const price = createForm.price.trim() ? parseFloat(createForm.price) : undefined;
+    if (price !== undefined && (Number.isNaN(price) || price < 0)) {
+      toast.error("Price must be a number >= 0.");
+      return;
+    }
+    setCreateSubmitting(true);
+    try {
+      await chemicalStockAPI.createEntry({
+        location,
+        chemical_name: chemicalName,
+        chemical_formula: chemicalFormula,
+        stock,
+        price: price ?? null,
+        site: createForm.site.trim() || null,
+      });
+      toast.success("New stock entry created.");
+      setCreateForm({
+        location: "",
+        chemicalName: "",
+        chemicalFormula: "",
+        stock: "",
+        price: "",
+        site: "",
+      });
+      setCreateOpen(false);
+      void load(locationFilter === "all" ? undefined : locationFilter);
+    } catch (error: any) {
+      console.error("Failed to create stock entry:", error);
+      toast.error(error?.message || "Failed to create stock entry");
+    } finally {
+      setCreateSubmitting(false);
+    }
+  };
+
   return (
     <div className="min-h-screen">
       <Header
@@ -66,24 +146,127 @@ const ChemicalStockPage: React.FC = () => {
           Back
         </button>
 
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-muted-foreground">Location</span>
-          <Select
-            value={locationFilter}
-            onValueChange={(v) =>
-              setLocationFilter(v as "all" | "water_system" | "cooling_towers" | "boiler")
-            }
-          >
-            <SelectTrigger className="w-40">
-              <SelectValue placeholder="All locations" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All locations</SelectItem>
-              <SelectItem value="water_system">Water system</SelectItem>
-              <SelectItem value="cooling_towers">Cooling towers</SelectItem>
-              <SelectItem value="boiler">Boiler</SelectItem>
-            </SelectContent>
-          </Select>
+        <div className="flex items-center gap-3">
+          {isAdmin && (
+            <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+              <DialogTrigger asChild>
+                <Button>
+                  <Plus className="w-4 h-4 mr-2" />
+                  Create new entry
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="max-w-md">
+                <DialogHeader>
+                  <DialogTitle>Create new stock entry</DialogTitle>
+                </DialogHeader>
+                <form onSubmit={handleCreateSubmit} className="space-y-4 mt-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="new-location">Location</Label>
+                    <Input
+                      id="new-location"
+                      value={createForm.location}
+                      onChange={(e) =>
+                        setCreateForm((prev) => ({ ...prev, location: e.target.value }))
+                      }
+                      placeholder="e.g. Water system, Cooling towers, Boiler"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="new-chemical-name">Chemical Name</Label>
+                    <Input
+                      id="new-chemical-name"
+                      value={createForm.chemicalName}
+                      onChange={(e) =>
+                        setCreateForm((prev) => ({ ...prev, chemicalName: e.target.value }))
+                      }
+                      placeholder="Enter chemical name"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="new-chemical-formula">Chemical Formula</Label>
+                    <Input
+                      id="new-chemical-formula"
+                      value={createForm.chemicalFormula}
+                      onChange={(e) =>
+                        setCreateForm((prev) => ({ ...prev, chemicalFormula: e.target.value }))
+                      }
+                      placeholder="e.g. NaOH, NaCl"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="new-stock">Stock (kg)</Label>
+                    <Input
+                      id="new-stock"
+                      type="number"
+                      min={0}
+                      step="any"
+                      value={createForm.stock}
+                      onChange={(e) =>
+                        setCreateForm((prev) => ({ ...prev, stock: e.target.value }))
+                      }
+                      placeholder="0"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="new-price">Price (per kg)</Label>
+                    <Input
+                      id="new-price"
+                      type="number"
+                      min={0}
+                      step="any"
+                      value={createForm.price}
+                      onChange={(e) =>
+                        setCreateForm((prev) => ({ ...prev, price: e.target.value }))
+                      }
+                      placeholder="Optional"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="new-site">Site</Label>
+                    <Input
+                      id="new-site"
+                      value={createForm.site}
+                      onChange={(e) =>
+                        setCreateForm((prev) => ({ ...prev, site: e.target.value }))
+                      }
+                      placeholder="Optional"
+                    />
+                  </div>
+                  <div className="flex justify-end gap-2 pt-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setCreateOpen(false)}
+                    >
+                      Cancel
+                    </Button>
+                    <Button type="submit" disabled={createSubmitting}>
+                      {createSubmitting ? "Saving..." : "Save entry"}
+                    </Button>
+                  </div>
+                </form>
+              </DialogContent>
+            </Dialog>
+          )}
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-muted-foreground">Location</span>
+            <Select
+              value={locationFilter}
+              onValueChange={(v) =>
+                setLocationFilter(v as "all" | "water_system" | "cooling_towers" | "boiler")
+              }
+            >
+              <SelectTrigger className="w-40">
+                <SelectValue placeholder="All locations" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All locations</SelectItem>
+                <SelectItem value="water_system">Water system</SelectItem>
+                <SelectItem value="cooling_towers">Cooling towers</SelectItem>
+                <SelectItem value="boiler">Boiler</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
         </div>
       </div>
 

@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { chemicalMasterAPI, chemicalAssignmentAPI } from "@/lib/api";
+import { chemicalAssignmentAPI } from "@/lib/api";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -23,50 +23,27 @@ interface AssignmentRow {
   created_by_name?: string | null;
 }
 
-const equipmentNames = [
-  { id: "EN0001", name: "EN0001 -MGF" },
-  { id: "EN0002", name: "EN0002 -RO" },
-  { id: "EN0003", name: "EN0003 -PW" },
-  { id: "EN0004", name: "EN0004 -Other" },
-  { id: "EN0005", name: "EN0005 -Other" },
-];
-
 const ChemicalAssignmentPage: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
   const isAdmin = user?.role === "manager" || user?.role === "super_admin";
 
-  const [chemicalOptions, setChemicalOptions] = useState<
-    { id: string; label: string }[]
-  >([]);
   const [rows, setRows] = useState<AssignmentRow[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
   const [form, setForm] = useState<{
-    chemicalId: string;
+    location: string;
+    chemicalFormula: string;
+    chemicalName: string;
     equipmentName: string;
     category: "major" | "minor" | "";
   }>({
-    chemicalId: "",
+    location: "",
+    chemicalFormula: "",
+    chemicalName: "",
     equipmentName: "",
     category: "",
   });
-
-  const loadChemicals = async () => {
-    try {
-      const data = await chemicalMasterAPI.list();
-      const opts = (data as any[]).map((c) => ({
-        id: String((c as any).id),
-        label: `${(c as any).location_label ?? (c as any).location ?? ""} – ${
-          (c as any).formula
-        } – ${(c as any).name}`,
-      }));
-      setChemicalOptions(opts);
-    } catch (error: any) {
-      console.error("Failed to load chemicals:", error);
-      toast.error(error?.message || "Failed to load chemical list");
-    }
-  };
 
   const loadAssignments = async () => {
     setIsLoading(true);
@@ -82,32 +59,41 @@ const ChemicalAssignmentPage: React.FC = () => {
   };
 
   useEffect(() => {
-    void loadChemicals();
     void loadAssignments();
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!form.chemicalId) {
-      toast.error("Please select a chemical.");
+    const chemicalName = form.chemicalName.trim();
+    const equipmentName = form.equipmentName.trim();
+    if (!chemicalName) {
+      toast.error("Please enter chemical name.");
       return;
     }
-    if (!form.equipmentName) {
-      toast.error("Please select equipment.");
+    if (!equipmentName) {
+      toast.error("Please enter equipment name.");
       return;
     }
     if (!form.category) {
-      toast.error("Please select a chemical category.");
+      toast.error("Please select a category (Major/Minor).");
       return;
     }
     try {
       await chemicalAssignmentAPI.create({
-        chemical: form.chemicalId,
-        equipment_name: form.equipmentName,
+        location: form.location.trim() || undefined,
+        chemical_formula: form.chemicalFormula.trim() || undefined,
+        chemical_name: chemicalName,
+        equipment_name: equipmentName,
         category: form.category,
       });
       toast.success("Chemical assigned to equipment.");
-      setForm({ chemicalId: "", equipmentName: "", category: "" });
+      setForm({
+        location: "",
+        chemicalFormula: "",
+        chemicalName: "",
+        equipmentName: "",
+        category: "",
+      });
       await loadAssignments();
     } catch (error: any) {
       console.error("Failed to save assignment:", error);
@@ -156,47 +142,53 @@ const ChemicalAssignmentPage: React.FC = () => {
           {isAdmin && (
             <section className="bg-card border border-border rounded-lg p-4 space-y-4">
               <h2 className="text-lg font-semibold">New assignment</h2>
-              <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 <div className="space-y-2">
-                  <Label>Chemical</Label>
-                  <Select
-                    value={form.chemicalId}
-                    onValueChange={(v) =>
-                      setForm((prev) => ({ ...prev, chemicalId: v }))
+                  <Label htmlFor="location">Location</Label>
+                  <Input
+                    id="location"
+                    value={form.location}
+                    onChange={(e) =>
+                      setForm((prev) => ({ ...prev, location: e.target.value }))
                     }
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select chemical" />
-                    </SelectTrigger>
-                    <SelectContent className="max-h-60 overflow-y-auto">
-                      {chemicalOptions.map((chem) => (
-                        <SelectItem key={chem.id} value={chem.id}>
-                          {chem.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                    placeholder="Enter location"
+                  />
                 </div>
 
                 <div className="space-y-2">
-                  <Label>Equipment</Label>
-                  <Select
-                    value={form.equipmentName}
-                    onValueChange={(v) =>
-                      setForm((prev) => ({ ...prev, equipmentName: v }))
+                  <Label htmlFor="chemical-formula">Chemical Formula</Label>
+                  <Input
+                    id="chemical-formula"
+                    value={form.chemicalFormula}
+                    onChange={(e) =>
+                      setForm((prev) => ({ ...prev, chemicalFormula: e.target.value }))
                     }
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select equipment" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {equipmentNames.map((eq) => (
-                        <SelectItem key={eq.id} value={eq.name}>
-                          {eq.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                    placeholder="Enter chemical formula"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="chemical-name">Chemical Name</Label>
+                  <Input
+                    id="chemical-name"
+                    value={form.chemicalName}
+                    onChange={(e) =>
+                      setForm((prev) => ({ ...prev, chemicalName: e.target.value }))
+                    }
+                    placeholder="Enter chemical name"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="equipment-name">Equipment</Label>
+                  <Input
+                    id="equipment-name"
+                    value={form.equipmentName}
+                    onChange={(e) =>
+                      setForm((prev) => ({ ...prev, equipmentName: e.target.value }))
+                    }
+                    placeholder="Enter equipment name"
+                  />
                 </div>
 
                 <div className="space-y-2">

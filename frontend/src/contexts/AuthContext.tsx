@@ -6,6 +6,7 @@ interface AuthContextType {
   user: User | null;
   login: (email: string, password: string) => Promise<boolean>;
   logout: () => Promise<void>;
+  refreshUser: () => Promise<void>;
   switchRole: (role: UserRole) => void;
   isLoading: boolean;
 }
@@ -72,7 +73,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return true;
     } catch (error: any) {
       console.error('Login error:', error);
-      return false;
+      throw error;
     }
   }, []);
 
@@ -83,6 +84,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       console.error('Logout error:', error);
     } finally {
       setUser(null);
+    }
+  }, []);
+
+  const refreshUser = useCallback(async () => {
+    try {
+      const userData = await authAPI.getCurrentUser();
+      const mappedUser: User = {
+        ...userData,
+        role: userData.role === 'client' ? 'customer' : (userData.role as UserRole),
+      };
+      setUser(mappedUser);
+    } catch (error) {
+      console.error('Failed to refresh user:', error);
     }
   }, []);
 
@@ -137,7 +151,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [user]);
 
   return (
-    <AuthContext.Provider value={{ user, login, logout, switchRole, isLoading }}>
+    <AuthContext.Provider value={{ user, login, logout, refreshUser, switchRole, isLoading }}>
       {children}
     </AuthContext.Provider>
   );

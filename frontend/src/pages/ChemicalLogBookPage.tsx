@@ -39,14 +39,6 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
-const equipmentNames = [
-  { id: "EN0001", name: "EN0001 -MGF" },
-  { id: "EN0002", name: "EN0002 -RO" },
-  { id: "EN0003", name: "EN0003 -PW" },
-  { id: "EN0004", name: "EN0004 -Other" },
-  { id: "EN0005", name: "EN0005 -Other" },
-];
-
 interface ChemicalPrepLog {
   id: string;
   equipmentName: string;

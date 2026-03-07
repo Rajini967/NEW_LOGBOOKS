@@ -19,18 +19,23 @@ export default function LoginPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    const trimmedEmail = email.trim();
+    const trimmedPassword = password.trim();
+    if (!trimmedEmail) {
+      setError('Please enter your email.');
+      return;
+    }
+    if (!trimmedPassword) {
+      setError('Please enter your password.');
+      return;
+    }
     setIsLoading(true);
-
     try {
-      const success = await login(email, password);
-      if (success) {
-        toast.success('Welcome back!');
-        navigate('/dashboard');
-      } else {
-        setError('Invalid credentials. Please check your email and password.');
-      }
+      await login(trimmedEmail, trimmedPassword);
+      toast.success('Welcome back!');
+      navigate('/dashboard');
     } catch (err: any) {
-      const errorMessage = err?.response?.data?.error || 'An error occurred. Please try again.';
+      const errorMessage = err?.response?.data?.error || err?.data?.error || 'An error occurred. Please try again.';
       setError(errorMessage);
     } finally {
       setIsLoading(false);

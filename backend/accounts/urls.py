@@ -10,6 +10,7 @@ from .views import (
     ForgotPasswordView,
     ValidateResetTokenView,
     ResetPasswordView,
+    ChangePasswordView,
     UserViewSet,
     UserReportViewSet,
     UserActivityReportViewSet,
@@ -29,6 +30,7 @@ urlpatterns = [
     path('auth/forgot-password/', ForgotPasswordView.as_view(), name='auth_forgot_password'),
     path('auth/validate-reset-token/', ValidateResetTokenView.as_view(), name='auth_validate_reset_token'),
     path('auth/reset-password/', ResetPasswordView.as_view(), name='auth_reset_password'),
+    path('auth/change-password/', ChangePasswordView.as_view(), name='auth_change_password'),
     
     # Session / activity settings
     path('settings/session/', SessionSettingsView.as_view(), name='session_settings'),

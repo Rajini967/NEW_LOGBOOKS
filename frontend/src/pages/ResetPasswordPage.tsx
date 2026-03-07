@@ -11,6 +11,7 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/com
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Lock, ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
+import { PasswordRequirementHints } from "@/components/PasswordRequirementHints";
 
 const schema = z
   .object({
@@ -35,10 +36,13 @@ const ResetPasswordPage: React.FC = () => {
   const {
     register,
     handleSubmit,
+    watch,
     formState: { errors, isSubmitting },
   } = useForm<ResetPasswordForm>({
     resolver: zodResolver(schema),
   });
+
+  const newPasswordValue = watch("new_password", "");
 
   React.useEffect(() => {
     const validateToken = async () => {
@@ -117,6 +121,7 @@ const ResetPasswordPage: React.FC = () => {
               {...register("new_password")}
             />
           </div>
+          <PasswordRequirementHints password={newPasswordValue || ""} className="mt-2" />
           {errors.new_password && <p className="text-sm text-destructive">{errors.new_password.message}</p>}
         </div>
 

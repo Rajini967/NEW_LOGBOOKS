@@ -9,6 +9,10 @@ export interface User {
   is_active?: boolean;
   is_staff?: boolean;
   is_superuser?: boolean;
+  is_locked?: boolean;
+  locked_until?: string | null;
+  must_change_password?: boolean;
+  password_expired?: boolean;
   siteId?: string;
   created_at?: string;
   updated_at?: string;

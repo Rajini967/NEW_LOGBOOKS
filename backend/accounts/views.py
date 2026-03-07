@@ -11,10 +11,13 @@ from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.exceptions import TokenError, InvalidToken
 from rest_framework_simplejwt.token_blacklist.models import OutstandingToken, BlacklistedToken
+from datetime import timedelta
+
 from django.contrib.auth import get_user_model
 from django.core.mail import send_mail
 from django.conf import settings
 from django.db import IntegrityError
+from django.utils import timezone
 
 from .models import User, UserRole, PasswordResetToken, hash_reset_token, UserActivityLog, SessionSetting
 from .serializers import (
@@ -25,6 +28,7 @@ from .serializers import (
     ForgotPasswordSerializer,
     ValidateResetTokenSerializer,
     ResetPasswordSerializer,
+    ChangePasswordSerializer,
     UserReportSerializer,
     UserActivityLogSerializer,
     SessionSettingSerializer,
@@ -33,8 +37,13 @@ from .permissions import (
     CanCreateUsers,
     CanManageUsers,
 )
+from .audit_utils import log_user_audit_event
 
 User = get_user_model()
+
+# Lockout after failed login attempts
+LOCKOUT_THRESHOLD = 3
+LOCKOUT_DURATION_MINUTES = 30
 
 
 class CustomTokenObtainPairView(TokenObtainPairView):
@@ -47,23 +56,73 @@ class CustomTokenObtainPairView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer
     
     def post(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
-        try:
-            serializer.is_valid(raise_exception=True)
-        except Exception as e:
+        email = request.data.get("email")
+        password = request.data.get("password")
+        if email is None or (isinstance(email, str) and not email.strip()):
             return Response(
-                {'error': 'Invalid credentials. Please check your email and password.'},
-                status=status.HTTP_401_UNAUTHORIZED
+                {"error": "Please enter your email."},
+                status=status.HTTP_400_BAD_REQUEST,
             )
-        
+        if password is None or (isinstance(password, str) and not password.strip()):
+            return Response(
+                {"error": "Please enter your password."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        normalized_email = User.objects.normalize_email(email)
+        user = User.all_objects.filter(email=normalized_email).first()
+        login_data = {**request.data, "email": normalized_email}
+        serializer = self.get_serializer(data=login_data)
+        if user is not None:
+            if user.is_locked():
+                return Response(
+                    {"error": "Account is locked due to too many failed login attempts. Contact an administrator to unlock."},
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
+            if not user.is_active or user.is_deleted:
+                return Response(
+                    {"error": "User account is inactive or deleted."},
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
+            try:
+                serializer.is_valid(raise_exception=True)
+            except Exception:
+                user.failed_login_attempts += 1
+                if user.failed_login_attempts >= LOCKOUT_THRESHOLD:
+                    user.locked_until = timezone.now() + timedelta(minutes=LOCKOUT_DURATION_MINUTES)
+                    user.save(update_fields=["failed_login_attempts", "locked_until"])
+                    try:
+                        log_user_audit_event(
+                            "user_locked",
+                            user,
+                            actor=None,
+                            new_value="Locked due to failed login attempts",
+                            field_name="lock",
+                        )
+                    except Exception:
+                        pass
+                else:
+                    user.save(update_fields=["failed_login_attempts", "locked_until"])
+                return Response(
+                    {"error": "Invalid credentials. Please check your email and password."},
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
+            user.failed_login_attempts = 0
+            user.locked_until = None
+            user.save(update_fields=["failed_login_attempts", "locked_until"])
+        else:
+            try:
+                serializer.is_valid(raise_exception=True)
+            except Exception:
+                return Response(
+                    {"error": "Invalid credentials. Please check your email and password."},
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
         user = serializer.user
         if not user.is_active or user.is_deleted:
             return Response(
-                {'error': 'User account is inactive or deleted.'},
-                status=status.HTTP_401_UNAUTHORIZED
+                {"error": "User account is inactive or deleted."},
+                status=status.HTTP_401_UNAUTHORIZED,
             )
-        
-        # Log successful manual login
         try:
             ip_address = request.META.get("REMOTE_ADDR")
             user_agent = request.META.get("HTTP_USER_AGENT", "")
@@ -74,10 +133,18 @@ class CustomTokenObtainPairView(TokenObtainPairView):
                 user_agent=user_agent,
             )
         except Exception:
-            # Logging should not block login if it fails
             pass
-        
-        return Response(serializer.validated_data, status=status.HTTP_200_OK)
+        # Password policy: force change flags for frontend
+        must_change = getattr(user, "must_change_password", False)
+        password_expired = False
+        if not must_change and getattr(user, "password_changed_at", None):
+            session_setting = SessionSetting.get_solo()
+            expiry_days = getattr(session_setting, "password_expiry_days", None)
+            if expiry_days and expiry_days > 0:
+                if timezone.now() - user.password_changed_at > timedelta(days=expiry_days):
+                    password_expired = True
+        response_data = {**serializer.validated_data, "must_change_password": must_change, "password_expired": password_expired}
+        return Response(response_data, status=status.HTTP_200_OK)
 
 
 class CustomTokenRefreshView(TokenRefreshView):
@@ -227,6 +294,28 @@ class ResetPasswordView(APIView):
             {"message": "Password has been reset successfully."},
             status=status.HTTP_200_OK,
         )
+
+
+class ChangePasswordView(APIView):
+    """
+    Authenticated user changes their own password.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = ChangePasswordSerializer(
+            data=request.data,
+            context={"request": request},
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(
+            {"message": "Password changed successfully."},
+            status=status.HTTP_200_OK,
+        )
+
+
 class UserViewSet(viewsets.ModelViewSet):
     """
     ViewSet for User CRUD operations.
@@ -302,10 +391,44 @@ class UserViewSet(viewsets.ModelViewSet):
                 )
             # Re-raise if it's not an email-related error
             raise
-        
+
+        try:
+            log_user_audit_event(
+                "user_created",
+                user,
+                actor=request.user,
+                new_value=user.email,
+                field_name="user",
+            )
+        except Exception:
+            pass
+
         return Response(
             UserSerializer(user).data,
             status=status.HTTP_201_CREATED
+        )
+    
+    @action(detail=True, methods=["post"], url_path="unlock")
+    def unlock(self, request, pk=None):
+        """Clear lockout for a user (failed_login_attempts and locked_until)."""
+        user = self.get_object()
+        user.failed_login_attempts = 0
+        user.locked_until = None
+        user.save(update_fields=["failed_login_attempts", "locked_until"])
+        try:
+            log_user_audit_event(
+                "user_unlocked",
+                user,
+                actor=request.user,
+                old_value="Locked",
+                new_value="Unlocked",
+                field_name="lock",
+            )
+        except Exception:
+            pass
+        return Response(
+            {"message": "User unlocked successfully."},
+            status=status.HTTP_200_OK,
         )
     
     def update(self, request, *args, **kwargs):

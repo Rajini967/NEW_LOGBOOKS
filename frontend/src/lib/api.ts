@@ -154,6 +154,15 @@ export const authAPI = {
     return response.data;
   },
 
+  changePassword: async (payload: {
+    current_password: string;
+    new_password: string;
+    new_password_confirm: string;
+  }) => {
+    const response = await api.post('/auth/change-password/', payload);
+    return response.data;
+  },
+
   // Session / activity settings
   getSessionSettings: async () => {
     const response = await api.get('/settings/session/');
@@ -203,6 +212,11 @@ export const userAPI = {
 
   delete: async (id: string) => {
     const response = await api.delete(`/users/${id}/`);
+    return response.data;
+  },
+
+  unlock: async (id: string) => {
+    const response = await api.post(`/users/${id}/unlock/`);
     return response.data;
   },
 };
@@ -682,6 +696,18 @@ export const chemicalStockAPI = {
     }
     return Array.isArray(data) ? data : [];
   },
+
+  createEntry: async (data: {
+    location: string;
+    chemical_name: string;
+    chemical_formula: string;
+    stock: number;
+    price?: number | null;
+    site?: string | null;
+  }) => {
+    const response = await api.post('/chemical-stock/create_entry/', data);
+    return response.data;
+  },
 };
 
 export const chemicalAssignmentAPI = {
@@ -694,7 +720,10 @@ export const chemicalAssignmentAPI = {
     return Array.isArray(data) ? data : [];
   },
   create: async (data: {
-    chemical: string;
+    chemical?: string;
+    location?: string;
+    chemical_name?: string;
+    chemical_formula?: string;
     equipment_name: string;
     category: 'major' | 'minor';
   }) => {

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Header } from '@/components/layout/Header';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -15,11 +16,13 @@ import {
   Clock,
   Save,
   RefreshCw,
+  Lock,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { authAPI } from '@/lib/api';
 
 export default function SettingsPage() {
+  const navigate = useNavigate();
   const [sessionTimeoutMinutes, setSessionTimeoutMinutes] = useState<number | ''>('');
   const [isSessionLoading, setIsSessionLoading] = useState(false);
 
@@ -193,6 +196,17 @@ export default function SettingsPage() {
                 />
                 <span className="text-sm text-muted-foreground">minutes</span>
               </div>
+            </div>
+            <Separator />
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="font-medium text-foreground">Change password</p>
+                <p className="text-sm text-muted-foreground">Update your account password</p>
+              </div>
+              <Button variant="outline" size="sm" onClick={() => navigate('/change-password')}>
+                <Lock className="w-4 h-4 mr-2" />
+                Change password
+              </Button>
             </div>
             <Separator />
             <div className="flex items-center justify-between">

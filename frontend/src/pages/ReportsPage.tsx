@@ -111,6 +111,7 @@ interface AuditEventRow {
   user: string | null;
   user_email: string | null;
   user_name: string | null;
+  target_user_email?: string | null;
   event_type: string;
   object_type: string;
   object_id: string | null;
@@ -149,6 +150,10 @@ const auditEventLabels: Record<string, string> = {
   config_update: 'Config Update',
   log_update: 'Log Update',
   log_correction: 'Log Correction',
+  user_created: 'User created',
+  password_changed: 'Password changed',
+  user_locked: 'User locked',
+  user_unlocked: 'User unlocked',
 };
 
 export default function ReportsPage() {
@@ -2254,6 +2259,10 @@ export default function ReportsPage() {
                     <SelectItem value="config_update">Config Update</SelectItem>
                     <SelectItem value="log_update">Log Update</SelectItem>
                     <SelectItem value="log_correction">Log Correction</SelectItem>
+                    <SelectItem value="user_created">User created</SelectItem>
+                    <SelectItem value="password_changed">Password changed</SelectItem>
+                    <SelectItem value="user_locked">User locked</SelectItem>
+                    <SelectItem value="user_unlocked">User unlocked</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -2264,7 +2273,7 @@ export default function ReportsPage() {
                   onChange={(e) =>
                     setAuditObjectType(e.target.value ? e.target.value : 'all')
                   }
-                  placeholder="e.g. chiller_log"
+                  placeholder="e.g. user, chiller_log"
                   className="mt-1 w-[180px]"
                 />
               </div>
@@ -2310,7 +2319,7 @@ export default function ReportsPage() {
                       (row) => `
                         <tr>
                           <td>${row.timestamp ? format(new Date(row.timestamp), 'dd/MM/yy HH:mm') : ''}</td>
-                          <td>${row.user_email || ''}</td>
+                          <td>${row.user_email || row.target_user_email || ''}</td>
                           <td>${row.event_type}</td>
                           <td>${row.object_type}</td>
                           <td>${row.object_id || ''}</td>
@@ -2412,8 +2421,8 @@ export default function ReportsPage() {
                               ? format(new Date(row.timestamp), 'dd/MM/yy HH:mm')
                               : ''}
                           </td>
-                          <td className="px-4 py-3 text-sm">{row.user_email}</td>
-                          <td className="px-4 py-3 text-sm capitalize">{row.event_type}</td>
+                          <td className="px-4 py-3 text-sm">{row.user_email ?? row.target_user_email ?? '—'}</td>
+                          <td className="px-4 py-3 text-sm">{auditEventLabels[row.event_type] ?? row.event_type}</td>
                           <td className="px-4 py-3 text-sm">{row.object_type}</td>
                           <td className="px-4 py-3 text-sm">{row.object_id}</td>
                           <td className="px-4 py-3 text-sm">{row.field_name}</td>

@@ -11,7 +11,7 @@ from .serializers import (
     ChemicalAssignmentSerializer,
     ChemicalPreparationSerializer,
 )
-from accounts.permissions import CanLogEntries, CanApproveReports
+from accounts.permissions import CanLogEntries, CanApproveReports, IsSuperAdminOrManager
 from reports.utils import log_limit_change
 
 
@@ -23,8 +23,22 @@ class ChemicalViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Chemical.objects.filter(is_active=True).order_by("location", "name")
 
 
+def _normalize_location(value):
+    """Map user input to Chemical.LOCATION_CHOICES value."""
+    if not value or not str(value).strip():
+        return None
+    v = str(value).strip().lower()
+    if v in ("water_system", "water system", "water"):
+        return "water_system"
+    if v in ("cooling_towers", "cooling towers", "cooling"):
+        return "cooling_towers"
+    if v == "boiler":
+        return "boiler"
+    return None
+
+
 class ChemicalStockViewSet(viewsets.ReadOnlyModelViewSet):
-    """Read-only viewset for chemical stock and pricing."""
+    """Read-only viewset for chemical stock and pricing. Admin can create entries via create_entry."""
 
     permission_classes = [IsAuthenticated]
     serializer_class = ChemicalStockSerializer
@@ -40,13 +54,72 @@ class ChemicalStockViewSet(viewsets.ReadOnlyModelViewSet):
             qs = qs.filter(chemical__location=location)
         return qs
 
+    @action(detail=False, methods=["post"], permission_classes=[IsAuthenticated, IsSuperAdminOrManager])
+    def create_entry(self, request):
+        """
+        Create a new chemical stock entry from manual fields.
+        Accepts: location, chemical_name, chemical_formula, stock, price, site.
+        Creates or reuses Chemical master, then creates ChemicalStock.
+        """
+        location_raw = (request.data.get("location") or "").strip()
+        chemical_name = (request.data.get("chemical_name") or "").strip()
+        chemical_formula = (request.data.get("chemical_formula") or "").strip()
+        stock_raw = request.data.get("stock")
+        price_raw = request.data.get("price")
+        site = (request.data.get("site") or "").strip() or None
+
+        if not chemical_name:
+            raise ValidationError({"chemical_name": "Chemical name is required."})
+        if not chemical_formula:
+            raise ValidationError({"chemical_formula": "Chemical formula is required."})
+
+        location = _normalize_location(location_raw)
+        if not location:
+            raise ValidationError({
+                "location": "Location must be one of: Water system, Cooling towers, Boiler."
+            })
+
+        try:
+            stock = float(stock_raw) if stock_raw is not None and str(stock_raw).strip() != "" else 0.0
+        except (TypeError, ValueError):
+            stock = 0.0
+        if stock < 0:
+            raise ValidationError({"stock": "Stock must be >= 0."})
+
+        try:
+            price = float(price_raw) if price_raw is not None and str(price_raw).strip() != "" else None
+        except (TypeError, ValueError):
+            price = None
+        if price is not None and price < 0:
+            raise ValidationError({"price": "Price must be >= 0."})
+
+        chemical, _ = Chemical.objects.get_or_create(
+            location=location,
+            formula=chemical_formula,
+            name=chemical_name,
+            defaults={"is_active": True},
+        )
+        stock_entry = ChemicalStock.objects.create(
+            chemical=chemical,
+            available_qty_kg=stock,
+            unit="kg",
+            price_per_unit=price,
+            site=site,
+        )
+        serializer = self.get_serializer(stock_entry)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
 
 class ChemicalAssignmentViewSet(viewsets.ModelViewSet):
-    """Manage assignments of chemicals to equipment."""
+    """Manage assignments of chemicals to equipment. Create/update/delete only admin/super_admin."""
 
-    permission_classes = [IsAuthenticated, CanLogEntries]
     serializer_class = ChemicalAssignmentSerializer
     queryset = ChemicalAssignment.objects.select_related("chemical", "created_by").all()
+
+    def get_permissions(self):
+        if self.action in ("create", "update", "partial_update", "destroy"):
+            return [IsAuthenticated(), IsSuperAdminOrManager()]
+        return [IsAuthenticated()]
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)

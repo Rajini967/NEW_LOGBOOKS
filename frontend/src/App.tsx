@@ -36,6 +36,7 @@ import EquipmentMasterLandingPage from "./pages/EquipmentMasterLandingPage";
 import ReportsPage from "./pages/ReportsPage";
 import UsersPage from "./pages/UsersPage";
 import SettingsPage from "./pages/SettingsPage";
+import ChangePasswordPage from "./pages/ChangePasswordPage";
 import LogbookBuilderPage from "./pages/LogbookBuilderPage";
 import NotFound from "./pages/NotFound";
 
@@ -91,6 +92,7 @@ const App = () => (
             <Route path="/" element={<Navigate to="/login" replace />} />
             
             <Route element={<DashboardLayout />}>
+              <Route path="/change-password" element={<ChangePasswordPage />} />
               <Route path="/dashboard" element={<DashboardPage />} />
               <Route path="/e-log-book" element={<ELogBookLandingPage />} />
               <Route path="/e-log-book/chiller" element={<ELogBookPage equipmentType="chiller" />} />

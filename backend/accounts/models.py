@@ -83,6 +83,14 @@ class User(AbstractBaseUser, PermissionsMixin):
     is_deleted = models.BooleanField(default=False)
     deleted_at = models.DateTimeField(null=True, blank=True)
     
+    # Lockout after failed login attempts
+    failed_login_attempts = models.PositiveIntegerField(default=0)
+    locked_until = models.DateTimeField(null=True, blank=True)
+    
+    # Password policy
+    must_change_password = models.BooleanField(default=True)
+    password_changed_at = models.DateTimeField(null=True, blank=True)
+    
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -105,6 +113,10 @@ class User(AbstractBaseUser, PermissionsMixin):
     def natural_key(self):
         """Return the natural key for the user (email)."""
         return (self.email,)
+    
+    def is_locked(self):
+        """Return True if the account is currently locked due to failed login attempts."""
+        return bool(self.locked_until and timezone.now() < self.locked_until)
     
     def soft_delete(self):
         """Soft delete the user."""
@@ -188,6 +200,12 @@ class SessionSetting(models.Model):
     auto_logout_minutes = models.PositiveIntegerField(
         default=30,
         help_text="Auto logout after this many minutes of inactivity.",
+    )
+    password_expiry_days = models.PositiveIntegerField(
+        default=90,
+        null=True,
+        blank=True,
+        help_text="Force password change after this many days. Null/blank means no expiry.",
     )
     updated_at = models.DateTimeField(auto_now=True)
     updated_by = models.ForeignKey(
@@ -273,4 +291,27 @@ class PasswordResetToken(models.Model):
             expires_at=expires_at,
         )
         return instance, raw_token
+
+
+class UserPasswordHistory(models.Model):
+    """
+    Stores hashed password history for a user (last N entries) to enforce
+    "cannot reuse last 3 passwords" policy.
+    """
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="password_history_entries",
+    )
+    password_hash = models.CharField(max_length=255)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "user_password_history"
+        ordering = ["-created_at"]
+        verbose_name = "User password history"
+        verbose_name_plural = "User password histories"
+
+    def __str__(self):
+        return f"Password history for {self.user.email} at {self.created_at}"
 

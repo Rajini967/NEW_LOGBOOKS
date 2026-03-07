@@ -31,6 +31,7 @@ class ReportSerializer(serializers.ModelSerializer):
 class AuditEventSerializer(serializers.ModelSerializer):
     user_email = serializers.EmailField(source="user.email", read_only=True, allow_null=True)
     user_name = serializers.CharField(source="user.name", read_only=True, allow_null=True)
+    target_user_email = serializers.SerializerMethodField()
 
     class Meta:
         model = AuditEvent
@@ -40,6 +41,7 @@ class AuditEventSerializer(serializers.ModelSerializer):
             "user",
             "user_email",
             "user_name",
+            "target_user_email",
             "event_type",
             "object_type",
             "object_id",
@@ -49,4 +51,15 @@ class AuditEventSerializer(serializers.ModelSerializer):
             "extra",
         ]
         read_only_fields = fields
+
+    def get_target_user_email(self, obj):
+        """When object_type is 'user', return the target user's email (e.g. for user_locked where actor is null)."""
+        if obj.object_type != "user" or not obj.object_id:
+            return None
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        try:
+            return User.objects.filter(pk=obj.object_id).values_list("email", flat=True).first()
+        except Exception:
+            return None
 

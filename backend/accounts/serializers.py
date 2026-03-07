@@ -9,6 +9,8 @@ from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from .models import User, UserRole, PasswordResetToken, hash_reset_token, UserActivityLog, SessionSetting
+from .password_utils import check_password_history, append_password_history
+from .audit_utils import log_user_audit_event
 
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
@@ -30,6 +32,8 @@ class UserSerializer(serializers.ModelSerializer):
     """Serializer for User model (read operations)."""
     
     role_display = serializers.CharField(source='get_role_display', read_only=True)
+    is_locked = serializers.SerializerMethodField(read_only=True)
+    password_expired = serializers.SerializerMethodField(read_only=True)
     
     class Meta:
         model = User
@@ -43,6 +47,11 @@ class UserSerializer(serializers.ModelSerializer):
             'is_staff',
             'is_superuser',
             'is_deleted',
+            'is_locked',
+            'locked_until',
+            'must_change_password',
+            'password_changed_at',
+            'password_expired',
             'last_login',
             'created_at',
             'updated_at',
@@ -53,7 +62,24 @@ class UserSerializer(serializers.ModelSerializer):
             'created_at',
             'updated_at',
             'is_deleted',
+            'locked_until',
+            'must_change_password',
+            'password_changed_at',
         ]
+    
+    def get_is_locked(self, obj):
+        return obj.is_locked()
+    
+    def get_password_expired(self, obj):
+        if not getattr(obj, "password_changed_at", None):
+            return False
+        from .models import SessionSetting
+        setting = SessionSetting.get_solo()
+        expiry_days = getattr(setting, "password_expiry_days", None)
+        if not expiry_days or expiry_days <= 0:
+            return False
+        from datetime import timedelta
+        return timezone.now() - obj.password_changed_at > timedelta(days=expiry_days)
 
 
 class UserCreateSerializer(serializers.ModelSerializer):
@@ -194,16 +220,35 @@ class UserUpdateSerializer(serializers.ModelSerializer):
         """Update user."""
         password = validated_data.pop('password', None)
         if password:
+            check_password_history(instance, password)
             instance.set_password(password)
-        
+            instance.must_change_password = True
+            instance.password_changed_at = timezone.now()
+            append_password_history(instance, password)
+
         # Only update fields that have changed
         for attr, value in validated_data.items():
             # Skip email if it hasn't changed to avoid unnecessary database updates
             if attr == 'email' and instance.email == value:
                 continue
             setattr(instance, attr, value)
-        
+
         instance.save()
+
+        if password:
+            request = self.context.get('request')
+            try:
+                log_user_audit_event(
+                    "password_changed",
+                    instance,
+                    actor=request.user if request else None,
+                    old_value="[Redacted]",
+                    new_value="[Redacted]",
+                    field_name="password",
+                )
+            except Exception:
+                pass
+
         return instance
 
 
@@ -291,13 +336,71 @@ class ResetPasswordSerializer(_BaseTokenSerializer):
         user = token_obj.user
 
         new_password = self.validated_data["new_password"]
+        check_password_history(user, new_password)
         user.set_password(new_password)
-        # Ensure account is active after a successful reset.
+        user.must_change_password = False
+        user.password_changed_at = timezone.now()
         user.is_active = True
-        user.save(update_fields=["password", "is_active"])
+        user.save(update_fields=["password", "must_change_password", "password_changed_at", "is_active"])
+        append_password_history(user, new_password)
 
         token_obj.mark_used()
 
+        try:
+            log_user_audit_event(
+                "password_changed",
+                user,
+                actor=None,
+                old_value="[Redacted]",
+                new_value="[Redacted]",
+                field_name="password",
+            )
+        except Exception:
+            pass
+
+        return user
+
+
+class ChangePasswordSerializer(serializers.Serializer):
+    """Serializer for authenticated user changing their own password."""
+
+    current_password = serializers.CharField(write_only=True, required=True, style={"input_type": "password"})
+    new_password = serializers.CharField(
+        write_only=True,
+        required=True,
+        validators=[validate_password],
+        style={"input_type": "password"},
+    )
+    new_password_confirm = serializers.CharField(write_only=True, required=True, style={"input_type": "password"})
+
+    def validate(self, attrs):
+        if attrs["new_password"] != attrs["new_password_confirm"]:
+            raise serializers.ValidationError({"new_password_confirm": "Passwords do not match."})
+        user = self.context["request"].user
+        if not user.check_password(attrs["current_password"]):
+            raise serializers.ValidationError({"current_password": "Current password is incorrect."})
+        check_password_history(user, attrs["new_password"])
+        return attrs
+
+    def save(self, **kwargs):
+        user = self.context["request"].user
+        new_password = self.validated_data["new_password"]
+        user.set_password(new_password)
+        user.must_change_password = False
+        user.password_changed_at = timezone.now()
+        user.save(update_fields=["password", "must_change_password", "password_changed_at"])
+        append_password_history(user, new_password)
+        try:
+            log_user_audit_event(
+                "password_changed",
+                user,
+                actor=self.context.get("request").user if self.context.get("request") else None,
+                old_value="[Redacted]",
+                new_value="[Redacted]",
+                field_name="password",
+            )
+        except Exception:
+            pass
         return user
 
 
@@ -402,6 +505,7 @@ class SessionSettingSerializer(serializers.ModelSerializer):
         model = SessionSetting
         fields = [
             "auto_logout_minutes",
+            "password_expiry_days",
             "updated_at",
         ]
         read_only_fields = ["updated_at"]

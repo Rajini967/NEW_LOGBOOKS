@@ -75,6 +75,11 @@ class AuditEvent(models.Model):
         ("config_update", "Configuration Update"),
         ("log_update", "Log Update"),
         ("log_correction", "Log Correction"),
+        # User lifecycle (21 CFR Part 11)
+        ("user_created", "User Created"),
+        ("password_changed", "Password Changed"),
+        ("user_locked", "User Locked"),
+        ("user_unlocked", "User Unlocked"),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
