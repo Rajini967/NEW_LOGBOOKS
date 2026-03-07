@@ -98,3 +98,20 @@ export interface Site {
   location: string;
   customerId: string;
 }
+
+/** Log book entry interval – common for all log monitors */
+export type LogEntryIntervalType = 'hourly' | 'shift' | 'daily';
+
+export interface SessionSettings {
+  auto_logout_minutes: number;
+  password_expiry_days?: number | null;
+  log_entry_interval?: LogEntryIntervalType;
+  shift_duration_hours?: number;
+  updated_at?: string;
+}
+
+export interface SessionSettingsUpdate {
+  auto_logout_minutes?: number;
+  log_entry_interval?: LogEntryIntervalType;
+  shift_duration_hours?: number;
+}

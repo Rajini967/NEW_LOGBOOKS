@@ -34,6 +34,7 @@ import EquipmentCategoriesPage from "./pages/EquipmentCategoriesPage";
 import EquipmentListPage from "./pages/EquipmentListPage";
 import EquipmentMasterLandingPage from "./pages/EquipmentMasterLandingPage";
 import ReportsPage from "./pages/ReportsPage";
+import TrendsPage from "./pages/TrendsPage";
 import UsersPage from "./pages/UsersPage";
 import SettingsPage from "./pages/SettingsPage";
 import ChangePasswordPage from "./pages/ChangePasswordPage";
@@ -119,6 +120,7 @@ const App = () => (
               <Route path="/equipment/categories" element={<EquipmentCategoriesPage />} />
               <Route path="/equipment/list" element={<EquipmentListPage />} />
               <Route path="/reports" element={<ReportsPage />} />
+              <Route path="/trends" element={<TrendsPage />} />
               <Route path="/logbook-builder" element={<LogbookBuilderPage />} />
               <Route path="/users" element={<UsersPage />} />
               <Route path="/settings" element={<SettingsPage />} />

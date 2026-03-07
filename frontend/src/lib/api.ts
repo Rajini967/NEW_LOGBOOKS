@@ -169,7 +169,11 @@ export const authAPI = {
     return response.data;
   },
 
-  updateSessionSettings: async (data: { auto_logout_minutes: number }) => {
+  updateSessionSettings: async (data: {
+    auto_logout_minutes?: number;
+    log_entry_interval?: 'hourly' | 'shift' | 'daily';
+    shift_duration_hours?: number;
+  }) => {
     const response = await api.patch('/settings/session/', data);
     return response.data;
   },
@@ -737,8 +741,8 @@ export const chemicalAssignmentAPI = {
 
 // Chiller Log API functions
 export const chillerLogAPI = {
-  list: async () => {
-    const response = await api.get('/chiller-logs/');
+  list: async (params?: { date_from?: string; date_to?: string; equipment_id?: string }) => {
+    const response = await api.get('/chiller-logs/', { params });
     if (response.data.results) {
       return response.data.results;
     }
@@ -795,8 +799,8 @@ export const chillerLogAPI = {
 
 // Boiler Log API functions
 export const boilerLogAPI = {
-  list: async () => {
-    const response = await api.get('/boiler-logs/');
+  list: async (params?: { date_from?: string; date_to?: string; equipment_id?: string }) => {
+    const response = await api.get('/boiler-logs/', { params });
     if (response.data.results) {
       return response.data.results;
     }

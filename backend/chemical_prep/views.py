@@ -4,6 +4,9 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import ValidationError
 from django.db import models
+from django.utils import timezone
+from accounts.models import SessionSetting
+from core.log_slot_utils import get_slot_range
 from .models import Chemical, ChemicalStock, ChemicalPreparation, ChemicalAssignment
 from .serializers import (
     ChemicalSerializer,
@@ -70,8 +73,6 @@ class ChemicalStockViewSet(viewsets.ReadOnlyModelViewSet):
 
         if not chemical_name:
             raise ValidationError({"chemical_name": "Chemical name is required."})
-        if not chemical_formula:
-            raise ValidationError({"chemical_formula": "Chemical formula is required."})
 
         location = _normalize_location(location_raw)
         if not location:
@@ -95,7 +96,7 @@ class ChemicalStockViewSet(viewsets.ReadOnlyModelViewSet):
 
         chemical, _ = Chemical.objects.get_or_create(
             location=location,
-            formula=chemical_formula,
+            formula=chemical_formula or "",
             name=chemical_name,
             defaults={"is_active": True},
         )
@@ -157,6 +158,21 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
         chemical quantity, ensure there is enough ChemicalStock available.
         """
         validated = dict(serializer.validated_data)
+        equipment_name = validated.get("equipment_name")
+        timestamp = validated.get("timestamp") or timezone.now()
+        if equipment_name is not None:
+            setting = SessionSetting.get_solo()
+            interval = getattr(setting, "log_entry_interval", None) or "hourly"
+            shift_hours = getattr(setting, "shift_duration_hours", None) or 8
+            slot_start, slot_end = get_slot_range(timestamp, interval, shift_hours)
+            if ChemicalPreparation.objects.filter(
+                equipment_name=equipment_name,
+                timestamp__gte=slot_start,
+                timestamp__lt=slot_end,
+            ).exists():
+                raise ValidationError(
+                    {"detail": ["An entry for this equipment already exists for this time slot."]}
+                )
         chemical = validated.get("chemical")
         chemical_name = validated.get("chemical_name")
         requested_qty_g = validated.get("chemical_qty")

@@ -24,6 +24,7 @@ import {
   Activity,
   Thermometer,
   Droplets,
+  TrendingUp,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -86,6 +87,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
     { path: '/e-log-book', icon: ClipboardList, label: 'E Log Book', roles: ['operator', 'supervisor', 'super_admin', 'manager'] },
     { path: '/instruments', icon: Wrench, label: 'Instruments', roles: ['supervisor', 'super_admin', 'manager'] },
     { path: '/reports', icon: FileText, label: 'Reports', roles: ['supervisor', 'customer', 'client', 'super_admin', 'manager'] },
+    { path: '/trends', icon: TrendingUp, label: 'Trends', roles: ['operator', 'supervisor', 'customer', 'client', 'manager', 'super_admin'] },
     { path: '/users', icon: Users, label: 'User Management', roles: ['super_admin', 'manager'] },
     { path: '/settings', icon: Settings, label: 'Settings', roles: ['super_admin', 'manager'] },
   ];

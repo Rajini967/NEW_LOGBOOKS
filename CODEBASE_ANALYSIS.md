@@ -12,9 +12,9 @@
 | **API base** | `frontend/src/lib/api.ts` | Axios client; base URL from `VITE_API_URL` or `http://103.168.18.24:8000/api` |
 
 **Active Django apps (in `core/settings.py`):**  
-`accounts`, `logbooks`, `sites`, `instruments`, `chemical_prep`, `chiller_logs`, `boiler_logs`, `compressor_logs`, `air_validation`, `test_certificates`, `reports`.
+`accounts`, `logbooks`, `sites`, `instruments`, `chemical_prep`, `chiller_logs`, `boiler_logs`, `filter_logs`, `compressor_logs`, `air_validation`, `test_certificates`, `reports`, `equipment`, `filter_master`.
 
-**Note:** The folder `backend/utility_logs/` exists but is **not** in `INSTALLED_APPS`. Chiller/boiler/compressor are served by `chiller_logs`, `boiler_logs`, and `compressor_logs` respectively.
+**Note:** Chiller/boiler/compressor/filter logbooks are served by `chiller_logs`, `boiler_logs`, `compressor_logs`, and `filter_logs`. Equipment master data (departments, categories, equipment) is in `equipment`. Filter register and schedules are in `filter_master`.
 
 **Known issue:** `makemigrations` / DB access can fail with  
 `FATAL: password authentication failed for user "postgres"`.  
@@ -31,6 +31,8 @@ This is a **full-stack web application** for managing industrial logbooks, HVAC 
 - **Frontend:** React 18 + TypeScript + Vite + Tailwind CSS + shadcn/ui
 - **Authentication:** JWT (Simple JWT) with token blacklisting
 - **PDF Generation:** @react-pdf/renderer (client-side)
+- **Async/Background:** Celery + Redis (broker/result backend configured)
+- **Email:** SMTP backend for password reset (configurable via .env)
 
 ---
 
@@ -48,10 +50,14 @@ Log_Books/
 │   ├── chemical_prep/      # Chemical preparation logs
 │   ├── chiller_logs/       # Chiller monitoring
 │   ├── boiler_logs/        # Boiler monitoring
+│   ├── filter_logs/        # Filter log entries (install/integrity/cleaning/replacement)
 │   ├── compressor_logs/    # Compressor monitoring
 │   ├── air_validation/     # HVAC validation tests
-│   ├── test_certificates/ # Test certificate management
-│   └── core/         # Django settings & configuration
+│   ├── test_certificates/  # Test certificate management
+│   ├── reports/            # Centralized reports + AuditEvent
+│   ├── equipment/         # Departments, EquipmentCategory, Equipment master
+│   ├── filter_master/      # FilterCategory, FilterMaster, FilterAssignment, FilterSchedule
+│   └── core/               # Django settings & configuration
 │
 └── frontend/         # React SPA
     ├── src/
@@ -168,6 +174,12 @@ Three separate models for equipment monitoring:
 - Pressure & flow measurements
 - Status workflow
 
+#### **FilterLog** (`filter_logs`)
+- Equipment ID, category, filter_no, micron, size, tag_info
+- Dates: installed, integrity done/due, cleaning done/due, replacement due
+- Operator, status workflow (draft → pending → approved/rejected, pending_secondary_approval)
+- corrects FK for correction entries
+
 **Common Pattern:**
 - All logs have operator tracking (FK + name string)
 - Approval workflow with remarks
@@ -192,7 +204,26 @@ Three separate models for equipment monitoring:
 - Pass/Fail result
 - Standard workflow
 
-### 2.6 Test Certificates
+### 2.6 Equipment & Filter Master
+
+**Equipment app:**
+- `Department`: name, client_id (multi-tenant)
+- `EquipmentCategory`: name, client_id
+- `Equipment`: equipment_number (unique), name, capacity, department FK, category FK, site_id optional
+
+**Filter Master app:**
+- `FilterCategory`: name, client_id, description, micron_costs (JSON), is_active
+- `FilterMaster`: category FK, make, model, serial_number, size_l/w/h, micron_size, certificate_file, status (draft/pending/approved/rejected/inactive), filter_id (assigned on approval)
+- `FilterAssignment`: links filter to equipment/location
+- `FilterSchedule`: schedule and approval workflow for filter tasks
+
+### 2.7 Reports & Audit
+
+**Report model:** Central store for all approved report types. Fields: report_type (utility, chemical, validation, filter_register, air_velocity, filter_integrity, recovery, differential_pressure, nvpc), source_id, source_table, title, site, created_by/at, approved_by/at, remarks.
+
+**AuditEvent model:** Generic audit trail for limit updates, config updates, log updates/corrections, user lifecycle (created, password changed, locked/unlocked). Fields: user, event_type, object_type, object_id, field_name, old_value, new_value, extra (JSON).
+
+### 2.8 Test Certificates
 
 **Complex nested structure** with separate tables for each test type:
 
@@ -229,7 +260,7 @@ Three separate models for equipment monitoring:
 - Approval workflow
 - Prepared by / Approved by tracking
 
-### 2.7 API Endpoints
+### 2.9 API Endpoints
 
 **Authentication:**
 - `POST /api/auth/login/` - JWT login
@@ -251,8 +282,11 @@ Three separate models for equipment monitoring:
 - `POST /api/logbooks/entries/` - Create entry
 
 **Utility Logs:**
-- Standard CRUD for chiller-logs, boiler-logs, compressor-logs
-- `POST /api/{type}-logs/{id}/approve/` - Approval action
+- Standard CRUD for chiller-logs, boiler-logs, compressor-logs, filter-logs (via `filter_logs` app)
+- `POST /api/{type}-logs/{id}/approve/` - Approval action (and secondary approval where applicable)
+
+**Equipment & Filter Master:**
+- `api/` includes equipment URLs (departments, categories, equipment) and filter_master URLs (categories, filters, assignments, schedules)
 
 **Test Certificates:**
 - Separate endpoints for each test type:
@@ -262,7 +296,7 @@ Three separate models for equipment monitoring:
   - `/api/differential-pressure-tests/`
   - `/api/nvpc-tests/`
 
-### 2.8 Database Configuration
+### 2.10 Database Configuration
 
 - **Engine:** PostgreSQL
 - **Connection:** Environment variables (python-decouple)
@@ -292,20 +326,26 @@ Three separate models for equipment monitoring:
 
 #### **Routing (`App.tsx`)**
 ```
-/login                    - Login page
+/login, /forgot-password, /reset-password
+/change-password          - Change password (under dashboard)
 /dashboard                - Main dashboard
-/e-log-book               - Electronic logbook entries
+/e-log-book               - E-logbook landing
+/e-log-book/chiller       - Chiller log entries
+/e-log-book/boiler        - Boiler log entries
+/e-log-book/chemical      - Chemical landing (Manager+), else redirect to entry
+/e-log-book/chemical/entry, /stock, /assignment
+/e-log-book/filter         - Filter landing (Manager+), else redirect to entry
+/e-log-book/filter/entry   - Filter log entries
+/e-log-book/filter/settings, /settings/categories, /settings/register, /settings/schedules
 /hvac-validation          - HVAC validation overview
-/hvac-validation/air-velocity-test
-/hvac-validation/filter-integrity-test
-/hvac-validation/recovery-test
-/hvac-validation/differential-pressure-test
-/hvac-validation/nvpc-test
-/instruments             - Instrument management
-/reports                 - Reports & approvals
-/logbook-builder         - Create logbook schemas (Manager+)
-/users                   - User management (Manager+)
-/settings                - Settings page
+/hvac-validation/air-velocity-test, filter-integrity-test, recovery-test, differential-pressure-test, nvpc-test
+/instruments              - Instrument management
+/equipment                - Equipment master landing
+/equipment/departments, /equipment/categories, /equipment/list
+/reports                  - Reports & approvals
+/logbook-builder          - Create logbook schemas (Manager+)
+/users                    - User management (Manager+)
+/settings                 - Settings page
 ```
 
 #### **Authentication (`AuthContext.tsx`)**
@@ -601,6 +641,8 @@ drf-spectacular==0.26.5
 psycopg2-binary==2.9.9
 python-decouple==3.8
 django-cors-headers==4.3.1
+celery==5.3.6
+redis==5.0.1
 ```
 
 ### Frontend
@@ -629,11 +671,11 @@ lucide-react: ^0.462.0
 SECRET_KEY
 DEBUG
 ALLOWED_HOSTS
-DB_NAME
-DB_USER
-DB_PASSWORD
-DB_HOST
-DB_PORT
+DB_NAME, DB_USER, DB_PASSWORD, DB_HOST, DB_PORT
+CELERY_BROKER_URL, CELERY_RESULT_BACKEND  (default: redis://localhost:6379/0)
+EMAIL_HOST, EMAIL_PORT, EMAIL_HOST_USER, EMAIL_HOST_PASSWORD
+EMAIL_USE_TLS, EMAIL_USE_SSL, DEFAULT_FROM_EMAIL
+FRONTEND_BASE_URL  (for password reset links)
 ```
 
 **Frontend (.env):**

@@ -86,10 +86,6 @@ const ChemicalStockPage: React.FC = () => {
       toast.error("Chemical name is required.");
       return;
     }
-    if (!chemicalFormula) {
-      toast.error("Chemical formula is required.");
-      return;
-    }
     const stock = createForm.stock.trim() ? parseFloat(createForm.stock) : 0;
     if (Number.isNaN(stock) || stock < 0) {
       toast.error("Stock must be a number >= 0.");
@@ -105,7 +101,7 @@ const ChemicalStockPage: React.FC = () => {
       await chemicalStockAPI.createEntry({
         location,
         chemical_name: chemicalName,
-        chemical_formula: chemicalFormula,
+        chemical_formula: chemicalFormula || undefined,
         stock,
         price: price ?? null,
         site: createForm.site.trim() || null,
@@ -155,11 +151,11 @@ const ChemicalStockPage: React.FC = () => {
                   Create new entry
                 </Button>
               </DialogTrigger>
-              <DialogContent className="max-w-md">
-                <DialogHeader>
+              <DialogContent className="max-w-md max-h-[70vh] flex flex-col">
+                <DialogHeader className="shrink-0">
                   <DialogTitle>Create new stock entry</DialogTitle>
                 </DialogHeader>
-                <form onSubmit={handleCreateSubmit} className="space-y-4 mt-2">
+                <form onSubmit={handleCreateSubmit} className="space-y-3 mt-2 overflow-y-auto flex-1 min-h-0">
                   <div className="space-y-2">
                     <Label htmlFor="new-location">Location</Label>
                     <Input
@@ -183,7 +179,7 @@ const ChemicalStockPage: React.FC = () => {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="new-chemical-formula">Chemical Formula</Label>
+                    <Label htmlFor="new-chemical-formula">Chemical Formula (optional)</Label>
                     <Input
                       id="new-chemical-formula"
                       value={createForm.chemicalFormula}

@@ -4,6 +4,13 @@ import { Header } from '@/components/layout/Header';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
@@ -20,10 +27,15 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { authAPI } from '@/lib/api';
+import { useAuth } from '@/contexts/AuthContext';
+import type { LogEntryIntervalType } from '@/types';
 
 export default function SettingsPage() {
   const navigate = useNavigate();
+  const { refreshSessionSettings } = useAuth();
   const [sessionTimeoutMinutes, setSessionTimeoutMinutes] = useState<number | ''>('');
+  const [logEntryInterval, setLogEntryInterval] = useState<LogEntryIntervalType>('hourly');
+  const [shiftDurationHours, setShiftDurationHours] = useState<number>(8);
   const [isSessionLoading, setIsSessionLoading] = useState(false);
 
   useEffect(() => {
@@ -33,6 +45,12 @@ export default function SettingsPage() {
         const data = await authAPI.getSessionSettings();
         if (typeof data.auto_logout_minutes === 'number') {
           setSessionTimeoutMinutes(data.auto_logout_minutes);
+        }
+        if (data.log_entry_interval === 'hourly' || data.log_entry_interval === 'shift' || data.log_entry_interval === 'daily') {
+          setLogEntryInterval(data.log_entry_interval);
+        }
+        if (typeof data.shift_duration_hours === 'number' && data.shift_duration_hours >= 1 && data.shift_duration_hours <= 24) {
+          setShiftDurationHours(data.shift_duration_hours);
         }
       } catch (error: any) {
         console.error('Failed to load session settings:', error);
@@ -47,15 +65,32 @@ export default function SettingsPage() {
 
   const handleSave = async () => {
     try {
+      const payload: {
+        auto_logout_minutes?: number;
+        log_entry_interval?: LogEntryIntervalType;
+        shift_duration_hours?: number;
+      } = {};
+
       if (sessionTimeoutMinutes !== '') {
         const minutes = Number(sessionTimeoutMinutes);
         if (!Number.isFinite(minutes) || minutes <= 0) {
           toast.error('Please enter a valid session timeout (minutes).');
           return;
         }
-        await authAPI.updateSessionSettings({ auto_logout_minutes: minutes });
+        payload.auto_logout_minutes = minutes;
       }
 
+      payload.log_entry_interval = logEntryInterval;
+      if (logEntryInterval === 'shift') {
+        if (shiftDurationHours < 1 || shiftDurationHours > 24) {
+          toast.error('Shift duration must be between 1 and 24 hours.');
+          return;
+        }
+        payload.shift_duration_hours = shiftDurationHours;
+      }
+
+      await authAPI.updateSessionSettings(payload);
+      await refreshSessionSettings();
       toast.success('Settings saved successfully');
     } catch (error: any) {
       console.error('Failed to save settings:', error);
@@ -261,33 +296,56 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        {/* Logging Intervals */}
+        {/* Log book entry interval – common for all log monitors */}
         <div className="bg-card rounded-lg border border-border p-6">
           <div className="flex items-center gap-3 mb-6">
             <div className="w-10 h-10 rounded-lg bg-accent/10 flex items-center justify-center">
               <Clock className="w-5 h-5 text-accent" />
             </div>
             <div>
-              <h3 className="text-lg font-semibold text-foreground">Logging Intervals</h3>
-              <p className="text-sm text-muted-foreground">Configure mandatory entry schedules</p>
+              <h3 className="text-lg font-semibold text-foreground">Log Book Entry Interval</h3>
+              <p className="text-sm text-muted-foreground">Configure mandatory entry schedule for all log monitors (chiller, boiler, filter, chemical, etc.)</p>
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-4">
             <div className="space-y-2">
-              <Label>E Log Book Interval</Label>
-              <div className="flex items-center gap-2">
-                <Input type="number" defaultValue="2" className="w-20" />
-                <span className="text-sm text-muted-foreground">hours</span>
-              </div>
+              <Label>Entry interval</Label>
+              <Select
+                value={logEntryInterval}
+                onValueChange={(v) => setLogEntryInterval(v as LogEntryIntervalType)}
+                disabled={isSessionLoading}
+              >
+                <SelectTrigger className="w-full max-w-xs">
+                  <SelectValue placeholder="Select interval" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="hourly">Hourly</SelectItem>
+                  <SelectItem value="shift">Shift</SelectItem>
+                  <SelectItem value="daily">Daily</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
-            <div className="space-y-2">
-              <Label>Chemical Log Interval</Label>
-              <div className="flex items-center gap-2">
-                <Input type="number" defaultValue="4" className="w-20" />
-                <span className="text-sm text-muted-foreground">hours</span>
+            {logEntryInterval === 'shift' && (
+              <div className="space-y-2">
+                <Label>Shift duration (hours)</Label>
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="number"
+                    min={1}
+                    max={24}
+                    className="w-20"
+                    value={shiftDurationHours}
+                    disabled={isSessionLoading}
+                    onChange={(e) => {
+                      const v = Number(e.target.value);
+                      if (!Number.isNaN(v)) setShiftDurationHours(Math.min(24, Math.max(1, v)));
+                    }}
+                  />
+                  <span className="text-sm text-muted-foreground">hours</span>
+                </div>
               </div>
-            </div>
+            )}
           </div>
         </div>
 

@@ -23,10 +23,10 @@ import {
 import { useAuth } from "@/contexts/AuthContext";
 import { format } from "date-fns";
 import { toast } from "sonner";
-import { boilerLogAPI } from "@/lib/api";
+import { boilerLogAPI, equipmentAPI, equipmentCategoryAPI } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Link } from "react-router-dom";
-import { Clock, Thermometer, Gauge, Save, Filter, X, Plus, Trash2, CheckCircle, XCircle, Edit, History } from "lucide-react";
+import { Clock, Thermometer, Gauge, Droplets, Package, Save, Filter, X, Plus, Trash2, CheckCircle, XCircle, Edit, History, Eye } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   AlertDialog,
@@ -38,6 +38,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { EntryIntervalBadge } from "@/components/logbook/EntryIntervalBadge";
+import { MissedReadingPopup } from "@/components/logbook/MissedReadingPopup";
+import { getNextDueAndMissed } from "@/lib/missed-reading";
 
 const boilerLimits = {
   feedWaterTemp: { min: 50, unit: "°C", type: "NLT" as const },
@@ -55,6 +58,27 @@ const boilerLimits = {
 };
 
 type BoilerLimitField = keyof typeof boilerLimits;
+
+const BOILER_LIST_FIELDS: { key: keyof BoilerLog; label: string; unit: string }[] = [
+  { key: "feedWaterTemp", label: "Feed Water", unit: "°C" },
+  { key: "oilTemp", label: "Oil", unit: "°C" },
+  { key: "steamTemp", label: "Steam", unit: "°C" },
+  { key: "steamPressure", label: "Pressure", unit: "bar" },
+  { key: "steamFlowLPH", label: "Flow", unit: "LPH" },
+  { key: "foHsdNgDayTankLevel", label: "Day Tank", unit: "Ltr" },
+  { key: "feedWaterTankLevel", label: "Feed Tank", unit: "KL" },
+  { key: "foPreHeaterTemp", label: "Pre Heater", unit: "°C" },
+  { key: "burnerOilPressure", label: "Burner Oil P", unit: "kg/cm²" },
+  { key: "burnerHeaterTemp", label: "Burner Heater", unit: "°C" },
+  { key: "boilerSteamPressure", label: "Boiler Steam P", unit: "kg/cm²" },
+  { key: "stackTemperature", label: "Stack", unit: "°C" },
+  { key: "steamPressureAfterPrv", label: "Steam After PRV", unit: "kg/cm²" },
+  { key: "feedWaterHardnessPpm", label: "Hardness", unit: "PPM" },
+  { key: "feedWaterTdsPpm", label: "TDS", unit: "PPM" },
+  { key: "foHsdNgConsumption", label: "Consumption", unit: "Ltr" },
+  { key: "mobreyFunctioning", label: "Mobrey", unit: "" },
+  { key: "manualBlowdownTime", label: "Blowdown Time", unit: "" },
+];
 
 interface BoilerLog {
   id: string;
@@ -92,8 +116,10 @@ interface BoilerLog {
 }
 
 const BoilerLogBookPage: React.FC = () => {
-  const { user } = useAuth();
+  const { user, sessionSettings } = useAuth();
   const [logs, setLogs] = useState<BoilerLog[]>([]);
+  const [showMissedReadingPopup, setShowMissedReadingPopup] = useState(false);
+  const [missedReadingNextDue, setMissedReadingNextDue] = useState<Date | null>(null);
   const [filteredLogs, setFilteredLogs] = useState<BoilerLog[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -108,7 +134,9 @@ const BoilerLogBookPage: React.FC = () => {
   const [approvalComment, setApprovalComment] = useState("");
   const [editingCommentLogId, setEditingCommentLogId] = useState<string | null>(null);
   const [editingCommentValue, setEditingCommentValue] = useState("");
+  const [readingsModalLogId, setReadingsModalLogId] = useState<string | null>(null);
   const [editingLogId, setEditingLogId] = useState<string | null>(null);
+  const [equipmentOptions, setEquipmentOptions] = useState<{ id: string; equipment_number: string; name: string }[]>([]);
 
   const [formData, setFormData] = useState({
     equipmentId: "",
@@ -186,6 +214,27 @@ const BoilerLogBookPage: React.FC = () => {
     toTime: "",
   });
 
+  useEffect(() => {
+    (async () => {
+      try {
+        const categories = (await equipmentCategoryAPI.list()) as { id: string; name: string }[];
+        const boilerCategory = categories?.find((c) => {
+          const n = (c.name || "").toLowerCase().trim();
+          return n === "boiler" || n === "boilers";
+        });
+        const list = boilerCategory
+          ? await equipmentAPI.list({ category: boilerCategory.id })
+          : await equipmentAPI.list();
+        const options = (list || [])
+          .filter((e: any) => e?.is_active !== false)
+          .map((e: any) => ({ id: e.id, equipment_number: e.equipment_number, name: e.name || "" }));
+        setEquipmentOptions(options);
+      } catch (error) {
+        console.error("Failed to load boiler equipment list", error);
+      }
+    })();
+  }, []);
+
   const refreshLogs = async () => {
     try {
       setIsLoading(true);
@@ -246,6 +295,26 @@ const BoilerLogBookPage: React.FC = () => {
   useEffect(() => {
     refreshLogs();
   }, []);
+
+  useEffect(() => {
+    if (!sessionSettings?.log_entry_interval || logs.length === 0) return;
+    const interval = sessionSettings.log_entry_interval as "hourly" | "shift" | "daily";
+    const shiftHours = sessionSettings.shift_duration_hours ?? 8;
+    const latest = logs[0];
+    const lastTs = latest?.timestamp
+      ? latest.timestamp instanceof Date
+        ? latest.timestamp
+        : new Date(latest.timestamp)
+      : null;
+    const { nextDue, isMissed } = getNextDueAndMissed(lastTs, interval, shiftHours);
+    if (isMissed && nextDue) {
+      setMissedReadingNextDue(nextDue);
+      setShowMissedReadingPopup(true);
+    } else {
+      setShowMissedReadingPopup(false);
+      setMissedReadingNextDue(null);
+    }
+  }, [logs, sessionSettings]);
 
   const uniqueCheckedBy = useMemo(() => {
     if (!logs.length) return [];
@@ -559,6 +628,20 @@ const BoilerLogBookPage: React.FC = () => {
         title="Boiler Log Book"
         subtitle="Manage boiler log entries"
       />
+      <div className="px-4 pt-0">
+        <EntryIntervalBadge />
+      </div>
+      {showMissedReadingPopup && missedReadingNextDue && (
+        <MissedReadingPopup
+          open={showMissedReadingPopup}
+          onClose={() => {
+            setShowMissedReadingPopup(false);
+            setMissedReadingNextDue(null);
+          }}
+          logTypeLabel="Boiler"
+          nextDue={missedReadingNextDue}
+        />
+      )}
       <main className="p-4 space-y-4">
         <div className="flex justify-between items-center">
           <div>
@@ -748,14 +831,22 @@ const BoilerLogBookPage: React.FC = () => {
                     </div>
                     <div className="space-y-2">
                       <Label>Equipment ID *</Label>
-                      <Input
-                        type="text"
+                      <Select
                         value={formData.equipmentId}
-                        onChange={(e) =>
-                          setFormData({ ...formData, equipmentId: e.target.value })
-                        }
-                        placeholder="e.g., BL-001"
-                      />
+                        onValueChange={(v) => setFormData({ ...formData, equipmentId: v })}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select equipment" />
+                        </SelectTrigger>
+                        <SelectContent className="max-h-60 overflow-y-auto">
+                          {equipmentOptions.map((eq) => (
+                            <SelectItem key={eq.id} value={eq.equipment_number}>
+                              {eq.equipment_number}
+                              {eq.name ? ` – ${eq.name}` : ""}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </div>
                   </div>
 
@@ -1022,7 +1113,7 @@ const BoilerLogBookPage: React.FC = () => {
             <table className="min-w-full text-sm" style={{ minWidth: "1200px" }}>
               <thead className="bg-muted/50">
                 <tr>
-                  <th className="px-3 py-2 text-left w-12">
+                  <th className="px-4 py-2 text-left font-semibold w-12">
                     {pendingDraftIds.length > 0 && user?.role !== "operator" && (
                       <Checkbox
                         checked={allPendingSelected}
@@ -1031,15 +1122,15 @@ const BoilerLogBookPage: React.FC = () => {
                       />
                     )}
                   </th>
-                  <th className="px-3 py-2 text-left">Date</th>
-                  <th className="px-3 py-2 text-left">Time</th>
-                  <th className="px-3 py-2 text-left">Equipment</th>
-                  <th className="px-3 py-2 text-left">Readings</th>
-                  <th className="px-3 py-2 text-left">Remarks</th>
-                  <th className="px-3 py-2 text-left">Comment</th>
-                  <th className="px-3 py-2 text-left">Checked By</th>
-                  <th className="px-3 py-2 text-left">Status</th>
-                  <th className="px-3 py-2 text-left">Actions</th>
+                  <th className="px-4 py-2 text-left font-semibold w-[110px]">Date</th>
+                  <th className="px-4 py-2 text-left font-semibold w-[100px]">Time</th>
+                  <th className="px-4 py-2 text-left font-semibold w-[150px]">Equipment</th>
+                  <th className="px-4 py-2 text-left font-semibold min-w-[140px]">Readings</th>
+                  <th className="px-4 py-2 text-center font-semibold min-w-[140px]">Remarks</th>
+                  <th className="px-4 py-2 text-left font-semibold min-w-[170px]">Comment</th>
+                  <th className="px-4 py-2 text-left font-semibold w-[140px]">Checked By</th>
+                  <th className="px-4 py-2 text-left font-semibold w-[110px]">Status</th>
+                  <th className="px-4 py-2 text-left font-semibold w-[140px]">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -1054,8 +1145,8 @@ const BoilerLogBookPage: React.FC = () => {
                   </tr>
                 )}
                 {filteredLogs.map((log) => (
-                  <tr key={log.id} className="border-t">
-                    <td className="px-3 py-2 align-middle">
+                  <tr key={log.id} className="hover:bg-muted/30 transition-colors">
+                    <td className="px-4 py-3 align-middle">
                       {(log.status === "pending" || log.status === "draft" || log.status === "pending_secondary_approval") && user?.role !== "operator" ? (
                         <Checkbox
                           checked={selectedLogIds.includes(log.id)}
@@ -1064,63 +1155,33 @@ const BoilerLogBookPage: React.FC = () => {
                         />
                       ) : null}
                     </td>
-                    <td className="px-3 py-2">{log.date}</td>
-                    <td className="px-3 py-2">{log.time}</td>
-                    <td className="px-3 py-2">{log.equipmentId}</td>
-                    <td className="px-3 py-2">
-                      <div className="space-y-1 text-sm">
-                        <div>
-                          <span className="font-semibold">Feed:</span>{" "}
-                          <span className={cn(isValueOutOfLimit(log, "feedWaterTemp", log.feedWaterTemp) && "text-destructive font-bold")}>
-                            {log.feedWaterTemp}°C
-                          </span>
-                        </div>
-                        <div>
-                          <span className="font-semibold">Oil:</span>{" "}
-                          <span className={cn(isValueOutOfLimit(log, "oilTemp", log.oilTemp) && "text-destructive font-bold")}>
-                            {log.oilTemp}°C
-                          </span>
-                        </div>
-                        <div>
-                          <span className="font-semibold">Steam:</span>{" "}
-                          <span className={cn(isValueOutOfLimit(log, "steamTemp", log.steamTemp) && "text-destructive font-bold")}>
-                            {log.steamTemp}
-                          </span>
-                          °C @{" "}
-                          <span className={cn(isValueOutOfLimit(log, "steamPressure", log.steamPressure) && "text-destructive font-bold")}>
-                            {log.steamPressure}
-                          </span>{" "}
-                          bar
-                        </div>
-                        {log.steamFlowLPH !== undefined && (
-                          <div>
-                            <span className="font-semibold">Flow:</span> {log.steamFlowLPH} LPH
-                          </div>
-                        )}
-                        {log.foHsdNgDayTankLevel !== undefined && (
-                          <div>
-                            <span className="font-semibold">Day Tank:</span> {log.foHsdNgDayTankLevel} Ltr
-                          </div>
-                        )}
-                        {log.stackTemperature !== undefined && (
-                          <div>
-                            <span className="font-semibold">Stack:</span>{" "}
-                            <span className={cn(isValueOutOfLimit(log, "stackTemperature", log.stackTemperature) && "text-destructive font-bold")}>
-                              {log.stackTemperature}°C
-                            </span>
-                          </div>
-                        )}
-                        {log.mobreyFunctioning && (
-                          <div>
-                            <span className="font-semibold">Mobrey:</span> {log.mobreyFunctioning}
-                          </div>
-                        )}
-                      </div>
+                    <td className="px-4 py-3">
+                      <span className="text-sm text-foreground">{log.date}</span>
                     </td>
-                    <td className="px-3 py-2 max-w-xs">
-                      <p className="line-clamp-3 text-muted-foreground">{log.remarks || "-"}</p>
+                    <td className="px-4 py-3">
+                      <span className="text-sm text-foreground">{log.time}</span>
                     </td>
-                    <td className="px-3 py-2 align-middle">
+                    <td className="px-4 py-3">
+                      <span className="text-sm font-medium text-foreground">{log.equipmentId}</span>
+                    </td>
+                    <td className="px-4 py-3 align-middle">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="text-xs"
+                        onClick={() => setReadingsModalLogId(log.id)}
+                      >
+                        <Eye className="w-3.5 h-3.5 mr-1.5" />
+                        View Readings
+                      </Button>
+                    </td>
+                    <td className="px-4 py-3 max-w-xs min-w-[170px] align-middle text-center">
+                      <p className="text-xs text-muted-foreground whitespace-pre-wrap leading-snug line-clamp-3 inline-block text-left">
+                        {log.remarks || "-"}
+                      </p>
+                    </td>
+                    <td className="px-4 py-2 align-middle">
                       {editingCommentLogId === log.id ? (
                         <Textarea
                           className="min-h-[60px] min-w-[180px] text-sm py-2"
@@ -1145,8 +1206,10 @@ const BoilerLogBookPage: React.FC = () => {
                         </div>
                       )}
                     </td>
-                    <td className="px-3 py-2">{log.checkedBy}</td>
-                    <td className="px-3 py-2">
+                    <td className="px-4 py-3">
+                      <span className="text-sm text-foreground">{log.checkedBy}</span>
+                    </td>
+                    <td className="px-4 py-3">
                       <div className="flex flex-wrap items-center gap-2">
                         <Badge
                           variant={
@@ -1185,7 +1248,7 @@ const BoilerLogBookPage: React.FC = () => {
                         )}
                       </div>
                     </td>
-                    <td className="px-3 py-2">
+                    <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
                         {user?.role !== "operator" && (
                           <>
@@ -1297,6 +1360,83 @@ const BoilerLogBookPage: React.FC = () => {
           </div>
         </div>
       </main>
+      {/* View Readings modal */}
+      <Dialog open={!!readingsModalLogId} onOpenChange={(open) => !open && setReadingsModalLogId(null)}>
+        <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden">
+          <DialogHeader className="px-6 pt-6 pb-4 border-b bg-muted/30">
+            <DialogTitle className="text-lg font-semibold">Readings</DialogTitle>
+            <DialogDescription className="mt-1.5">
+              {readingsModalLogId && (() => {
+                const log = filteredLogs.find((l) => l.id === readingsModalLogId);
+                return log ? (
+                  <span className="inline-flex items-center gap-2 rounded-full bg-background border px-3 py-1.5 text-xs font-medium text-muted-foreground shadow-sm">
+                    <Clock className="h-3.5 w-3.5" />
+                    {log.equipmentId} · {log.date} {log.time}
+                  </span>
+                ) : null;
+              })()}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="overflow-y-auto flex-1 min-h-0 px-6 py-4">
+            {readingsModalLogId && (() => {
+              const log = filteredLogs.find((l) => l.id === readingsModalLogId);
+              if (!log) return null;
+              const logRecord = log as Record<string, unknown>;
+              const renderItem = (label: string, value: string | number, isOut?: boolean) => (
+                <div
+                  key={label}
+                  className={cn(
+                    "flex justify-between items-center gap-4 py-2.5 px-3 rounded-lg text-sm transition-colors",
+                    isOut ? "bg-destructive/10 text-destructive font-semibold" : "hover:bg-muted/40"
+                  )}
+                >
+                  <span className="font-medium text-muted-foreground">{label}</span>
+                  <span className={cn("tabular-nums", isOut && "font-semibold")}>{value}</span>
+                </div>
+              );
+              const tempKeys = ["feedWaterTemp", "oilTemp", "steamTemp", "foPreHeaterTemp", "burnerHeaterTemp", "stackTemperature"];
+              const pressureKeys = ["steamPressure", "burnerOilPressure", "boilerSteamPressure", "steamPressureAfterPrv"];
+              const flowKeys = ["steamFlowLPH"];
+              const otherKeys = ["foHsdNgDayTankLevel", "feedWaterTankLevel", "feedWaterHardnessPpm", "feedWaterTdsPpm", "foHsdNgConsumption", "mobreyFunctioning", "manualBlowdownTime"];
+              const SectionCard = ({ title, icon: Icon, keys }: { title: string; icon: React.ElementType; keys: string[] }) => {
+                const items = BOILER_LIST_FIELDS.filter((f) => keys.includes(f.key)).map(({ key, label, unit }) => {
+                  const value = logRecord[key];
+                  if (value === undefined || value === null) return null;
+                  const numVal = typeof value === "number" ? value : undefined;
+                  const isOut = numVal !== undefined && isValueOutOfLimit(log, key as BoilerLimitField, numVal);
+                  const display = unit ? `${value} ${unit}`.trim() : String(value);
+                  return renderItem(label, display, isOut);
+                }).filter(Boolean);
+                if (items.length === 0) return null;
+                return (
+                  <div key={title} className="rounded-xl border border-border/60 bg-card p-4 shadow-sm">
+                    <h4 className="flex items-center gap-2 text-sm font-semibold text-foreground mb-3">
+                      <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                        <Icon className="h-4 w-4" />
+                      </span>
+                      {title}
+                    </h4>
+                    <div className="space-y-0.5">{items}</div>
+                  </div>
+                );
+              };
+              return (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <SectionCard title="Temperature" icon={Thermometer} keys={tempKeys} />
+                  <SectionCard title="Pressure" icon={Gauge} keys={pressureKeys} />
+                  <SectionCard title="Flow" icon={Droplets} keys={flowKeys} />
+                  <SectionCard title="Other" icon={Package} keys={otherKeys} />
+                </div>
+              );
+            })()}
+          </div>
+          <div className="flex justify-end gap-2 px-6 py-4 border-t bg-muted/20">
+            <Button type="button" variant="outline" onClick={() => setReadingsModalLogId(null)}>
+              Close
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
       {/* Step 1: Approve confirmation alert */}
       <AlertDialog open={approveConfirmOpen} onOpenChange={setApproveConfirmOpen}>
         <AlertDialogContent>

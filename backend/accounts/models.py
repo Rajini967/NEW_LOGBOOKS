@@ -190,6 +190,13 @@ class UserActivityLog(models.Model):
         return f"{self.user.email} - {self.event_type} at {self.created_at}"
 
 
+class LogEntryInterval(models.TextChoices):
+    """Log book entry interval for all log monitors."""
+    HOURLY = 'hourly', 'Hourly'
+    SHIFT = 'shift', 'Shift'
+    DAILY = 'daily', 'Daily'
+
+
 class SessionSetting(models.Model):
     """
     Singleton-style model storing session configuration such as
@@ -206,6 +213,16 @@ class SessionSetting(models.Model):
         null=True,
         blank=True,
         help_text="Force password change after this many days. Null/blank means no expiry.",
+    )
+    log_entry_interval = models.CharField(
+        max_length=10,
+        choices=LogEntryInterval.choices,
+        default=LogEntryInterval.HOURLY,
+        help_text="Common log book entry interval for all log monitors (chiller, boiler, filter, chemical, etc.).",
+    )
+    shift_duration_hours = models.PositiveIntegerField(
+        default=8,
+        help_text="Shift length in hours; used when log_entry_interval is 'shift' for next-entry-due calculation.",
     )
     updated_at = models.DateTimeField(auto_now=True)
     updated_by = models.ForeignKey(

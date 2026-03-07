@@ -4,6 +4,8 @@ import { MetricCard } from '@/components/dashboard/MetricCard';
 import { RecentActivity } from '@/components/dashboard/RecentActivity';
 import { ConsumptionChart } from '@/components/dashboard/ConsumptionChart';
 import { EquipmentStatus } from '@/components/dashboard/EquipmentStatus';
+import { ScheduledReadingsStatus } from '@/components/dashboard/ScheduledReadingsStatus';
+import { useMissedReadingsByType } from '@/hooks/useMissedReadingsByType';
 import { useAuth } from '@/contexts/AuthContext';
 import { filterScheduleAPI } from '@/lib/api';
 import { toast } from 'sonner';
@@ -26,6 +28,7 @@ import {
 
 export default function DashboardPage() {
   const { user } = useAuth();
+  const { missedByLogType, loading: missedReadingsLoading } = useMissedReadingsByType();
 
   const isOperator = user?.role === 'operator';
   const isCustomer = user?.role === 'customer' || user?.role === 'client';
@@ -163,9 +166,10 @@ export default function DashboardPage() {
           <RecentActivity />
         </div>
 
-        {/* Equipment Status */}
+        {/* Scheduled readings status & Equipment Status */}
         {!isCustomer && (
           <div className="grid lg:grid-cols-1 gap-6">
+            <ScheduledReadingsStatus missedByLogType={missedByLogType} loading={missedReadingsLoading} />
             <EquipmentStatus />
           </div>
         )}

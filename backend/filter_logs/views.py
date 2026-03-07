@@ -5,7 +5,9 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from accounts.models import SessionSetting
 from accounts.permissions import CanApproveReports, CanLogEntries
+from core.log_slot_utils import get_slot_range
 from reports.utils import log_limit_change
 
 from .models import FilterLog
@@ -25,6 +27,21 @@ class FilterLogViewSet(viewsets.ModelViewSet):
         return [IsAuthenticated()]
 
     def perform_create(self, serializer):
+        validated = serializer.validated_data
+        equipment_id = validated.get('equipment_id')
+        timestamp = validated.get('timestamp') or timezone.now()
+        setting = SessionSetting.get_solo()
+        interval = getattr(setting, 'log_entry_interval', None) or 'hourly'
+        shift_hours = getattr(setting, 'shift_duration_hours', None) or 8
+        slot_start, slot_end = get_slot_range(timestamp, interval, shift_hours)
+        if FilterLog.objects.filter(
+            equipment_id=equipment_id,
+            timestamp__gte=slot_start,
+            timestamp__lt=slot_end,
+        ).exists():
+            raise ValidationError(
+                {'detail': ['An entry for this equipment already exists for this time slot.']}
+            )
         serializer.save(
             operator=self.request.user,
             operator_name=self.request.user.name or self.request.user.email,

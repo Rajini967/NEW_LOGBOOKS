@@ -498,7 +498,7 @@ class UserActivityLogSerializer(serializers.ModelSerializer):
 
 class SessionSettingSerializer(serializers.ModelSerializer):
     """
-    Serializer for session/auto-logout configuration.
+    Serializer for session/auto-logout and log entry interval configuration.
     """
 
     class Meta:
@@ -506,24 +506,30 @@ class SessionSettingSerializer(serializers.ModelSerializer):
         fields = [
             "auto_logout_minutes",
             "password_expiry_days",
+            "log_entry_interval",
+            "shift_duration_hours",
             "updated_at",
         ]
         read_only_fields = ["updated_at"]
+
+    def validate(self, attrs):
+        log_entry_interval = attrs.get("log_entry_interval")
+        shift_duration_hours = attrs.get("shift_duration_hours")
+        if log_entry_interval == "shift":
+            hours = shift_duration_hours
+            if hours is None:
+                hours = getattr(self.instance, "shift_duration_hours", 8) if self.instance else 8
+            if hours is not None and (hours < 1 or hours > 24):
+                raise serializers.ValidationError(
+                    {"shift_duration_hours": "Shift duration must be between 1 and 24 hours when interval is 'shift'."}
+                )
+        return attrs
 
     def update(self, instance, validated_data):
         request = self.context.get("request")
         if request and getattr(request, "user", None) and request.user.is_authenticated:
             instance.updated_by = request.user
         return super().update(instance, validated_data)
-        read_only_fields = [
-            "id",
-            "user",
-            "user_email",
-            "user_name",
-            "ip_address",
-            "user_agent",
-            "created_at",
-        ]
 
 
 

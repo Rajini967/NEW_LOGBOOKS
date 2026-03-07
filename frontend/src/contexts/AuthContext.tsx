@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
-import { User, UserRole } from '@/types';
+import { User, UserRole, SessionSettings } from '@/types';
 import { authAPI } from '@/lib/api';
 
 interface AuthContextType {
@@ -9,6 +9,10 @@ interface AuthContextType {
   refreshUser: () => Promise<void>;
   switchRole: (role: UserRole) => void;
   isLoading: boolean;
+  /** Session settings (log entry interval, auto logout, etc.). Loaded after login. */
+  sessionSettings: SessionSettings | null;
+  /** Reload session settings from API (e.g. after Settings page save). */
+  refreshSessionSettings: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -16,18 +20,20 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [autoLogoutMinutes, setAutoLogoutMinutes] = useState<number | null>(null);
+  const [sessionSettings, setSessionSettings] = useState<SessionSettings | null>(null);
 
   const loadSessionSettings = useCallback(async () => {
     try {
       const settings = await authAPI.getSessionSettings();
-      if (typeof settings.auto_logout_minutes === 'number') {
-        setAutoLogoutMinutes(settings.auto_logout_minutes);
-      }
+      setSessionSettings(settings as SessionSettings);
     } catch (error) {
       console.error('Failed to load session settings:', error);
     }
   }, []);
+
+  const refreshSessionSettings = useCallback(async () => {
+    await loadSessionSettings();
+  }, [loadSessionSettings]);
 
   // Check if user is already logged in on mount
   useEffect(() => {
@@ -100,6 +106,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const autoLogoutMinutes = sessionSettings?.auto_logout_minutes ?? null;
+
   // Inactivity-based auto logout using configured timeout
   useEffect(() => {
     if (!user || !autoLogoutMinutes || autoLogoutMinutes <= 0) {
@@ -151,7 +159,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [user]);
 
   return (
-    <AuthContext.Provider value={{ user, login, logout, refreshUser, switchRole, isLoading }}>
+    <AuthContext.Provider value={{ user, login, logout, refreshUser, switchRole, isLoading, sessionSettings, refreshSessionSettings }}>
       {children}
     </AuthContext.Provider>
   );

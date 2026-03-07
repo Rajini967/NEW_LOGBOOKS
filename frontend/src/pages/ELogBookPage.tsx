@@ -33,17 +33,20 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Link } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
-import { Plus, Thermometer, Gauge, Droplets, Save, Clock, Trash2, Filter, X, CheckCircle, XCircle, Edit, History } from 'lucide-react';
+import { Plus, Thermometer, Gauge, Droplets, Zap, Package, Save, Clock, Trash2, Filter, X, CheckCircle, XCircle, Edit, History, Eye } from 'lucide-react';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
-import { logbookAPI, chemicalPrepAPI, chillerLogAPI, boilerLogAPI, compressorLogAPI, chemicalMasterAPI } from '@/lib/api';
+import { logbookAPI, chemicalPrepAPI, chillerLogAPI, boilerLogAPI, compressorLogAPI, chemicalMasterAPI, equipmentAPI, equipmentCategoryAPI } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { LogbookSchema } from '@/types/logbook-config';
 import { FieldWithValidation } from '@/components/logbook/FieldWithValidation';
+import { EntryIntervalBadge } from '@/components/logbook/EntryIntervalBadge';
+import { MissedReadingPopup } from '@/components/logbook/MissedReadingPopup';
+import { getNextDueAndMissed } from '@/lib/missed-reading';
 
 interface ELogBook {
   id: string;
-  equipmentType: 'chiller';
+  equipmentType: 'chiller' | 'boiler' | 'compressor' | 'chemical' | (string & {});
   equipmentId: string;
   schemaId?: string; // For custom logbooks
   customFields?: Record<string, any>; // For custom logbook field values
@@ -187,18 +190,74 @@ const equipmentLimits = {
   },
 };
 
-const equipmentList = {
-  chiller: ['CH-001', 'CH-002', 'CH-003'],
-  boiler: ['BL-001', 'BL-002'],
-  compressor: ['AC-001', 'AC-002', 'AC-003'],
-  chemical: ['EN0001-MGF', 'EN0002-RO', 'EN0003-PW', 'EN0004-Other', 'EN0005-Other'],
-};
+const CHILLER_LIST_FIELDS: { key: keyof ELogBook; label: string; unit: string }[] = [
+  { key: 'chillerSupplyTemp', label: 'Supply', unit: '°C' },
+  { key: 'chillerReturnTemp', label: 'Return', unit: '°C' },
+  { key: 'coolingTowerSupplyTemp', label: 'CT Supply', unit: '°C' },
+  { key: 'coolingTowerReturnTemp', label: 'CT Return', unit: '°C' },
+  { key: 'ctDifferentialTemp', label: 'CT Diff', unit: '°C' },
+  { key: 'chillerWaterInletPressure', label: 'Pressure', unit: 'bar' },
+  { key: 'chillerMakeupWaterFlow', label: 'Flow', unit: 'LPH' },
+  { key: 'evapWaterInletPressure', label: 'Evap Inlet P', unit: 'kg/cm²' },
+  { key: 'evapWaterOutletPressure', label: 'Evap Outlet P', unit: 'kg/cm²' },
+  { key: 'evapEnteringWaterTemp', label: 'Evap Enter T', unit: '°C' },
+  { key: 'evapLeavingWaterTemp', label: 'Evap Leave T', unit: '°C' },
+  { key: 'evapApproachTemp', label: 'Evap Approach', unit: '°C' },
+  { key: 'condWaterInletPressure', label: 'Cond Inlet P', unit: 'kg/cm²' },
+  { key: 'condWaterOutletPressure', label: 'Cond Outlet P', unit: 'kg/cm²' },
+  { key: 'condEnteringWaterTemp', label: 'Cond Enter T', unit: '°C' },
+  { key: 'condLeavingWaterTemp', label: 'Cond Leave T', unit: '°C' },
+  { key: 'condApproachTemp', label: 'Cond Approach', unit: '°C' },
+  { key: 'chillerControlSignal', label: 'Control', unit: '%' },
+  { key: 'avgMotorCurrent', label: 'Motor Current', unit: 'A' },
+  { key: 'compressorRunningTimeMin', label: 'Comp Run', unit: 'min' },
+  { key: 'starterEnergyKwh', label: 'Energy', unit: 'kWh' },
+  { key: 'coolingTowerBlowdownTimeMin', label: 'CT Blowdown', unit: 'min' },
+  { key: 'coolingTowerChemicalQtyPerDay', label: 'CT Chemical', unit: 'Kg' },
+  { key: 'chilledWaterPumpChemicalQtyKg', label: 'CHW Pump Chemical', unit: 'Kg' },
+  { key: 'coolingTowerFanChemicalQtyKg', label: 'CT Fan Chemical', unit: 'Kg' },
+];
+const BOILER_LIST_FIELDS: { key: string; label: string; unit: string }[] = [
+  { key: 'feedWaterTemp', label: 'Feed Water', unit: '°C' },
+  { key: 'oilTemp', label: 'Oil', unit: '°C' },
+  { key: 'steamTemp', label: 'Steam', unit: '°C' },
+  { key: 'steamPressure', label: 'Pressure', unit: 'bar' },
+  { key: 'steamFlowLPH', label: 'Flow', unit: 'LPH' },
+  { key: 'foHsdNgDayTankLevel', label: 'Day Tank', unit: 'Ltr' },
+  { key: 'feedWaterTankLevel', label: 'Feed Tank', unit: 'KL' },
+  { key: 'foPreHeaterTemp', label: 'Pre Heater', unit: '°C' },
+  { key: 'burnerOilPressure', label: 'Burner Oil P', unit: 'kg/cm²' },
+  { key: 'burnerHeaterTemp', label: 'Burner Heater', unit: '°C' },
+  { key: 'boilerSteamPressure', label: 'Boiler Steam P', unit: 'kg/cm²' },
+  { key: 'stackTemperature', label: 'Stack', unit: '°C' },
+  { key: 'steamPressureAfterPrv', label: 'Steam After PRV', unit: 'kg/cm²' },
+  { key: 'feedWaterHardnessPpm', label: 'Hardness', unit: 'PPM' },
+  { key: 'feedWaterTdsPpm', label: 'TDS', unit: 'PPM' },
+  { key: 'foHsdNgConsumption', label: 'Consumption', unit: 'Ltr' },
+  { key: 'mobreyFunctioning', label: 'Mobrey', unit: '' },
+  { key: 'manualBlowdownTime', label: 'Blowdown Time', unit: '' },
+];
+const COMPRESSOR_LIST_FIELDS: { key: string; label: string; unit: string }[] = [
+  { key: 'compressorSupplyTemp', label: 'Supply', unit: '°C' },
+  { key: 'compressorReturnTemp', label: 'Return', unit: '°C' },
+  { key: 'compressorPressure', label: 'Pressure', unit: 'bar' },
+  { key: 'compressorFlow', label: 'Flow', unit: 'L/min' },
+];
+
+// Chemical equipment name options (plan: Equipment ID dropdown is for chiller/boiler/compressor/filter; chemical uses equipment_name, kept as static fallback)
+const CHEMICAL_EQUIPMENT_NAMES = ['EN0001-MGF', 'EN0002-RO', 'EN0003-PW', 'EN0004-Other', 'EN0005-Other'];
+
+interface EquipmentOption {
+  id: string;
+  equipment_number: string;
+  name: string;
+}
 
 export default function ELogBookPage() {
   // This page is now dedicated to the Chiller log book only.
   // Boiler and Chemical have their own independent pages.
   const equipmentType: 'chiller' = 'chiller';
-  const { user } = useAuth();
+  const { user, sessionSettings } = useAuth();
   const [logbookSchemas, setLogbookSchemas] = useState<LogbookSchema[]>([]);
   const [selectedSchema, setSelectedSchema] = useState<LogbookSchema | null>(null);
   const [customFormData, setCustomFormData] = useState<Record<string, any>>({});
@@ -207,8 +266,13 @@ export default function ELogBookPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [chemicalOptions, setChemicalOptions] = useState<{ id: string; label: string }[]>([]);
+  const [equipmentByType, setEquipmentByType] = useState<Record<'chiller' | 'boiler' | 'compressor', EquipmentOption[]>>({
+    chiller: [],
+    boiler: [],
+    compressor: [],
+  });
   const [formData, setFormData] = useState({
-    equipmentType: 'chiller' as 'chiller',
+    equipmentType: 'chiller' as 'chiller' | 'boiler' | 'compressor' | 'chemical',
     equipmentId: '',
     // Chiller fields
     chillerSupplyTemp: '',
@@ -292,12 +356,15 @@ export default function ELogBookPage() {
   const [rejectConfirmOpen, setRejectConfirmOpen] = useState(false);
   const [rejectCommentOpen, setRejectCommentOpen] = useState(false);
   const [rejectComment, setRejectComment] = useState('');
+  const [showMissedReadingPopup, setShowMissedReadingPopup] = useState(false);
+  const [missedReadingNextDue, setMissedReadingNextDue] = useState<Date | null>(null);
   const [selectedLogId, setSelectedLogId] = useState<string | null>(null);
   const [selectedLogIds, setSelectedLogIds] = useState<string[]>([]);
   const [approvalComment, setApprovalComment] = useState('');
   const [editingCommentLogId, setEditingCommentLogId] = useState<string | null>(null);
   const [editingCommentValue, setEditingCommentValue] = useState('');
   const [editingLogId, setEditingLogId] = useState<string | null>(null);
+  const [readingsModalLogId, setReadingsModalLogId] = useState<string | null>(null);
   const [filters, setFilters] = useState({
     fromDate: '',
     toDate: '',
@@ -360,6 +427,38 @@ export default function ELogBookPage() {
     })();
   }, []);
 
+  // Load equipment from master by category for Equipment ID dropdown (chiller, boiler, compressor)
+  useEffect(() => {
+    (async () => {
+      try {
+        const categories = (await equipmentCategoryAPI.list()) as { id: string; name: string }[];
+        const typeToCategory: Record<string, string> = {};
+        for (const c of categories) {
+          const name = (c.name || '').toLowerCase().trim();
+          if (name === 'chiller' || name === 'chillers') typeToCategory.chiller = c.id;
+          else if (name === 'boiler' || name === 'boilers') typeToCategory.boiler = c.id;
+          else if (name === 'compressor' || name === 'compressors') typeToCategory.compressor = c.id;
+        }
+        const [chillerEq, boilerEq, compressorEq] = await Promise.all([
+          typeToCategory.chiller ? equipmentAPI.list({ category: typeToCategory.chiller }) : Promise.resolve([]),
+          typeToCategory.boiler ? equipmentAPI.list({ category: typeToCategory.boiler }) : Promise.resolve([]),
+          typeToCategory.compressor ? equipmentAPI.list({ category: typeToCategory.compressor }) : Promise.resolve([]),
+        ]);
+        const map = (arr: any[]) =>
+          (arr || [])
+            .filter((e) => e?.is_active !== false)
+            .map((e) => ({ id: e.id, equipment_number: e.equipment_number, name: e.name || '' }));
+        setEquipmentByType({
+          chiller: map(chillerEq as any[]),
+          boiler: map(boilerEq as any[]),
+          compressor: map(compressorEq as any[]),
+        });
+      } catch (error) {
+        console.error('Failed to load equipment for log book dropdown', error);
+      }
+    })();
+  }, []);
+
   // Update selected schema when equipment type changes
   useEffect(() => {
     if (formData.equipmentType?.startsWith('custom_')) {
@@ -373,6 +472,23 @@ export default function ELogBookPage() {
       setCustomFormData({});
     }
   }, [formData.equipmentType, logbookSchemas]);
+
+  // Missed scheduled reading popup: when logs and session settings are ready, check if next due has passed
+  useEffect(() => {
+    if (!sessionSettings?.log_entry_interval || logs.length === 0) return;
+    const interval = sessionSettings.log_entry_interval as 'hourly' | 'shift' | 'daily';
+    const shiftHours = sessionSettings.shift_duration_hours ?? 8;
+    const latest = logs[0];
+    const lastTs = latest?.timestamp ? (latest.timestamp instanceof Date ? latest.timestamp : new Date(latest.timestamp)) : null;
+    const { nextDue, isMissed } = getNextDueAndMissed(lastTs, interval, shiftHours);
+    if (isMissed && nextDue) {
+      setMissedReadingNextDue(nextDue);
+      setShowMissedReadingPopup(true);
+    } else {
+      setShowMissedReadingPopup(false);
+      setMissedReadingNextDue(null);
+    }
+  }, [logs, sessionSettings]);
 
   // Refresh logs from API
   const refreshLogs = async () => {
@@ -819,7 +935,7 @@ export default function ELogBookPage() {
       
       // Reset form
       setFormData({
-        equipmentType: '',
+        equipmentType: 'chiller',
         equipmentId: '',
         chillerSupplyTemp: '',
         chillerReturnTemp: '',
@@ -878,6 +994,8 @@ export default function ELogBookPage() {
         waterQty: '',
         chemicalQty: '',
         remarks: '',
+        date: '',
+        time: '',
       });
       setCustomFormData({});
       setSelectedSchema(null);
@@ -1223,6 +1341,18 @@ export default function ELogBookPage() {
         title={getTitle()}
         subtitle={getSubtitle()}
       />
+      <div className="px-6 pt-0">
+        <EntryIntervalBadge />
+      </div>
+
+      {showMissedReadingPopup && missedReadingNextDue && (
+        <MissedReadingPopup
+          open={showMissedReadingPopup}
+          onClose={() => { setShowMissedReadingPopup(false); setMissedReadingNextDue(null); }}
+          logTypeLabel="Chiller"
+          nextDue={missedReadingNextDue}
+        />
+      )}
 
       <div className="p-6 space-y-6">
         {/* Actions Bar */}
@@ -1438,7 +1568,7 @@ export default function ELogBookPage() {
                       onValueChange={(v) => {
                         setFormData({
                           ...formData,
-                          equipmentType: v,
+                          equipmentType: v as 'chiller' | 'boiler' | 'compressor' | 'chemical',
                           equipmentId: '',
                           // Reset all fields when type changes
                           chillerSupplyTemp: '',
@@ -1507,6 +1637,7 @@ export default function ELogBookPage() {
                         <Select
                           value={formData.equipmentId}
                           onValueChange={(v) => {
+                            if (v === '__no_equipment__') return;
                             setFormData((prev) => ({
                               ...prev,
                               equipmentId: v,
@@ -1537,7 +1668,9 @@ export default function ELogBookPage() {
                                   coolingTowerBlowoffValveStatus:
                                     firstLog.coolingTowerBlowoffValveStatus || '',
                                   coolingTowerBlowdownTimeMin:
-                                    firstLog.coolingTowerBlowdownTimeMin || '',
+                                    firstLog.coolingTowerBlowdownTimeMin != null
+                                      ? String(firstLog.coolingTowerBlowdownTimeMin)
+                                      : '',
                                   coolingTowerChemicalName:
                                     firstLog.coolingTowerChemicalName || '',
                                   coolingTowerChemicalQtyPerDay:
@@ -1568,10 +1701,24 @@ export default function ELogBookPage() {
                         <SelectTrigger>
                           <SelectValue placeholder="Select ID" />
                         </SelectTrigger>
-                        <SelectContent>
-                          {formData.equipmentType && equipmentList[formData.equipmentType as keyof typeof equipmentList]?.map((id) => (
-                            <SelectItem key={id} value={id}>{id}</SelectItem>
-                          ))}
+                        <SelectContent className="z-[100]" position="popper">
+                          {formData.equipmentType &&
+                            (() => {
+                              const options = equipmentByType[formData.equipmentType as keyof typeof equipmentByType] ?? [];
+                              if (options.length === 0) {
+                                return (
+                                  <SelectItem value="__no_equipment__" disabled className="text-muted-foreground">
+                                    No equipment found. Add in Equipment Master.
+                                  </SelectItem>
+                                );
+                              }
+                              return options.map((eq) => (
+                                <SelectItem key={eq.id} value={eq.equipment_number}>
+                                  {eq.equipment_number}
+                                  {eq.name ? ` – ${eq.name}` : ''}
+                                </SelectItem>
+                              ));
+                            })()}
                         </SelectContent>
                       </Select>
                     </div>
@@ -2830,7 +2977,11 @@ export default function ELogBookPage() {
                           value={formData.feedWaterTemp}
                           onChange={(e) => setFormData({ ...formData, feedWaterTemp: e.target.value })}
                           placeholder="e.g., 50"
+                          className={cn(isFormValueOutOfLimit('boiler', 'feedWaterTemp' as keyof (typeof equipmentLimits)['chiller'], formData.feedWaterTemp) && 'border-destructive bg-destructive/5 text-destructive font-semibold')}
                         />
+                        {isFormValueOutOfLimit('boiler', 'feedWaterTemp' as keyof (typeof equipmentLimits)['chiller'], formData.feedWaterTemp) && (
+                          <p className="text-xs text-destructive mt-1">{getLimitErrorMessage('boiler', 'feedWaterTemp' as keyof (typeof equipmentLimits)['chiller'])}</p>
+                        )}
                       </div>
                       <div className="space-y-2">
                         <Label className="flex items-center gap-2">
@@ -2843,7 +2994,11 @@ export default function ELogBookPage() {
                           value={formData.oilTemp}
                           onChange={(e) => setFormData({ ...formData, oilTemp: e.target.value })}
                           placeholder="e.g., 50"
+                          className={cn(isFormValueOutOfLimit('boiler', 'oilTemp' as keyof (typeof equipmentLimits)['chiller'], formData.oilTemp) && 'border-destructive bg-destructive/5 text-destructive font-semibold')}
                         />
+                        {isFormValueOutOfLimit('boiler', 'oilTemp' as keyof (typeof equipmentLimits)['chiller'], formData.oilTemp) && (
+                          <p className="text-xs text-destructive mt-1">{getLimitErrorMessage('boiler', 'oilTemp' as keyof (typeof equipmentLimits)['chiller'])}</p>
+                        )}
                       </div>
                     </div>
 
@@ -2859,7 +3014,11 @@ export default function ELogBookPage() {
                           value={formData.steamTemp}
                           onChange={(e) => setFormData({ ...formData, steamTemp: e.target.value })}
                           placeholder="e.g., 150"
+                          className={cn(isFormValueOutOfLimit('boiler', 'steamTemp' as keyof (typeof equipmentLimits)['chiller'], formData.steamTemp) && 'border-destructive bg-destructive/5 text-destructive font-semibold')}
                         />
+                        {isFormValueOutOfLimit('boiler', 'steamTemp' as keyof (typeof equipmentLimits)['chiller'], formData.steamTemp) && (
+                          <p className="text-xs text-destructive mt-1">{getLimitErrorMessage('boiler', 'steamTemp' as keyof (typeof equipmentLimits)['chiller'])}</p>
+                        )}
                       </div>
                       <div className="space-y-2">
                         <Label className="flex items-center gap-2">
@@ -2872,7 +3031,11 @@ export default function ELogBookPage() {
                           value={formData.steamPressure}
                           onChange={(e) => setFormData({ ...formData, steamPressure: e.target.value })}
                           placeholder="e.g., 6"
+                          className={cn(isFormValueOutOfLimit('boiler', 'steamPressure' as keyof (typeof equipmentLimits)['chiller'], formData.steamPressure) && 'border-destructive bg-destructive/5 text-destructive font-semibold')}
                         />
+                        {isFormValueOutOfLimit('boiler', 'steamPressure' as keyof (typeof equipmentLimits)['chiller'], formData.steamPressure) && (
+                          <p className="text-xs text-destructive mt-1">{getLimitErrorMessage('boiler', 'steamPressure' as keyof (typeof equipmentLimits)['chiller'])}</p>
+                        )}
                       </div>
                     </div>
 
@@ -2904,7 +3067,11 @@ export default function ELogBookPage() {
                           value={formData.compressorSupplyTemp}
                           onChange={(e) => setFormData({ ...formData, compressorSupplyTemp: e.target.value })}
                           placeholder="e.g., 10"
+                          className={cn(isFormValueOutOfLimit('compressor', 'compressorSupplyTemp' as keyof (typeof equipmentLimits)['chiller'], formData.compressorSupplyTemp) && 'border-destructive bg-destructive/5 text-destructive font-semibold')}
                         />
+                        {isFormValueOutOfLimit('compressor', 'compressorSupplyTemp' as keyof (typeof equipmentLimits)['chiller'], formData.compressorSupplyTemp) && (
+                          <p className="text-xs text-destructive mt-1">{getLimitErrorMessage('compressor', 'compressorSupplyTemp' as keyof (typeof equipmentLimits)['chiller'])}</p>
+                        )}
                       </div>
                       <div className="space-y-2">
                         <Label className="flex items-center gap-2">
@@ -2917,7 +3084,11 @@ export default function ELogBookPage() {
                           value={formData.compressorReturnTemp}
                           onChange={(e) => setFormData({ ...formData, compressorReturnTemp: e.target.value })}
                           placeholder="e.g., 20"
+                          className={cn(isFormValueOutOfLimit('compressor', 'compressorReturnTemp' as keyof (typeof equipmentLimits)['chiller'], formData.compressorReturnTemp) && 'border-destructive bg-destructive/5 text-destructive font-semibold')}
                         />
+                        {isFormValueOutOfLimit('compressor', 'compressorReturnTemp' as keyof (typeof equipmentLimits)['chiller'], formData.compressorReturnTemp) && (
+                          <p className="text-xs text-destructive mt-1">{getLimitErrorMessage('compressor', 'compressorReturnTemp' as keyof (typeof equipmentLimits)['chiller'])}</p>
+                        )}
                       </div>
                     </div>
 
@@ -2933,7 +3104,11 @@ export default function ELogBookPage() {
                           value={formData.compressorPressure}
                           onChange={(e) => setFormData({ ...formData, compressorPressure: e.target.value })}
                           placeholder="e.g., 5"
+                          className={cn(isFormValueOutOfLimit('compressor', 'compressorPressure' as keyof (typeof equipmentLimits)['chiller'], formData.compressorPressure) && 'border-destructive bg-destructive/5 text-destructive font-semibold')}
                         />
+                        {isFormValueOutOfLimit('compressor', 'compressorPressure' as keyof (typeof equipmentLimits)['chiller'], formData.compressorPressure) && (
+                          <p className="text-xs text-destructive mt-1">{getLimitErrorMessage('compressor', 'compressorPressure' as keyof (typeof equipmentLimits)['chiller'])}</p>
+                        )}
                       </div>
                       <div className="space-y-2">
                         <Label className="flex items-center gap-2">
@@ -2965,7 +3140,7 @@ export default function ELogBookPage() {
                             <SelectValue placeholder="Select equipment" />
                           </SelectTrigger>
                           <SelectContent>
-                            {equipmentList.chemical.map((eq) => (
+                            {CHEMICAL_EQUIPMENT_NAMES.map((eq) => (
                               <SelectItem key={eq} value={eq}>
                                 {eq}
                               </SelectItem>
@@ -3126,8 +3301,8 @@ export default function ELogBookPage() {
                   <th className="px-3 py-2 text-left font-semibold w-[110px]">Date</th>
                   <th className="px-3 py-2 text-left font-semibold w-[100px]">Time</th>
                   <th className="px-3 py-2 text-left font-semibold w-[150px]">Equipment</th>
-                  <th className="px-3 py-2 text-left font-semibold min-w-[210px]">Readings</th>
-                  <th className="px-3 py-2 text-center font-semibold min-w-[170px]">Remarks</th>
+                  <th className="px-3 py-2 text-left font-semibold min-w-[140px]">Readings</th>
+                  <th className="px-3 py-2 text-center font-semibold min-w-[140px]">Remarks</th>
                   <th className="px-3 py-2 text-left font-semibold min-w-[170px]">Comment</th>
                   <th className="px-3 py-2 text-left font-semibold w-[140px]">Checked By</th>
                   <th className="px-3 py-2 text-left font-semibold w-[110px]">Status</th>
@@ -3184,154 +3359,17 @@ export default function ELogBookPage() {
                           <p className="text-xs text-muted-foreground font-mono">{log.equipmentId}</p>
                         </div>
                       </td>
-                      <td className="px-4 py-3">
-                        <div className="space-y-1 text-xs">
-                          {log.equipmentType?.startsWith('custom_') && log.customFields && (
-                            <>
-                              {logbookSchemas
-                                .find(s => s.id === log.schemaId)
-                                ?.fields.filter(f => !f.display?.hidden)
-                                .map((field) => {
-                                  const value = log.customFields?.[field.id];
-                                  if (value === undefined || value === null || value === '') return null;
-                                  
-                                  let displayValue = value;
-                                  if (field.type === 'number') {
-                                    displayValue = parseFloat(value);
-                                    if (isNaN(displayValue)) return null;
-                                    if (field.metadata?.limit?.unit) {
-                                      displayValue = `${displayValue} ${field.metadata.limit.unit}`;
-                                    }
-                                  } else if (field.type === 'boolean') {
-                                    displayValue = value ? 'Yes' : 'No';
-                                  } else if (field.type === 'date' || field.type === 'datetime') {
-                                    displayValue = format(new Date(value), 'yyyy-MM-dd HH:mm');
-                                  }
-                                  
-                                  const isOutOfLimit = field.metadata?.limit && field.type === 'number' && 
-                                    ((field.metadata.limit.type === 'max' && parseFloat(value) > field.metadata.limit.value) ||
-                                     (field.metadata.limit.type === 'min' && parseFloat(value) < field.metadata.limit.value));
-                                  
-                                  return (
-                                    <p 
-                                      key={field.id}
-                                      className={isOutOfLimit ? 'text-destructive font-bold' : ''}
-                                    >
-                                      <span className="font-medium">{field.label}:</span> {displayValue}
-                                    </p>
-                                  );
-                                })}
-                            </>
-                          )}
-                          {log.equipmentType === 'chiller' && (
-                            <>
-                              {log.chillerSupplyTemp !== undefined && (
-                                <p className={isValueOutOfLimit(log, 'chillerSupplyTemp', log.chillerSupplyTemp) ? 'text-destructive font-bold' : ''}>
-                                  Supply: {log.chillerSupplyTemp}°C
-                                </p>
-                              )}
-                              {log.chillerReturnTemp !== undefined && (
-                                <p className={isValueOutOfLimit(log, 'chillerReturnTemp', log.chillerReturnTemp) ? 'text-destructive font-bold' : ''}>
-                                  Return: {log.chillerReturnTemp}°C
-                                </p>
-                              )}
-                              {log.coolingTowerSupplyTemp !== undefined && (
-                                <p className={isValueOutOfLimit(log, 'coolingTowerSupplyTemp', log.coolingTowerSupplyTemp) ? 'text-destructive font-bold' : ''}>
-                                  CT Supply: {log.coolingTowerSupplyTemp}°C
-                                </p>
-                              )}
-                              {log.coolingTowerReturnTemp !== undefined && (
-                                <p className={isValueOutOfLimit(log, 'coolingTowerReturnTemp', log.coolingTowerReturnTemp) ? 'text-destructive font-bold' : ''}>
-                                  CT Return: {log.coolingTowerReturnTemp}°C
-                                </p>
-                              )}
-                              {log.ctDifferentialTemp !== undefined && (
-                                <p className={isValueOutOfLimit(log, 'ctDifferentialTemp', log.ctDifferentialTemp) ? 'text-destructive font-bold' : ''}>
-                                  CT Diff: {log.ctDifferentialTemp}°C
-                                </p>
-                              )}
-                              {log.chillerWaterInletPressure !== undefined && (
-                                <p className={isValueOutOfLimit(log, 'chillerWaterInletPressure', log.chillerWaterInletPressure) ? 'text-destructive font-bold' : ''}>
-                                  Pressure: {log.chillerWaterInletPressure} bar
-                                </p>
-                              )}
-                              {log.chillerMakeupWaterFlow !== undefined && (
-                                <p>Flow: {log.chillerMakeupWaterFlow} LPH</p>
-                              )}
-                            </>
-                          )}
-                          {log.equipmentType === 'boiler' && (
-                            <>
-                              {log.feedWaterTemp !== undefined && (
-                                <p className={isValueOutOfLimit(log, 'feedWaterTemp', log.feedWaterTemp) ? 'text-destructive font-bold' : ''}>
-                                  Feed Water: {log.feedWaterTemp}°C
-                                </p>
-                              )}
-                              {log.oilTemp !== undefined && (
-                                <p className={isValueOutOfLimit(log, 'oilTemp', log.oilTemp) ? 'text-destructive font-bold' : ''}>
-                                  Oil: {log.oilTemp}°C
-                                </p>
-                              )}
-                              {log.steamTemp !== undefined && (
-                                <p className={isValueOutOfLimit(log, 'steamTemp', log.steamTemp) ? 'text-destructive font-bold' : ''}>
-                                  Steam: {log.steamTemp}°C
-                                </p>
-                              )}
-                              {log.steamPressure !== undefined && (
-                                <p className={isValueOutOfLimit(log, 'steamPressure', log.steamPressure) ? 'text-destructive font-bold' : ''}>
-                                  Pressure: {log.steamPressure} bar
-                                </p>
-                              )}
-                              {log.steamFlowLPH !== undefined && (
-                                <p>Flow: {log.steamFlowLPH} LPH</p>
-                              )}
-                            </>
-                          )}
-                          {log.equipmentType === 'compressor' && (
-                            <>
-                              {log.compressorSupplyTemp !== undefined && (
-                                <p className={isValueOutOfLimit(log, 'compressorSupplyTemp', log.compressorSupplyTemp) ? 'text-destructive font-bold' : ''}>
-                                  Supply: {log.compressorSupplyTemp}°C
-                                </p>
-                              )}
-                              {log.compressorReturnTemp !== undefined && (
-                                <p className={isValueOutOfLimit(log, 'compressorReturnTemp', log.compressorReturnTemp) ? 'text-destructive font-bold' : ''}>
-                                  Return: {log.compressorReturnTemp}°C
-                                </p>
-                              )}
-                              {log.compressorPressure !== undefined && (
-                                <p className={isValueOutOfLimit(log, 'compressorPressure', log.compressorPressure) ? 'text-destructive font-bold' : ''}>
-                                  Pressure: {log.compressorPressure} bar
-                                </p>
-                              )}
-                              {log.compressorFlow !== undefined && (
-                                <p>Flow: {log.compressorFlow} L/min</p>
-                              )}
-                            </>
-                          )}
-                          {log.equipmentType === 'chemical' && (
-                            <>
-                              {log.equipmentName && (
-                                <p className="font-medium">EqP: {log.equipmentName}</p>
-                              )}
-                              {log.chemicalName && (
-                                <p className="font-medium">Chemical: {log.chemicalName}</p>
-                              )}
-                              {log.chemicalPercent !== undefined && (
-                                <p>Chemical %: {log.chemicalPercent}%</p>
-                              )}
-                              {log.solutionConcentration !== undefined && (
-                                <p>Solution: {log.solutionConcentration}%</p>
-                              )}
-                              {log.waterQty !== undefined && (
-                                <p>Water: {log.waterQty} L</p>
-                              )}
-                              {log.chemicalQty !== undefined && (
-                                <p className="font-bold text-accent">Qty: {log.chemicalQty} G</p>
-                              )}
-                            </>
-                          )}
-                        </div>
+                      <td className="px-4 py-3 align-middle">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="text-xs"
+                          onClick={() => setReadingsModalLogId(log.id)}
+                        >
+                          <Eye className="w-3.5 h-3.5 mr-1.5" />
+                          View Readings
+                        </Button>
                       </td>
                       <td className="px-4 py-3 max-w-xs min-w-[170px] align-middle text-center">
                         <p className="text-xs text-muted-foreground whitespace-pre-wrap leading-snug line-clamp-3 inline-block text-left">
@@ -3514,6 +3552,166 @@ export default function ELogBookPage() {
           </div>
         </div>
       </div>
+
+      {/* View Readings modal */}
+      <Dialog open={!!readingsModalLogId} onOpenChange={(open) => !open && setReadingsModalLogId(null)}>
+        <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden">
+          <DialogHeader className="px-6 pt-6 pb-4 border-b bg-muted/30">
+            <DialogTitle className="text-lg font-semibold">Readings</DialogTitle>
+            <DialogDescription className="mt-1.5">
+              {readingsModalLogId && (() => {
+                const log = filteredLogs.find((l) => l.id === readingsModalLogId);
+                return log ? (
+                  <span className="inline-flex items-center gap-2 rounded-full bg-background border px-3 py-1.5 text-xs font-medium text-muted-foreground shadow-sm">
+                    <Clock className="h-3.5 w-3.5" />
+                    {log.equipmentType?.startsWith('custom_') ? 'Custom' : log.equipmentType} · {log.equipmentId} · {log.date} {log.time}
+                  </span>
+                ) : null;
+              })()}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="overflow-y-auto flex-1 min-h-0 px-6 py-4">
+            {readingsModalLogId && (() => {
+              const log = filteredLogs.find((l) => l.id === readingsModalLogId);
+              if (!log) return null;
+              const logRecord = log as unknown as Record<string, unknown>;
+              const renderItem = (label: string, value: string | number, isOut?: boolean) => (
+                <div
+                  key={label}
+                  className={cn(
+                    'flex justify-between items-center gap-4 py-2.5 px-3 rounded-lg text-sm transition-colors',
+                    isOut ? 'bg-destructive/10 text-destructive font-semibold' : 'hover:bg-muted/40'
+                  )}
+                >
+                  <span className="font-medium text-muted-foreground">{label}</span>
+                  <span className={cn('tabular-nums', isOut && 'font-semibold')}>{value}</span>
+                </div>
+              );
+              const SectionCard = ({ title, icon: Icon, children }: { title: string; icon: React.ElementType; children: React.ReactNode }) => (
+                <div className="rounded-xl border border-border/60 bg-card p-4 shadow-sm">
+                  <h4 className="flex items-center gap-2 text-sm font-semibold text-foreground mb-3">
+                    <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                      <Icon className="h-4 w-4" />
+                    </span>
+                    {title}
+                  </h4>
+                  <div className="space-y-0.5">{children}</div>
+                </div>
+              );
+              if (log.equipmentType?.startsWith('custom_') && log.customFields && logbookSchemas.find((s) => s.id === log.schemaId)) {
+                const schema = logbookSchemas.find((s) => s.id === log.schemaId)!;
+                return (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <SectionCard title="Custom fields" icon={Package}>
+                      {schema.fields.filter((f) => !f.display?.hidden).map((field) => {
+                        const value = log.customFields?.[field.id];
+                        if (value === undefined || value === null || value === '') return null;
+                        let display: string | number = value;
+                        if (field.type === 'number' && field.metadata?.limit?.unit) display = `${value} ${field.metadata.limit.unit}`;
+                        else if (field.type === 'boolean') display = value ? 'Yes' : 'No';
+                        else if (field.type === 'date' || field.type === 'datetime') display = format(new Date(value), 'yyyy-MM-dd HH:mm');
+                        const isOut = field.metadata?.limit && field.type === 'number' && ((field.metadata.limit.type === 'max' && parseFloat(value) > field.metadata.limit.value) || (field.metadata.limit.type === 'min' && parseFloat(value) < field.metadata.limit.value));
+                        return <div key={field.id} className={cn('flex justify-between items-center gap-4 py-2.5 px-3 rounded-lg text-sm', isOut ? 'bg-destructive/10 text-destructive font-semibold' : 'hover:bg-muted/40')}><span className="font-medium text-muted-foreground">{field.label}</span><span>{String(display)}</span></div>;
+                      })}
+                    </SectionCard>
+                  </div>
+                );
+              }
+              if (log.equipmentType === 'chiller') {
+                const tempKeys = ['chillerSupplyTemp', 'chillerReturnTemp', 'coolingTowerSupplyTemp', 'coolingTowerReturnTemp', 'ctDifferentialTemp', 'evapEnteringWaterTemp', 'evapLeavingWaterTemp', 'evapApproachTemp', 'condEnteringWaterTemp', 'condLeavingWaterTemp', 'condApproachTemp'];
+                const pressureKeys = ['chillerWaterInletPressure', 'evapWaterInletPressure', 'evapWaterOutletPressure', 'condWaterInletPressure', 'condWaterOutletPressure'];
+                const flowKeys = ['chillerMakeupWaterFlow'];
+                const electricalKeys = ['chillerControlSignal', 'avgMotorCurrent', 'compressorRunningTimeMin', 'starterEnergyKwh'];
+                const otherKeys = ['coolingTowerBlowdownTimeMin', 'coolingTowerChemicalQtyPerDay', 'chilledWaterPumpChemicalQtyKg', 'coolingTowerFanChemicalQtyKg'];
+                const section = (title: string, keys: string[]) => {
+                  const fields = CHILLER_LIST_FIELDS.filter((f) => keys.includes(f.key));
+                  const items = fields.map(({ key, label, unit }) => {
+                    const value = logRecord[key];
+                    if (value === undefined || value === null) return null;
+                    const numVal = typeof value === 'number' ? value : undefined;
+                    const isOut = numVal !== undefined && isValueOutOfLimit(log, key as string, numVal);
+                    const display = unit ? `${value} ${unit}`.trim() : String(value);
+                    return renderItem(label, display, isOut);
+                  }).filter(Boolean);
+                  if (items.length === 0) return null;
+                  return <SectionCard key={title} title={title} icon={title === 'Temperature' ? Thermometer : title === 'Pressure' ? Gauge : title === 'Flow' ? Droplets : title === 'Electrical & Energy' ? Zap : Package}>{items}</SectionCard>;
+                };
+                return (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {section('Temperature', tempKeys)}
+                    {section('Pressure', pressureKeys)}
+                    {section('Flow', flowKeys)}
+                    {section('Electrical & Energy', electricalKeys)}
+                    {section('Other', otherKeys)}
+                  </div>
+                );
+              }
+              if (log.equipmentType === 'boiler') {
+                const tempKeys = ['feedWaterTemp', 'oilTemp', 'steamTemp', 'foPreHeaterTemp', 'burnerHeaterTemp', 'stackTemperature'];
+                const pressureKeys = ['steamPressure', 'burnerOilPressure', 'boilerSteamPressure', 'steamPressureAfterPrv'];
+                const flowKeys = ['steamFlowLPH'];
+                const otherKeys = ['foHsdNgDayTankLevel', 'feedWaterTankLevel', 'feedWaterHardnessPpm', 'feedWaterTdsPpm', 'foHsdNgConsumption', 'mobreyFunctioning', 'manualBlowdownTime'];
+                const section = (title: string, keys: string[]) => {
+                  const items = BOILER_LIST_FIELDS.filter((f) => keys.includes(f.key)).map(({ key, label, unit }) => {
+                    const value = logRecord[key];
+                    if (value === undefined || value === null) return null;
+                    const numVal = typeof value === 'number' ? value : undefined;
+                    const isOut = numVal !== undefined && isValueOutOfLimit(log, key as string, numVal);
+                    const display = unit ? `${value} ${unit}`.trim() : String(value);
+                    return renderItem(label, display, isOut);
+                  }).filter(Boolean);
+                  if (items.length === 0) return null;
+                  return <SectionCard key={title} title={title} icon={title === 'Temperature' ? Thermometer : title === 'Pressure' ? Gauge : title === 'Flow' ? Droplets : Package}>{items}</SectionCard>;
+                };
+                return (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {section('Temperature', tempKeys)}
+                    {section('Pressure', pressureKeys)}
+                    {section('Flow', flowKeys)}
+                    {section('Other', otherKeys)}
+                  </div>
+                );
+              }
+              if (log.equipmentType === 'compressor') {
+                const items = COMPRESSOR_LIST_FIELDS.map(({ key, label, unit }) => {
+                  const value = logRecord[key];
+                  if (value === undefined || value === null) return null;
+                  const numVal = typeof value === 'number' ? value : undefined;
+                  const isOut = numVal !== undefined && isValueOutOfLimit(log, key as string, numVal);
+                  const display = unit ? `${value} ${unit}`.trim() : String(value);
+                  return renderItem(label, display, isOut);
+                }).filter(Boolean);
+                return (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <SectionCard title="Compressor" icon={Gauge}>{items}</SectionCard>
+                  </div>
+                );
+              }
+              if (log.equipmentType === 'chemical') {
+                const items = [
+                  log.equipmentName && renderItem('Equipment', log.equipmentName),
+                  log.chemicalName && renderItem('Chemical', log.chemicalName),
+                  log.chemicalPercent != null && renderItem('Chemical %', `${log.chemicalPercent}%`),
+                  log.solutionConcentration != null && renderItem('Conc', `${log.solutionConcentration}%`),
+                  log.waterQty != null && renderItem('Water', `${log.waterQty} L`),
+                  log.chemicalQty != null && renderItem('Qty', `${log.chemicalQty} G`),
+                ].filter(Boolean);
+                return (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <SectionCard title="Chemical" icon={Package}>{items}</SectionCard>
+                  </div>
+                );
+              }
+              return null;
+            })()}
+          </div>
+          <div className="flex justify-end gap-2 px-6 py-4 border-t bg-muted/20">
+            <Button type="button" variant="outline" onClick={() => setReadingsModalLogId(null)}>
+              Close
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Step 1: Approve confirmation alert */}
       <AlertDialog open={approveConfirmOpen} onOpenChange={setApproveConfirmOpen}>

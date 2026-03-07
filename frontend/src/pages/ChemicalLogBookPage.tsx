@@ -19,7 +19,7 @@ import { toast } from "sonner";
 import { chemicalPrepAPI, chemicalMasterAPI, chemicalAssignmentAPI } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Link } from "react-router-dom";
-import { Clock, Save, Filter, X, Plus, Trash2, CheckCircle, XCircle, Edit, History } from "lucide-react";
+import { Clock, Save, Filter, X, Plus, Trash2, CheckCircle, XCircle, Edit, History, Eye, Package } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -38,6 +38,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { EntryIntervalBadge } from "@/components/logbook/EntryIntervalBadge";
+import { MissedReadingPopup } from "@/components/logbook/MissedReadingPopup";
+import { getNextDueAndMissed } from "@/lib/missed-reading";
 
 interface ChemicalPrepLog {
   id: string;
@@ -66,8 +69,10 @@ interface ChemicalPrepLog {
 }
 
 const ChemicalLogBookPage: React.FC = () => {
-  const { user } = useAuth();
+  const { user, sessionSettings } = useAuth();
   const [logs, setLogs] = useState<ChemicalPrepLog[]>([]);
+  const [showMissedReadingPopup, setShowMissedReadingPopup] = useState(false);
+  const [missedReadingNextDue, setMissedReadingNextDue] = useState<Date | null>(null);
   const [filteredLogs, setFilteredLogs] = useState<ChemicalPrepLog[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -82,6 +87,7 @@ const ChemicalLogBookPage: React.FC = () => {
   const [approvalComment, setApprovalComment] = useState("");
   const [editingCommentLogId, setEditingCommentLogId] = useState<string | null>(null);
   const [editingCommentValue, setEditingCommentValue] = useState("");
+  const [readingsModalLogId, setReadingsModalLogId] = useState<string | null>(null);
   const [editingLogId, setEditingLogId] = useState<string | null>(null);
 
   const [formData, setFormData] = useState({
@@ -166,6 +172,26 @@ const ChemicalLogBookPage: React.FC = () => {
   useEffect(() => {
     refreshLogs();
   }, []);
+
+  useEffect(() => {
+    if (!sessionSettings?.log_entry_interval || logs.length === 0) return;
+    const interval = sessionSettings.log_entry_interval as "hourly" | "shift" | "daily";
+    const shiftHours = sessionSettings.shift_duration_hours ?? 8;
+    const latest = logs[0];
+    const lastTs = latest?.timestamp
+      ? latest.timestamp instanceof Date
+        ? latest.timestamp
+        : new Date(latest.timestamp)
+      : null;
+    const { nextDue, isMissed } = getNextDueAndMissed(lastTs, interval, shiftHours);
+    if (isMissed && nextDue) {
+      setMissedReadingNextDue(nextDue);
+      setShowMissedReadingPopup(true);
+    } else {
+      setShowMissedReadingPopup(false);
+      setMissedReadingNextDue(null);
+    }
+  }, [logs, sessionSettings]);
 
   // Load chemical names from backend master (no hardcoded list)
   useEffect(() => {
@@ -524,6 +550,20 @@ const ChemicalLogBookPage: React.FC = () => {
         title="Chemical Log Book"
         subtitle="Manage chemical preparations"
       />
+      <div className="px-4 pt-0">
+        <EntryIntervalBadge />
+      </div>
+      {showMissedReadingPopup && missedReadingNextDue && (
+        <MissedReadingPopup
+          open={showMissedReadingPopup}
+          onClose={() => {
+            setShowMissedReadingPopup(false);
+            setMissedReadingNextDue(null);
+          }}
+          logTypeLabel="Chemical"
+          nextDue={missedReadingNextDue}
+        />
+      )}
       <main className="p-4 space-y-4">
         <div className="flex justify-between items-center">
           <div>
@@ -952,7 +992,7 @@ const ChemicalLogBookPage: React.FC = () => {
             <table className="min-w-full text-sm" style={{ minWidth: "1200px" }}>
               <thead className="bg-muted">
                 <tr>
-                  <th className="px-3 py-2 text-left font-semibold w-12">
+                  <th className="px-4 py-2 text-left font-semibold w-12">
                     {pendingDraftIds.length > 0 && user?.role !== "operator" && (
                       <Checkbox
                         checked={allPendingSelected}
@@ -961,17 +1001,17 @@ const ChemicalLogBookPage: React.FC = () => {
                       />
                     )}
                   </th>
-                  <th className="px-3 py-2 text-left font-semibold">Date</th>
-                  <th className="px-3 py-2 text-left font-semibold">Time</th>
-                  <th className="px-3 py-2 text-left font-semibold">Equipment</th>
-                  <th className="px-3 py-2 text-left font-semibold">Chemical</th>
-                  <th className="px-3 py-2 text-left font-semibold min-w-[130px]">Readings</th>
-                  <th className="px-3 py-2 text-left font-semibold whitespace-nowrap">Batch No</th>
-                  <th className="px-3 py-2 text-left font-semibold">Remarks</th>
-                  <th className="px-3 py-2 text-left font-semibold">Comment</th>
-                  <th className="px-3 py-2 text-left font-semibold">Checked By</th>
-                  <th className="px-3 py-2 text-left font-semibold">Status</th>
-                  <th className="px-3 py-2 text-left font-semibold">Actions</th>
+                  <th className="px-4 py-2 text-left font-semibold w-[110px]">Date</th>
+                  <th className="px-4 py-2 text-left font-semibold w-[100px]">Time</th>
+                  <th className="px-4 py-2 text-left font-semibold w-[150px]">Equipment</th>
+                  <th className="px-4 py-2 text-left font-semibold w-[130px]">Chemical</th>
+                  <th className="px-4 py-2 text-left font-semibold min-w-[140px]">Readings</th>
+                  <th className="px-4 py-2 text-left font-semibold w-[100px] whitespace-nowrap">Batch No</th>
+                  <th className="px-4 py-2 text-center font-semibold min-w-[140px]">Remarks</th>
+                  <th className="px-4 py-2 text-left font-semibold min-w-[170px]">Comment</th>
+                  <th className="px-4 py-2 text-left font-semibold w-[140px]">Checked By</th>
+                  <th className="px-4 py-2 text-left font-semibold w-[110px]">Status</th>
+                  <th className="px-4 py-2 text-left font-semibold w-[140px]">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -986,8 +1026,8 @@ const ChemicalLogBookPage: React.FC = () => {
                   </tr>
                 )}
                 {filteredLogs.map((log) => (
-                  <tr key={log.id} className="border-t">
-                    <td className="px-3 py-2 align-middle">
+                  <tr key={log.id} className="hover:bg-muted/30 transition-colors">
+                    <td className="px-4 py-3 align-middle">
                       {(log.status === "pending" || log.status === "draft" || log.status === "pending_secondary_approval") && user?.role !== "operator" ? (
                         <Checkbox
                           checked={selectedLogIds.includes(log.id)}
@@ -996,35 +1036,39 @@ const ChemicalLogBookPage: React.FC = () => {
                         />
                       ) : null}
                     </td>
-                    <td className="px-3 py-2">{log.date}</td>
-                    <td className="px-3 py-2">{log.time}</td>
-                    <td className="px-3 py-2">{log.equipmentName}</td>
-                    <td className="px-3 py-2">{log.chemicalName}</td>
-                    <td className="px-3 py-2 min-w-[200px]">
-                      <div className="space-y-1 text-sm">
-                        {log.solutionConcentration != null && (
-                          <div>
-                            <span className="font-semibold">Conc:</span>{" "}
-                            {log.solutionConcentration}%
-                          </div>
-                        )}
-                        {log.waterQty != null && (
-                          <div>
-                            <span className="font-semibold">Water:</span>{" "}
-                            {log.waterQty} L
-                          </div>
-                        )}
-                        <div>
-                          <span className="font-semibold">Chemical:</span>{" "}
-                          {log.chemicalQty} Kg
-                        </div>
-                      </div>
+                    <td className="px-4 py-3">
+                      <span className="text-sm text-foreground">{log.date}</span>
                     </td>
-                    <td className="px-3 py-2 whitespace-nowrap">{log.batchNo || "-"}</td>
-                    <td className="px-3 py-2 max-w-xs">
-                      <p className="line-clamp-3 text-muted-foreground">{log.remarks || "-"}</p>
+                    <td className="px-4 py-3">
+                      <span className="text-sm text-foreground">{log.time}</span>
                     </td>
-                    <td className="px-3 py-2 align-middle">
+                    <td className="px-4 py-3">
+                      <span className="text-sm font-medium text-foreground">{log.equipmentName}</span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className="text-sm font-medium text-foreground">{log.chemicalName}</span>
+                    </td>
+                    <td className="px-4 py-3 align-middle">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="text-xs"
+                        onClick={() => setReadingsModalLogId(log.id)}
+                      >
+                        <Eye className="w-3.5 h-3.5 mr-1.5" />
+                        View Readings
+                      </Button>
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <span className="text-sm text-foreground">{log.batchNo || "-"}</span>
+                    </td>
+                    <td className="px-4 py-3 max-w-xs min-w-[170px] align-middle text-center">
+                      <p className="text-xs text-muted-foreground whitespace-pre-wrap leading-snug line-clamp-3 inline-block text-left">
+                        {log.remarks || "-"}
+                      </p>
+                    </td>
+                    <td className="px-4 py-2 align-middle">
                       {editingCommentLogId === log.id ? (
                         <Textarea
                           className="min-h-[60px] min-w-[180px] text-sm py-2"
@@ -1049,8 +1093,10 @@ const ChemicalLogBookPage: React.FC = () => {
                         </div>
                       )}
                     </td>
-                    <td className="px-3 py-2">{log.checkedBy}</td>
-                    <td className="px-3 py-2">
+                    <td className="px-4 py-3">
+                      <span className="text-sm text-foreground">{log.checkedBy}</span>
+                    </td>
+                    <td className="px-4 py-3">
                       <div className="flex flex-wrap items-center gap-2">
                         <Badge
                           variant={
@@ -1089,7 +1135,7 @@ const ChemicalLogBookPage: React.FC = () => {
                         )}
                       </div>
                     </td>
-                    <td className="px-3 py-2">
+                    <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
                         {user?.role !== "operator" && (
                           <>
@@ -1201,6 +1247,63 @@ const ChemicalLogBookPage: React.FC = () => {
           </div>
         </div>
       </main>
+      {/* View Readings modal */}
+      <Dialog open={!!readingsModalLogId} onOpenChange={(open) => !open && setReadingsModalLogId(null)}>
+        <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden">
+          <DialogHeader className="px-6 pt-6 pb-4 border-b bg-muted/30">
+            <DialogTitle className="text-lg font-semibold">Readings</DialogTitle>
+            <DialogDescription className="mt-1.5">
+              {readingsModalLogId && (() => {
+                const log = filteredLogs.find((l) => l.id === readingsModalLogId);
+                return log ? (
+                  <span className="inline-flex items-center gap-2 rounded-full bg-background border px-3 py-1.5 text-xs font-medium text-muted-foreground shadow-sm">
+                    <Clock className="h-3.5 w-3.5" />
+                    {log.equipmentName} · {log.chemicalName} · {log.date} {log.time}
+                  </span>
+                ) : null;
+              })()}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="overflow-y-auto flex-1 min-h-0 px-6 py-4">
+            {readingsModalLogId && (() => {
+              const log = filteredLogs.find((l) => l.id === readingsModalLogId);
+              if (!log) return null;
+              const renderItem = (label: string, value: string | number) => (
+                <div
+                  key={label}
+                  className="flex justify-between items-center gap-4 py-2.5 px-3 rounded-lg text-sm transition-colors hover:bg-muted/40"
+                >
+                  <span className="font-medium text-muted-foreground">{label}</span>
+                  <span className="tabular-nums">{value}</span>
+                </div>
+              );
+              const items = [
+                log.chemicalPercent != null && renderItem("Chemical %", `${log.chemicalPercent}%`),
+                log.chemicalConcentration != null && renderItem("Chemical concentration", `${log.chemicalConcentration}%`),
+                log.solutionConcentration != null && renderItem("Solution concentration (Conc)", `${log.solutionConcentration}%`),
+                log.waterQty != null && renderItem("Water", `${log.waterQty} L`),
+                log.chemicalQty != null && renderItem("Chemical quantity", `${log.chemicalQty} Kg`),
+              ].filter(Boolean);
+              return (
+                <div className="rounded-xl border border-border/60 bg-card p-4 shadow-sm">
+                  <h4 className="flex items-center gap-2 text-sm font-semibold text-foreground mb-3">
+                    <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                      <Package className="h-4 w-4" />
+                    </span>
+                    Readings
+                  </h4>
+                  <div className="space-y-0.5">{items}</div>
+                </div>
+              );
+            })()}
+          </div>
+          <div className="flex justify-end gap-2 px-6 py-4 border-t bg-muted/20">
+            <Button type="button" variant="outline" onClick={() => setReadingsModalLogId(null)}>
+              Close
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
       {/* Step 1: Approve confirmation alert */}
       <AlertDialog open={approveConfirmOpen} onOpenChange={setApproveConfirmOpen}>
         <AlertDialogContent>

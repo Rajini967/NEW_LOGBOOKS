@@ -25,6 +25,7 @@ import { format } from "date-fns";
 import { toast } from "sonner";
 import {
   equipmentAPI,
+  equipmentCategoryAPI,
   filterAssignmentAPI,
   filterCategoryAPI,
   filterLogAPI,
@@ -44,6 +45,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { EntryIntervalBadge } from "@/components/logbook/EntryIntervalBadge";
+import { MissedReadingPopup } from "@/components/logbook/MissedReadingPopup";
+import { getNextDueAndMissed } from "@/lib/missed-reading";
 
 type FilterCategory = string;
 
@@ -94,9 +98,11 @@ interface FilterLog {
 }
 
 const FilterLogBookPage: React.FC = () => {
-  const { user } = useAuth();
+  const { user, sessionSettings } = useAuth();
   const navigate = useNavigate();
   const [logs, setLogs] = useState<FilterLog[]>([]);
+  const [showMissedReadingPopup, setShowMissedReadingPopup] = useState(false);
+  const [missedReadingNextDue, setMissedReadingNextDue] = useState<Date | null>(null);
   const [filteredLogs, setFilteredLogs] = useState<FilterLog[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -218,8 +224,29 @@ const FilterLogBookPage: React.FC = () => {
 
   const loadEquipment = async () => {
     try {
-      const data = await equipmentAPI.list();
-      const options: EquipmentOption[] = (data as any[])
+      const categories = (await equipmentCategoryAPI.list()) as { id: string; name: string }[];
+      const filterCategoryIds = (categories || [])
+        .filter((c) => {
+          const n = (c.name || "").toLowerCase().trim();
+          return n === "filter" || n === "filters" || n === "hvac";
+        })
+        .map((c) => c.id);
+      let data: any[] = [];
+      if (filterCategoryIds.length > 0) {
+        const results = await Promise.all(
+          filterCategoryIds.map((id) => equipmentAPI.list({ category: id }))
+        );
+        const seen = new Set<string>();
+        for (const arr of results) {
+          for (const e of arr || []) {
+            if (e?.id && !seen.has(e.id)) {
+              seen.add(e.id);
+              data.push(e);
+            }
+          }
+        }
+      }
+      const options: EquipmentOption[] = data
         .filter((e) => e.is_active !== false)
         .map((e) => ({
           id: e.id,
@@ -333,6 +360,26 @@ const FilterLogBookPage: React.FC = () => {
     void loadEquipment();
     void refreshLogs();
   }, []);
+
+  useEffect(() => {
+    if (!sessionSettings?.log_entry_interval || logs.length === 0) return;
+    const interval = sessionSettings.log_entry_interval as "hourly" | "shift" | "daily";
+    const shiftHours = sessionSettings.shift_duration_hours ?? 8;
+    const latest = logs[0];
+    const lastTs = latest?.timestamp
+      ? latest.timestamp instanceof Date
+        ? latest.timestamp
+        : new Date(latest.timestamp)
+      : null;
+    const { nextDue, isMissed } = getNextDueAndMissed(lastTs, interval, shiftHours);
+    if (isMissed && nextDue) {
+      setMissedReadingNextDue(nextDue);
+      setShowMissedReadingPopup(true);
+    } else {
+      setShowMissedReadingPopup(false);
+      setMissedReadingNextDue(null);
+    }
+  }, [logs, sessionSettings]);
 
   const uniqueCheckedBy = useMemo(() => {
     if (!logs.length) return [];
@@ -722,6 +769,20 @@ const FilterLogBookPage: React.FC = () => {
         title="Filter Log Book"
         subtitle="Manage filter installation, integrity, cleaning and replacement logs"
       />
+      <div className="px-4 pt-0">
+        <EntryIntervalBadge />
+      </div>
+      {showMissedReadingPopup && missedReadingNextDue && (
+        <MissedReadingPopup
+          open={showMissedReadingPopup}
+          onClose={() => {
+            setShowMissedReadingPopup(false);
+            setMissedReadingNextDue(null);
+          }}
+          logTypeLabel="Filter"
+          nextDue={missedReadingNextDue}
+        />
+      )}
       <div className="px-4 pt-2">
         <button
           type="button"
@@ -846,7 +907,7 @@ const FilterLogBookPage: React.FC = () => {
 
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
-                      <Label>Equipment Name *</Label>
+                      <Label>Equipment ID *</Label>
                       <Select
                         value={selectedEquipmentUuid}
                         onValueChange={(value) => void onEquipmentSelected(value)}

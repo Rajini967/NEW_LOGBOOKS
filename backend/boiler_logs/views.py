@@ -4,6 +4,8 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import ValidationError
+from accounts.models import SessionSetting
+from core.log_slot_utils import get_slot_range
 from .models import BoilerLog
 from .serializers import BoilerLogSerializer
 from accounts.permissions import CanLogEntries, CanApproveReports
@@ -23,9 +25,53 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
         elif self.action == 'approve':
             return [IsAuthenticated(), CanApproveReports()]
         return [IsAuthenticated()]
-    
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if self.action != 'list':
+            return qs
+        date_from = self.request.query_params.get('date_from')
+        date_to = self.request.query_params.get('date_to')
+        equipment_id = self.request.query_params.get('equipment_id')
+        if equipment_id:
+            qs = qs.filter(equipment_id=equipment_id)
+        if date_from:
+            try:
+                from datetime import datetime
+                dt = datetime.fromisoformat(date_from.replace('Z', '+00:00'))
+                if timezone.is_naive(dt):
+                    dt = timezone.make_aware(dt, timezone.get_current_timezone())
+                qs = qs.filter(timestamp__gte=dt)
+            except (ValueError, TypeError):
+                pass
+        if date_to:
+            try:
+                from datetime import datetime
+                dt = datetime.fromisoformat(date_to.replace('Z', '+00:00'))
+                if timezone.is_naive(dt):
+                    dt = timezone.make_aware(dt, timezone.get_current_timezone())
+                qs = qs.filter(timestamp__lte=dt)
+            except (ValueError, TypeError):
+                pass
+        return qs.order_by('timestamp')
+
     def perform_create(self, serializer):
         """Set operator when creating a log."""
+        validated = serializer.validated_data
+        equipment_id = validated.get('equipment_id')
+        timestamp = validated.get('timestamp') or timezone.now()
+        setting = SessionSetting.get_solo()
+        interval = getattr(setting, 'log_entry_interval', None) or 'hourly'
+        shift_hours = getattr(setting, 'shift_duration_hours', None) or 8
+        slot_start, slot_end = get_slot_range(timestamp, interval, shift_hours)
+        if BoilerLog.objects.filter(
+            equipment_id=equipment_id,
+            timestamp__gte=slot_start,
+            timestamp__lt=slot_end,
+        ).exists():
+            raise ValidationError(
+                {'detail': ['An entry for this equipment already exists for this time slot.']}
+            )
         serializer.save(
             operator=self.request.user,
             operator_name=self.request.user.name or self.request.user.email
@@ -134,6 +180,21 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
         }
         if timestamp is not None:
             payload['timestamp'] = timestamp
+
+        # Duplicate check: allow only if the only entry in this slot is the one being corrected
+        check_ts = payload.get('timestamp') or timezone.now()
+        setting = SessionSetting.get_solo()
+        interval = getattr(setting, 'log_entry_interval', None) or 'hourly'
+        shift_hours = getattr(setting, 'shift_duration_hours', None) or 8
+        slot_start, slot_end = get_slot_range(check_ts, interval, shift_hours)
+        if BoilerLog.objects.filter(
+            equipment_id=original.equipment_id,
+            timestamp__gte=slot_start,
+            timestamp__lt=slot_end,
+        ).exclude(pk=original.pk).exists():
+            raise ValidationError(
+                {'detail': ['An entry for this equipment already exists for this time slot.']}
+            )
 
         new_log = BoilerLog.objects.create(**payload)
 
