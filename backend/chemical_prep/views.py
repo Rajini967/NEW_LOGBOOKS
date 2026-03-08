@@ -3,11 +3,13 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import ValidationError
+from datetime import datetime, timedelta
+import calendar
 from django.db import models
 from django.utils import timezone
 from accounts.models import SessionSetting
 from core.log_slot_utils import get_slot_range
-from .models import Chemical, ChemicalStock, ChemicalPreparation, ChemicalAssignment
+from .models import Chemical, ChemicalStock, ChemicalPreparation, ChemicalAssignment, ChemicalDashboardConfig
 from .serializers import (
     ChemicalSerializer,
     ChemicalStockSerializer,
@@ -40,12 +42,23 @@ def _normalize_location(value):
     return None
 
 
-class ChemicalStockViewSet(viewsets.ReadOnlyModelViewSet):
-    """Read-only viewset for chemical stock and pricing. Admin can create entries via create_entry."""
+class ChemicalStockViewSet(viewsets.ModelViewSet):
+    """Chemical stock and pricing. List/retrieve for all; create via create_entry; update/destroy for admin."""
 
-    permission_classes = [IsAuthenticated]
     serializer_class = ChemicalStockSerializer
     queryset = ChemicalStock.objects.select_related("chemical").all()
+
+    def get_permissions(self):
+        if self.action in ("update", "partial_update", "destroy"):
+            return [IsAuthenticated(), IsSuperAdminOrManager()]
+        if self.action == "create":
+            return [IsAuthenticated(), IsSuperAdminOrManager()]
+        return [IsAuthenticated()]
+
+    def create(self, request, *args, **kwargs):
+        """Force use of create_entry action; standard create not used."""
+        from rest_framework.exceptions import MethodNotAllowed
+        raise MethodNotAllowed("POST", detail="Use POST /chemical-stock/create_entry/ to create entries.")
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -141,7 +154,36 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     serializer_class = ChemicalPreparationSerializer
     queryset = ChemicalPreparation.objects.all()
-    
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if self.action != "list":
+            return qs
+        equipment_name = self.request.query_params.get("equipment_name")
+        if equipment_name:
+            qs = qs.filter(equipment_name__iexact=equipment_name)
+        date_from = self.request.query_params.get("date_from")
+        date_to = self.request.query_params.get("date_to")
+        if date_from:
+            try:
+                from datetime import datetime
+                dt = datetime.fromisoformat(date_from.replace("Z", "+00:00"))
+                if timezone.is_naive(dt):
+                    dt = timezone.make_aware(dt, timezone.get_current_timezone())
+                qs = qs.filter(timestamp__gte=dt)
+            except (ValueError, TypeError):
+                pass
+        if date_to:
+            try:
+                from datetime import datetime
+                dt = datetime.fromisoformat(date_to.replace("Z", "+00:00"))
+                if timezone.is_naive(dt):
+                    dt = timezone.make_aware(dt, timezone.get_current_timezone())
+                qs = qs.filter(timestamp__lte=dt)
+            except (ValueError, TypeError):
+                pass
+        return qs.order_by("-timestamp")
+
     def get_permissions(self):
         """Different permissions for different actions."""
         if self.action in ['create', 'update', 'partial_update']:
@@ -274,6 +316,171 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
         """
         kwargs["partial"] = True
         return self.update(request, *args, **kwargs)
+
+    @action(detail=False, methods=["get"], url_path="dashboard_summary")
+    def dashboard_summary(self, request):
+        """
+        GET ?period_type=week|month&date=YYYY-MM-DD
+        Returns by_chemical (consumption kg, cost Rs), totals, optional projected.
+        """
+        period_type = (request.query_params.get("period_type") or "month").lower()
+        if period_type not in ("week", "month"):
+            return Response(
+                {"error": "period_type must be week or month"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        date_str = request.query_params.get("date")
+        if not date_str:
+            return Response(
+                {"error": "date is required (YYYY-MM-DD)"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            ref_date = datetime.strptime(date_str.strip()[:10], "%Y-%m-%d").date()
+        except ValueError:
+            return Response(
+                {"error": "date must be YYYY-MM-DD"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if period_type == "week":
+            year, week_no, _ = ref_date.isocalendar()
+            # Monday of ISO week (1 = Monday in isocalendar)
+            period_start_date = datetime.strptime(
+                f"{year}-W{week_no:02d}-1", "%G-W%V-%u"
+            ).date()
+            period_end_date = period_start_date + timedelta(days=6)
+            period_start = timezone.make_aware(
+                datetime.combine(period_start_date, datetime.min.time())
+            )
+            period_end = timezone.make_aware(
+                datetime.combine(
+                    period_end_date,
+                    datetime.max.time().replace(microsecond=999999),
+                )
+            )
+            days_in_period = 7
+        else:
+            _, last_day = calendar.monthrange(ref_date.year, ref_date.month)
+            period_start = timezone.make_aware(
+                datetime(ref_date.year, ref_date.month, 1)
+            )
+            period_end = timezone.make_aware(
+                datetime(
+                    ref_date.year,
+                    ref_date.month,
+                    last_day,
+                    23,
+                    59,
+                    59,
+                    999999,
+                )
+            )
+            days_in_period = last_day
+
+        qs = ChemicalPreparation.objects.filter(
+            timestamp__gte=period_start,
+            timestamp__lte=period_end,
+            status="approved",
+        ).exclude(chemical_qty__isnull=True).exclude(chemical_qty=0)
+
+        # Group by chemical_id when set, else by chemical_name (manual entries)
+        from collections import defaultdict
+        groups = defaultdict(lambda: {"qty_g": 0.0, "chemical_id": None, "chemical_name": ""})
+
+        for prep in qs.select_related("chemical").only(
+            "chemical_id", "chemical_name", "chemical_qty"
+        ):
+            if prep.chemical_id:
+                key = ("id", str(prep.chemical_id))
+                display_name = prep.chemical.name if prep.chemical else (prep.chemical_name or "—")
+            else:
+                name_key = (prep.chemical_name or "").strip() or "—"
+                key = ("name", name_key)
+                display_name = name_key
+            groups[key]["qty_g"] += float(prep.chemical_qty or 0)
+            groups[key]["chemical_id"] = str(prep.chemical_id) if prep.chemical_id else None
+            groups[key]["chemical_name"] = display_name
+
+        by_chemical = []
+        total_consumption_kg = 0.0
+        total_cost_rs = 0.0
+
+        for (_key_type, key_val), data in groups.items():
+            consumption_kg = round(data["qty_g"] / 1000.0, 4)
+            total_consumption_kg += consumption_kg
+            cost_rs = None
+            cid = data["chemical_id"]
+            if cid:
+                stock = (
+                    ChemicalStock.objects.filter(chemical_id=cid)
+                    .order_by("-updated_at")
+                    .first()
+                )
+                if stock and stock.price_per_unit is not None:
+                    cost_rs = round(consumption_kg * float(stock.price_per_unit), 2)
+                    total_cost_rs += cost_rs
+            else:
+                chem = Chemical.objects.filter(
+                    name=data["chemical_name"], is_active=True
+                ).first()
+                if chem:
+                    stock = (
+                        ChemicalStock.objects.filter(chemical=chem)
+                        .order_by("-updated_at")
+                        .first()
+                    )
+                    if stock and stock.price_per_unit is not None:
+                        cost_rs = round(consumption_kg * float(stock.price_per_unit), 2)
+                        total_cost_rs += cost_rs
+
+            by_chemical.append({
+                "chemical_id": data["chemical_id"],
+                "chemical_name": data["chemical_name"] or "—",
+                "consumption_kg": consumption_kg,
+                "cost_rs": cost_rs,
+            })
+
+        by_chemical.sort(key=lambda x: (-(x["consumption_kg"] or 0), x["chemical_name"]))
+
+        payload = {
+            "period_type": period_type,
+            "period_start": period_start.date().isoformat(),
+            "period_end": period_end.date().isoformat(),
+            "days_in_period": days_in_period,
+            "by_chemical": by_chemical,
+            "total_consumption_kg": round(total_consumption_kg, 2),
+            "total_cost_rs": round(total_cost_rs, 2),
+        }
+
+        config = ChemicalDashboardConfig.objects.first()
+        if config:
+            if config.projected_consumption_kg_month is not None:
+                if period_type == "month":
+                    payload["projected_consumption_kg"] = round(
+                        config.projected_consumption_kg_month, 2
+                    )
+                else:
+                    _, month_days = calendar.monthrange(
+                        ref_date.year, ref_date.month
+                    )
+                    payload["projected_consumption_kg"] = round(
+                        config.projected_consumption_kg_month * (7.0 / month_days), 2
+                    )
+            if config.projected_cost_rs_month is not None:
+                if period_type == "month":
+                    payload["projected_cost_rs"] = round(
+                        config.projected_cost_rs_month, 2
+                    )
+                else:
+                    _, month_days = calendar.monthrange(
+                        ref_date.year, ref_date.month
+                    )
+                    payload["projected_cost_rs"] = round(
+                        config.projected_cost_rs_month * (7.0 / month_days), 2
+                    )
+
+        return Response(payload)
 
     @action(detail=True, methods=['post'])
     def correct(self, request, pk=None):

@@ -3,11 +3,15 @@ import { Header } from '@/components/layout/Header';
 import { MetricCard } from '@/components/dashboard/MetricCard';
 import { RecentActivity } from '@/components/dashboard/RecentActivity';
 import { ConsumptionChart } from '@/components/dashboard/ConsumptionChart';
+import { ChillerDashboardSection } from '@/components/dashboard/ChillerDashboardSection';
+import { BoilerDashboardSection } from '@/components/dashboard/BoilerDashboardSection';
+import { ChemicalDashboardSection } from '@/components/dashboard/ChemicalDashboardSection';
+import { FiltersDashboardSection } from '@/components/dashboard/FiltersDashboardSection';
 import { EquipmentStatus } from '@/components/dashboard/EquipmentStatus';
 import { ScheduledReadingsStatus } from '@/components/dashboard/ScheduledReadingsStatus';
 import { useMissedReadingsByType } from '@/hooks/useMissedReadingsByType';
 import { useAuth } from '@/contexts/AuthContext';
-import { filterScheduleAPI } from '@/lib/api';
+import { filterScheduleAPI, dashboardSummaryAPI } from '@/lib/api';
 import { toast } from 'sonner';
 import {
   Dialog,
@@ -39,6 +43,14 @@ export default function DashboardPage() {
     integrity?: number;
   } | null>(null);
   const [overdueDialogOpen, setOverdueDialogOpen] = useState(false);
+  const [dashboardSummary, setDashboardSummary] = useState<{
+    active_chillers_count: number;
+    pending_approvals_count: number;
+    approved_today_count: number;
+    total_log_entries: number;
+    active_alerts: number;
+    compliance_score: number | null;
+  } | null>(null);
 
   const overdueTotal = useMemo(() => {
     if (!overdueCounts) return 0;
@@ -65,6 +77,23 @@ export default function DashboardPage() {
           );
           setOverdueDialogOpen(true);
         }
+      } catch {
+        // Non-blocking: dashboard should still render
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isCustomer]);
+
+  useEffect(() => {
+    if (isCustomer) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await dashboardSummaryAPI.getSummary();
+        if (cancelled) return;
+        setDashboardSummary(data);
       } catch {
         // Non-blocking: dashboard should still render
       }
@@ -101,31 +130,28 @@ export default function DashboardPage() {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <MetricCard
             title="Active Chillers"
-            value={3}
+            value={dashboardSummary?.active_chillers_count ?? '—'}
             unit="units"
             icon={Thermometer}
-            trend={{ value: 12, direction: 'up' }}
             status="normal"
           />
           <MetricCard
             title="Avg Pressure"
-            value="6.5"
+            value="—"
             unit="bar"
             icon={Gauge}
-            trend={{ value: 3, direction: 'down' }}
             status="normal"
           />
           <MetricCard
             title="E Log Book"
-            value="0"
+            value={dashboardSummary?.total_log_entries ?? 0}
             unit="entries"
             icon={Thermometer}
-            trend={{ value: 5, direction: 'up' }}
             status="normal"
           />
           <MetricCard
             title="HVAC Validations"
-            value={12}
+            value="—"
             unit="pending"
             icon={Wind}
             status="normal"
@@ -136,29 +162,41 @@ export default function DashboardPage() {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <MetricCard
             title="Pending Approvals"
-            value={8}
+            value={dashboardSummary?.pending_approvals_count ?? 0}
             icon={Clock}
             status="warning"
           />
           <MetricCard
             title="Approved Today"
-            value={24}
+            value={dashboardSummary?.approved_today_count ?? 0}
             icon={CheckCircle2}
             status="normal"
           />
           <MetricCard
             title="Active Alerts"
-            value={overdueTotal || 0}
+            value={dashboardSummary?.active_alerts ?? overdueTotal ?? 0}
             icon={AlertTriangle}
-            status={overdueTotal > 0 ? 'critical' : 'normal'}
+            status={(dashboardSummary?.active_alerts ?? overdueTotal ?? 0) > 0 ? 'critical' : 'normal'}
           />
           <MetricCard
             title="Compliance Score"
-            value="98%"
+            value={dashboardSummary?.compliance_score != null ? `${dashboardSummary.compliance_score}%` : '—'}
             icon={ClipboardCheck}
             status="normal"
           />
         </div>
+
+        {/* Chiller dashboard */}
+        <ChillerDashboardSection />
+
+        {/* Boiler dashboard */}
+        <BoilerDashboardSection />
+
+        {/* Chemical dashboard */}
+        <ChemicalDashboardSection />
+
+        {/* Filters dashboard */}
+        <FiltersDashboardSection />
 
         {/* Charts & Activity */}
         <div className="grid lg:grid-cols-2 gap-6">

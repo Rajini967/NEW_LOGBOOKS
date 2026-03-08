@@ -102,6 +102,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
   const eLogBookItems = [
     { id: 'chiller', path: '/e-log-book/chiller', icon: Thermometer, label: 'Chiller', roles: ['operator', 'supervisor', 'super_admin', 'manager'] },
+    { id: 'ct-chemical', path: '/e-log-book/ct-chemical', icon: Droplets, label: 'CT Chemical', roles: ['operator', 'supervisor', 'super_admin', 'manager'] },
     { id: 'boiler', path: '/e-log-book/boiler', icon: Gauge, label: 'Boiler', roles: ['operator', 'supervisor', 'super_admin', 'manager'] },
     { id: 'chemical', path: '/e-log-book/chemical', icon: Droplets, label: 'Chemical', roles: ['operator', 'supervisor', 'super_admin', 'manager'] },
     { id: 'filter', path: '/e-log-book/filter', icon: Filter, label: 'Filter', roles: ['operator', 'supervisor', 'super_admin', 'manager'] },

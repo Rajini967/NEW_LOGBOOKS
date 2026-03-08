@@ -60,6 +60,9 @@ interface ELogBook {
   ctDifferentialTemp?: number;
   chillerWaterInletPressure?: number;
   chillerMakeupWaterFlow?: number;
+  dailyWaterCt1Liters?: number | null;
+  dailyWaterCt2Liters?: number | null;
+  dailyWaterCt3Liters?: number | null;
   evapWaterInletPressure?: number;
   evapWaterOutletPressure?: number;
   evapEnteringWaterTemp?: number;
@@ -282,6 +285,9 @@ export default function ELogBookPage() {
     ctDifferentialTemp: '',
     chillerWaterInletPressure: '',
     chillerMakeupWaterFlow: '',
+    dailyWaterCt1Liters: '',
+    dailyWaterCt2Liters: '',
+    dailyWaterCt3Liters: '',
     evapWaterInletPressure: '',
     evapWaterOutletPressure: '',
     evapEnteringWaterTemp: '',
@@ -375,6 +381,8 @@ export default function ELogBookPage() {
     toTime: '',
   });
   const [filteredLogs, setFilteredLogs] = useState<ELogBook[]>(logs);
+  const [previousReadingsForEquipment, setPreviousReadingsForEquipment] = useState<ELogBook[]>([]);
+  const [previousReadingsLoading, setPreviousReadingsLoading] = useState(false);
 
   // Fetch logbook schemas and initial logs from API
   useEffect(() => {
@@ -473,6 +481,66 @@ export default function ELogBookPage() {
     }
   }, [formData.equipmentType, logbookSchemas]);
 
+  // After equipment selection, fetch previous readings with entered-by for that equipment (chiller/boiler/compressor)
+  useEffect(() => {
+    const eqId = formData.equipmentId;
+    const eqType = formData.equipmentType;
+    if (!eqId || eqType === 'chemical') {
+      setPreviousReadingsForEquipment([]);
+      return;
+    }
+    let cancelled = false;
+    setPreviousReadingsLoading(true);
+    const fetchList = async () => {
+      if (eqType === 'chiller') {
+        return chillerLogAPI.list({ equipment_id: eqId });
+      }
+      if (eqType === 'boiler') {
+        return boilerLogAPI.list({ equipment_id: eqId });
+      }
+      if (eqType === 'compressor') {
+        return compressorLogAPI.list({ equipment_id: eqId });
+      }
+      return [];
+    };
+    fetchList()
+      .then((raw: any[]) => {
+        if (cancelled) return;
+        const list = (Array.isArray(raw) ? raw : []).slice(0, 10).map((log: any) => {
+          const timestamp = new Date(log.timestamp);
+          return {
+            id: log.id,
+            equipmentType: eqType,
+            equipmentId: log.equipment_id,
+            date: format(timestamp, 'yyyy-MM-dd'),
+            time: format(timestamp, 'HH:mm:ss'),
+            chillerSupplyTemp: log.chiller_supply_temp,
+            chillerReturnTemp: log.chiller_return_temp,
+            feedWaterTemp: log.feed_water_temp,
+            oilTemp: log.oil_temp,
+            steamTemp: log.steam_temp,
+            steamPressure: log.steam_pressure,
+            compressorSupplyTemp: log.compressor_supply_temp,
+            compressorReturnTemp: log.compressor_return_temp,
+            remarks: log.remarks || '',
+            checkedBy: log.operator_name,
+            timestamp,
+            status: log.status,
+          } as ELogBook;
+        });
+        setPreviousReadingsForEquipment(list);
+      })
+      .catch(() => {
+        if (!cancelled) setPreviousReadingsForEquipment([]);
+      })
+      .finally(() => {
+        if (!cancelled) setPreviousReadingsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [formData.equipmentId, formData.equipmentType]);
+
   // Missed scheduled reading popup: when logs and session settings are ready, check if next due has passed
   useEffect(() => {
     if (!sessionSettings?.log_entry_interval || logs.length === 0) return;
@@ -518,6 +586,9 @@ export default function ELogBookPage() {
           ctDifferentialTemp: log.ct_differential_temp,
           chillerWaterInletPressure: log.chiller_water_inlet_pressure,
           chillerMakeupWaterFlow: log.chiller_makeup_water_flow,
+          dailyWaterCt1Liters: log.daily_water_consumption_ct1_liters,
+          dailyWaterCt2Liters: log.daily_water_consumption_ct2_liters,
+          dailyWaterCt3Liters: log.daily_water_consumption_ct3_liters,
           evapWaterInletPressure: log.evap_water_inlet_pressure,
               evapWaterOutletPressure: log.evap_water_outlet_pressure,
               evapEnteringWaterTemp: log.evap_entering_water_temp,
@@ -814,6 +885,9 @@ export default function ELogBookPage() {
           ct_differential_temp: parseFloat(formData.ctDifferentialTemp),
           chiller_water_inlet_pressure: parseFloat(formData.chillerWaterInletPressure),
           chiller_makeup_water_flow: formData.chillerMakeupWaterFlow ? parseFloat(formData.chillerMakeupWaterFlow) : undefined,
+          daily_water_consumption_ct1_liters: formData.dailyWaterCt1Liters ? parseFloat(formData.dailyWaterCt1Liters) : undefined,
+          daily_water_consumption_ct2_liters: formData.dailyWaterCt2Liters ? parseFloat(formData.dailyWaterCt2Liters) : undefined,
+          daily_water_consumption_ct3_liters: formData.dailyWaterCt3Liters ? parseFloat(formData.dailyWaterCt3Liters) : undefined,
           evap_water_inlet_pressure: formData.evapWaterInletPressure
             ? parseFloat(formData.evapWaterInletPressure)
             : undefined,
@@ -944,6 +1018,9 @@ export default function ELogBookPage() {
         ctDifferentialTemp: '',
         chillerWaterInletPressure: '',
         chillerMakeupWaterFlow: '',
+        dailyWaterCt1Liters: '',
+        dailyWaterCt2Liters: '',
+        dailyWaterCt3Liters: '',
         evapWaterInletPressure: '',
         evapWaterOutletPressure: '',
         evapEnteringWaterTemp: '',
@@ -1005,7 +1082,11 @@ export default function ELogBookPage() {
       await refreshLogs();
     } catch (error: any) {
       console.error('Error saving entry:', error);
-      toast.error(error?.message || 'Failed to save entry');
+      if (error?.response?.status === 400 && Array.isArray(error?.response?.data?.detail)) {
+        toast.error(error.response.data.detail.join(' '));
+      } else {
+        toast.error(error?.message || 'Failed to save entry');
+      }
     }
   };
 
@@ -1088,6 +1169,9 @@ export default function ELogBookPage() {
       ctDifferentialTemp: log.ctDifferentialTemp != null ? String(log.ctDifferentialTemp) : '',
       chillerWaterInletPressure: log.chillerWaterInletPressure != null ? String(log.chillerWaterInletPressure) : '',
       chillerMakeupWaterFlow: log.chillerMakeupWaterFlow != null ? String(log.chillerMakeupWaterFlow) : '',
+      dailyWaterCt1Liters: log.dailyWaterCt1Liters != null ? String(log.dailyWaterCt1Liters) : '',
+      dailyWaterCt2Liters: log.dailyWaterCt2Liters != null ? String(log.dailyWaterCt2Liters) : '',
+      dailyWaterCt3Liters: log.dailyWaterCt3Liters != null ? String(log.dailyWaterCt3Liters) : '',
       evapWaterInletPressure: log.evapWaterInletPressure != null ? String(log.evapWaterInletPressure) : '',
       evapWaterOutletPressure: log.evapWaterOutletPressure != null ? String(log.evapWaterOutletPressure) : '',
       evapEnteringWaterTemp: log.evapEnteringWaterTemp != null ? String(log.evapEnteringWaterTemp) : '',
@@ -1538,9 +1622,7 @@ export default function ELogBookPage() {
             <DialogTrigger asChild>
               <Button
                 variant="accent"
-                onClick={() => {
-                  setEditingLogId(null);
-                }}
+                onClick={() => setEditingLogId(null)}
               >
                 <Plus className="w-4 h-4 mr-2" />
                 New Entry
@@ -1578,6 +1660,9 @@ export default function ELogBookPage() {
                           ctDifferentialTemp: '',
                           chillerWaterInletPressure: '',
                           chillerMakeupWaterFlow: '',
+                          dailyWaterCt1Liters: '',
+                          dailyWaterCt2Liters: '',
+                          dailyWaterCt3Liters: '',
                           evapWaterInletPressure: '',
                           evapWaterOutletPressure: '',
                           evapEnteringWaterTemp: '',
@@ -1721,6 +1806,38 @@ export default function ELogBookPage() {
                             })()}
                         </SelectContent>
                       </Select>
+                    </div>
+                  )}
+
+                  {/* Previous readings for selected equipment with entered-by */}
+                  {formData.equipmentId && formData.equipmentType !== 'chemical' && (
+                    <div className="col-span-2 rounded-lg border bg-muted/30 p-3 space-y-2">
+                      <p className="text-sm font-medium">Previous readings (Entered by)</p>
+                      {previousReadingsLoading ? (
+                        <p className="text-xs text-muted-foreground">Loading…</p>
+                      ) : previousReadingsForEquipment.length === 0 ? (
+                        <p className="text-xs text-muted-foreground">No previous entries for this equipment.</p>
+                      ) : (
+                        <div className="max-h-40 overflow-y-auto space-y-2">
+                          {previousReadingsForEquipment.map((log) => (
+                            <div key={log.id} className="text-xs border-b border-border/50 pb-2 last:border-0 last:pb-0">
+                              <span className="font-medium">{log.date} {log.time}</span>
+                              <span className="text-muted-foreground"> — Entered by: {log.checkedBy || '—'}</span>
+                              <div className="mt-1 text-muted-foreground">
+                                {formData.equipmentType === 'chiller' && (
+                                  <>Supply {log.chillerSupplyTemp}°C · Return {log.chillerReturnTemp}°C</>
+                                )}
+                                {formData.equipmentType === 'boiler' && (
+                                  <>Feed {log.feedWaterTemp}°C · Steam {log.steamTemp}°C / {log.steamPressure} bar</>
+                                )}
+                                {formData.equipmentType === 'compressor' && (
+                                  <>Supply {log.compressorSupplyTemp}°C · Return {log.compressorReturnTemp}°C</>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -2436,6 +2553,42 @@ export default function ELogBookPage() {
                         onChange={(e) => setFormData({ ...formData, chillerMakeupWaterFlow: e.target.value })}
                         placeholder="e.g., 10000"
                       />
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-4">
+                      <div className="space-y-2">
+                        <Label>Cooling Tower 1 – Daily water consumption (L)</Label>
+                        <Input
+                          type="number"
+                          min={0}
+                          step="1"
+                          value={formData.dailyWaterCt1Liters}
+                          onChange={(e) => setFormData({ ...formData, dailyWaterCt1Liters: e.target.value })}
+                          placeholder="Optional"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Cooling Tower 2 – Daily water consumption (L)</Label>
+                        <Input
+                          type="number"
+                          min={0}
+                          step="1"
+                          value={formData.dailyWaterCt2Liters}
+                          onChange={(e) => setFormData({ ...formData, dailyWaterCt2Liters: e.target.value })}
+                          placeholder="Optional"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Cooling Tower 3 – Daily water consumption (L)</Label>
+                        <Input
+                          type="number"
+                          min={0}
+                          step="1"
+                          value={formData.dailyWaterCt3Liters}
+                          onChange={(e) => setFormData({ ...formData, dailyWaterCt3Liters: e.target.value })}
+                          placeholder="Optional"
+                        />
+                      </div>
                     </div>
 
                     {/* Operator Sign & Date - full width block after make up water flow */}

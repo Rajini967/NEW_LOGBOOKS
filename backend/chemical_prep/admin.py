@@ -1,5 +1,10 @@
 from django.contrib import admin
-from .models import ChemicalPreparation
+from .models import ChemicalPreparation, ChemicalDashboardConfig
+
+
+@admin.register(ChemicalDashboardConfig)
+class ChemicalDashboardConfigAdmin(admin.ModelAdmin):
+    list_display = ['projected_consumption_kg_month', 'projected_cost_rs_month', 'updated_at']
 
 
 @admin.register(ChemicalPreparation)

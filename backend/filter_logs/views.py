@@ -19,6 +19,35 @@ class FilterLogViewSet(viewsets.ModelViewSet):
     serializer_class = FilterLogSerializer
     queryset = FilterLog.objects.all()
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if self.action != 'list':
+            return qs
+        date_from = self.request.query_params.get('date_from')
+        date_to = self.request.query_params.get('date_to')
+        equipment_id = self.request.query_params.get('equipment_id')
+        if equipment_id:
+            qs = qs.filter(equipment_id=equipment_id)
+        if date_from:
+            try:
+                from datetime import datetime
+                dt = datetime.fromisoformat(date_from.replace('Z', '+00:00'))
+                if timezone.is_naive(dt):
+                    dt = timezone.make_aware(dt, timezone.get_current_timezone())
+                qs = qs.filter(timestamp__gte=dt)
+            except (ValueError, TypeError):
+                pass
+        if date_to:
+            try:
+                from datetime import datetime
+                dt = datetime.fromisoformat(date_to.replace('Z', '+00:00'))
+                if timezone.is_naive(dt):
+                    dt = timezone.make_aware(dt, timezone.get_current_timezone())
+                qs = qs.filter(timestamp__lte=dt)
+            except (ValueError, TypeError):
+                pass
+        return qs.order_by('-timestamp')
+
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update']:
             return [IsAuthenticated(), CanLogEntries()]

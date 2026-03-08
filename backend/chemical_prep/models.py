@@ -260,3 +260,33 @@ class ChemicalPreparation(models.Model):
         return (
             f"Chemical Preparation - {self.equipment_name} - {self.chemical_name} - {self.timestamp}"
         )
+
+
+class ChemicalDashboardConfig(models.Model):
+    """
+    Optional singleton config for chemical dashboard: projected consumption and cost per month.
+    Used for "actual vs projected" consumption and cost on the dashboard.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    projected_consumption_kg_month = models.FloatField(
+        validators=[MinValueValidator(0)],
+        blank=True,
+        null=True,
+        help_text="Projected chemical consumption per month (kg) for comparison",
+    )
+    projected_cost_rs_month = models.FloatField(
+        validators=[MinValueValidator(0)],
+        blank=True,
+        null=True,
+        help_text="Projected chemical cost per month (Rs) for comparison",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "chemical_dashboard_config"
+        verbose_name = "Chemical Dashboard Config"
+        verbose_name_plural = "Chemical Dashboard Config"
+
+    def __str__(self):
+        return "Chemical dashboard config"

@@ -6,10 +6,75 @@ from rest_framework.exceptions import ValidationError
 from django.utils import timezone
 from accounts.models import SessionSetting
 from core.log_slot_utils import get_slot_range
-from .models import ChillerLog, ChillerEquipmentStatusAudit
-from .serializers import ChillerLogSerializer
-from accounts.permissions import CanLogEntries, CanApproveReports
+from .models import ChillerLog, ChillerEquipmentStatusAudit, ChillerEquipmentLimit, CoolingTowerChemicalLog, ChillerDashboardConfig
+from .serializers import ChillerLogSerializer, ChillerEquipmentLimitSerializer, CoolingTowerChemicalLogSerializer
+from accounts.permissions import CanLogEntries, CanApproveReports, IsSuperAdminOrManager
 from reports.utils import log_limit_change
+from django.db.models import Sum
+from datetime import datetime, date
+import calendar
+
+
+def _validate_chiller_daily_limits(
+    equipment_id: str,
+    log_date,
+    *,
+    power_kwh: float,
+    water_ct1: float,
+    water_ct2: float,
+    water_ct3: float,
+    chemical_ct1_kg: float,
+    chemical_ct2_kg: float,
+    chemical_ct3_kg: float,
+    exclude_log_id=None,
+) -> tuple[bool, list[str]]:
+    """
+    Check that adding this entry would not exceed daily limits for the equipment.
+    Returns (True, []) if ok, (False, [error_messages]) if any limit exceeded.
+    """
+    limit = ChillerEquipmentLimit.objects.filter(equipment_id=equipment_id).first()
+    if not limit:
+        return True, []
+
+    base_qs = ChillerLog.objects.filter(equipment_id=equipment_id, timestamp__date=log_date)
+    if exclude_log_id is not None:
+        base_qs = base_qs.exclude(pk=exclude_log_id)
+
+    agg = base_qs.aggregate(
+        power=Sum('starter_energy_kwh'),
+        w1=Sum('daily_water_consumption_ct1_liters'),
+        w2=Sum('daily_water_consumption_ct2_liters'),
+        w3=Sum('daily_water_consumption_ct3_liters'),
+        c1=Sum('cooling_tower_chemical_qty_per_day'),
+        c2=Sum('chilled_water_pump_chemical_qty_kg'),
+        c3=Sum('cooling_tower_fan_chemical_qty_kg'),
+    )
+    total_power = (agg['power'] or 0) + (power_kwh or 0)
+    total_w1 = (agg['w1'] or 0) + (water_ct1 or 0)
+    total_w2 = (agg['w2'] or 0) + (water_ct2 or 0)
+    total_w3 = (agg['w3'] or 0) + (water_ct3 or 0)
+    total_c1 = (agg['c1'] or 0) + (chemical_ct1_kg or 0)
+    total_c2 = (agg['c2'] or 0) + (chemical_ct2_kg or 0)
+    total_c3 = (agg['c3'] or 0) + (chemical_ct3_kg or 0)
+
+    errors = []
+    if limit.daily_power_limit_kw is not None and total_power > limit.daily_power_limit_kw:
+        errors.append(f"Daily power limit ({limit.daily_power_limit_kw} kWh) exceeded for this chiller.")
+    if limit.daily_water_ct1_liters is not None and total_w1 > limit.daily_water_ct1_liters:
+        errors.append("Cooling tower 1 daily water consumption limit exceeded.")
+    if limit.daily_water_ct2_liters is not None and total_w2 > limit.daily_water_ct2_liters:
+        errors.append("Cooling tower 2 daily water consumption limit exceeded.")
+    if limit.daily_water_ct3_liters is not None and total_w3 > limit.daily_water_ct3_liters:
+        errors.append("Cooling tower 3 daily water consumption limit exceeded.")
+    if limit.daily_chemical_ct1_kg is not None and total_c1 > limit.daily_chemical_ct1_kg:
+        errors.append("Cooling tower 1 daily chemical consumption limit exceeded.")
+    if limit.daily_chemical_ct2_kg is not None and total_c2 > limit.daily_chemical_ct2_kg:
+        errors.append("Cooling tower 2 daily chemical consumption limit exceeded.")
+    if limit.daily_chemical_ct3_kg is not None and total_c3 > limit.daily_chemical_ct3_kg:
+        errors.append("Cooling tower 3 daily chemical consumption limit exceeded.")
+    if errors:
+        return False, errors
+    return True, []
 
 
 class ChillerLogViewSet(viewsets.ModelViewSet):
@@ -132,6 +197,22 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
                 {'remarks': ['Remarks are required when changing pump/fan status.']}
             )
 
+        # Validate daily limits (power, water CT-1/2/3, chemical CT-1/2/3)
+        log_date = (timestamp or timezone.now()).date()
+        ok, limit_errors = _validate_chiller_daily_limits(
+            equipment_id=equipment_id,
+            log_date=log_date,
+            power_kwh=validated.get('starter_energy_kwh') or 0,
+            water_ct1=validated.get('daily_water_consumption_ct1_liters') or 0,
+            water_ct2=validated.get('daily_water_consumption_ct2_liters') or 0,
+            water_ct3=validated.get('daily_water_consumption_ct3_liters') or 0,
+            chemical_ct1_kg=validated.get('cooling_tower_chemical_qty_per_day') or 0,
+            chemical_ct2_kg=validated.get('chilled_water_pump_chemical_qty_kg') or 0,
+            chemical_ct3_kg=validated.get('cooling_tower_fan_chemical_qty_kg') or 0,
+        )
+        if not ok:
+            raise ValidationError({'detail': limit_errors})
+
         # Auto-append change notes into remarks for compliance
         combined_remarks = remarks
         if changes:
@@ -164,6 +245,29 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
                     new_value=change['new'],
                     changed_by=self.request.user,
                 )
+
+    def perform_update(self, serializer):
+        """Validate daily limits before saving update."""
+        instance = serializer.instance
+        validated = serializer.validated_data
+        log_date = (instance.timestamp or timezone.now()).date()
+        def _get(field, default=None):
+            return validated.get(field) if field in validated else getattr(instance, field, default)
+        ok, limit_errors = _validate_chiller_daily_limits(
+            equipment_id=instance.equipment_id,
+            log_date=log_date,
+            power_kwh=_get('starter_energy_kwh') or 0,
+            water_ct1=_get('daily_water_consumption_ct1_liters') or 0,
+            water_ct2=_get('daily_water_consumption_ct2_liters') or 0,
+            water_ct3=_get('daily_water_consumption_ct3_liters') or 0,
+            chemical_ct1_kg=_get('cooling_tower_chemical_qty_per_day') or 0,
+            chemical_ct2_kg=_get('chilled_water_pump_chemical_qty_kg') or 0,
+            chemical_ct3_kg=_get('cooling_tower_fan_chemical_qty_kg') or 0,
+            exclude_log_id=instance.id,
+        )
+        if not ok:
+            raise ValidationError({'detail': limit_errors})
+        serializer.save()
 
     def _is_first_log_of_day(self, log: ChillerLog) -> bool:
         """Return True if the given log is the first entry of the day for its equipment."""
@@ -221,6 +325,9 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
             'cooling_tower_fan_status',
             'cooling_tower_blowoff_valve_status',
             'cooling_tower_blowdown_time_min',
+            'daily_water_consumption_ct1_liters',
+            'daily_water_consumption_ct2_liters',
+            'daily_water_consumption_ct3_liters',
             'cooling_tower_chemical_name',
             'cooling_tower_chemical_qty_per_day',
             'chilled_water_pump_chemical_name',
@@ -280,6 +387,119 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
         """
         kwargs["partial"] = True
         return self.update(request, *args, **kwargs)
+
+    @action(detail=False, methods=['get'], url_path='dashboard_summary')
+    def dashboard_summary(self, request):
+        """
+        GET ?period_type=day|month|year&date=YYYY-MM-DD&equipment_id=...
+        Returns actual power (kWh), limit power (kWh), optional projected and cost, efficiency.
+        """
+        period_type = (request.query_params.get('period_type') or 'day').lower()
+        if period_type not in ('day', 'month', 'year'):
+            return Response({'error': 'period_type must be day, month, or year'}, status=status.HTTP_400_BAD_REQUEST)
+        date_str = request.query_params.get('date')
+        if not date_str:
+            return Response({'error': 'date is required (YYYY-MM-DD)'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            ref_date = datetime.strptime(date_str.strip()[:10], '%Y-%m-%d').date()
+        except ValueError:
+            return Response({'error': 'date must be YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
+        equipment_id = request.query_params.get('equipment_id', '').strip() or None
+
+        if period_type == 'day':
+            period_start = timezone.make_aware(datetime.combine(ref_date, datetime.min.time()))
+            period_end = timezone.make_aware(datetime.combine(ref_date, datetime.max.time().replace(microsecond=999999)))
+            days_in_period = 1
+        elif period_type == 'month':
+            _, last_day = calendar.monthrange(ref_date.year, ref_date.month)
+            period_start = timezone.make_aware(datetime(ref_date.year, ref_date.month, 1))
+            period_end = timezone.make_aware(datetime(ref_date.year, ref_date.month, last_day, 23, 59, 59, 999999))
+            days_in_period = last_day
+        else:
+            period_start = timezone.make_aware(datetime(ref_date.year, 1, 1))
+            last_day = 366 if calendar.isleap(ref_date.year) else 365
+            period_end = timezone.make_aware(datetime(ref_date.year, 12, 31, 23, 59, 59, 999999))
+            days_in_period = last_day
+
+        qs = ChillerLog.objects.filter(
+            timestamp__gte=period_start,
+            timestamp__lte=period_end,
+        )
+        if equipment_id:
+            qs = qs.filter(equipment_id=equipment_id)
+
+        agg = qs.aggregate(total=Sum('starter_energy_kwh'))
+        actual_power_kwh = float(agg['total'] or 0)
+
+        equipment_ids_in_logs = list(qs.values_list('equipment_id', flat=True).distinct())
+        if equipment_id:
+            limit_equipment_ids = [equipment_id] if equipment_ids_in_logs or equipment_id else []
+        else:
+            limit_equipment_ids = list(ChillerEquipmentLimit.objects.values_list('equipment_id', flat=True).distinct())
+            if equipment_ids_in_logs:
+                limit_equipment_ids = list(set(limit_equipment_ids) | set(equipment_ids_in_logs))
+
+        limit_power_kwh = 0.0
+        by_equipment = []
+        for eid in limit_equipment_ids:
+            limit_row = ChillerEquipmentLimit.objects.filter(equipment_id=eid).first()
+            daily_kw = (limit_row.daily_power_limit_kw or 0) if limit_row else 0
+            limit_for_period = daily_kw * days_in_period
+            limit_power_kwh += limit_for_period
+            log_agg = ChillerLog.objects.filter(
+                equipment_id=eid,
+                timestamp__gte=period_start,
+                timestamp__lte=period_end,
+            ).aggregate(s=Sum('starter_energy_kwh'))
+            actual_e = float(log_agg['s'] or 0)
+            by_equipment.append({
+                'equipment_id': eid,
+                'actual_power_kwh': round(actual_e, 2),
+                'limit_power_kwh': round(limit_for_period, 2),
+            })
+        limit_power_kwh = round(limit_power_kwh, 2)
+
+        utilization_pct = (actual_power_kwh / limit_power_kwh * 100) if limit_power_kwh > 0 else None
+        kWh_per_day = round(actual_power_kwh / days_in_period, 2) if days_in_period else 0
+
+        config = ChillerDashboardConfig.objects.first()
+        projected_power_kwh = None
+        actual_cost_rs = None
+        projected_cost_rs = None
+        if config:
+            if config.projected_power_kwh_month is not None:
+                if period_type == 'month':
+                    projected_power_kwh = config.projected_power_kwh_month
+                elif period_type == 'day':
+                    _, month_days = calendar.monthrange(ref_date.year, ref_date.month)
+                    projected_power_kwh = config.projected_power_kwh_month / month_days
+                else:
+                    projected_power_kwh = config.projected_power_kwh_month * 12
+                projected_power_kwh = round(projected_power_kwh, 2)
+            if config.electricity_rate_rs_per_kwh is not None:
+                rate = config.electricity_rate_rs_per_kwh
+                actual_cost_rs = round(actual_power_kwh * rate, 2)
+                if projected_power_kwh is not None:
+                    projected_cost_rs = round(projected_power_kwh * rate, 2)
+
+        payload = {
+            'period_type': period_type,
+            'period_start': period_start.date().isoformat(),
+            'period_end': period_end.date().isoformat(),
+            'days_in_period': days_in_period,
+            'actual_power_kwh': round(actual_power_kwh, 2),
+            'limit_power_kwh': limit_power_kwh,
+            'utilization_pct': round(utilization_pct, 2) if utilization_pct is not None else None,
+            'kwh_per_day': kWh_per_day,
+            'by_equipment': by_equipment,
+        }
+        if projected_power_kwh is not None:
+            payload['projected_power_kwh'] = projected_power_kwh
+        if actual_cost_rs is not None:
+            payload['actual_cost_rs'] = actual_cost_rs
+        if projected_cost_rs is not None:
+            payload['projected_cost_rs'] = projected_cost_rs
+        return Response(payload)
 
     @action(detail=True, methods=['post'])
     def correct(self, request, pk=None):
@@ -360,6 +580,9 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
             'cooling_tower_fan_status',
             'cooling_tower_blowoff_valve_status',
             'cooling_tower_blowdown_time_min',
+            'daily_water_consumption_ct1_liters',
+            'daily_water_consumption_ct2_liters',
+            'daily_water_consumption_ct3_liters',
             'cooling_tower_chemical_name',
             'cooling_tower_chemical_qty_per_day',
             'chilled_water_pump_chemical_name',
@@ -476,3 +699,65 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
         
         serializer = self.get_serializer(log)
         return Response(serializer.data)
+
+
+class ChillerEquipmentLimitViewSet(viewsets.ModelViewSet):
+    """ViewSet for chiller equipment daily limits (power, water, chemical). Write: Manager/Super Admin."""
+    permission_classes = [IsAuthenticated]
+    serializer_class = ChillerEquipmentLimitSerializer
+    queryset = ChillerEquipmentLimit.objects.all()
+    lookup_field = 'equipment_id'
+    lookup_value_regex = '[^/]+'
+
+    def get_permissions(self):
+        if self.action in ('create', 'update', 'partial_update', 'destroy'):
+            return [IsAuthenticated(), IsSuperAdminOrManager()]
+        return [IsAuthenticated()]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        equipment_id = self.request.query_params.get('equipment_id')
+        if equipment_id:
+            qs = qs.filter(equipment_id=equipment_id)
+        return qs
+
+
+class CoolingTowerChemicalLogViewSet(viewsets.ModelViewSet):
+    """ViewSet for cooling tower chemical log (separate log book)."""
+    permission_classes = [IsAuthenticated]
+    serializer_class = CoolingTowerChemicalLogSerializer
+    queryset = CoolingTowerChemicalLog.objects.all()
+
+    def get_permissions(self):
+        if self.action in ('create', 'update', 'partial_update', 'destroy'):
+            return [IsAuthenticated(), CanLogEntries()]
+        return [IsAuthenticated()]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        equipment_id = self.request.query_params.get('equipment_id')
+        date_from = self.request.query_params.get('date_from')
+        date_to = self.request.query_params.get('date_to')
+        tower_slot = self.request.query_params.get('tower_slot')
+        if equipment_id:
+            qs = qs.filter(equipment_id=equipment_id)
+        if date_from:
+            try:
+                from datetime import datetime
+                dt = datetime.fromisoformat(date_from.replace('Z', '+00:00')).date()
+                qs = qs.filter(date__gte=dt)
+            except (ValueError, TypeError):
+                pass
+        if date_to:
+            try:
+                from datetime import datetime
+                dt = datetime.fromisoformat(date_to.replace('Z', '+00:00')).date()
+                qs = qs.filter(date__lte=dt)
+            except (ValueError, TypeError):
+                pass
+        if tower_slot:
+            qs = qs.filter(tower_slot=tower_slot)
+        return qs.order_by('-date', '-created_at')
+
+    def perform_create(self, serializer):
+        serializer.save(operator=self.request.user)

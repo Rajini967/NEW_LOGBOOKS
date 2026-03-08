@@ -47,7 +47,7 @@ class ChemicalStockSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "created_at", "updated_at"]
+        read_only_fields = ["id", "chemical", "chemical_name", "chemical_formula", "location", "created_at", "updated_at"]
 
 
 class ChemicalAssignmentSerializer(serializers.ModelSerializer):

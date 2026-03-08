@@ -11,6 +11,7 @@ import ResetPasswordPage from "./pages/ResetPasswordPage";
 import DashboardPage from "./pages/DashboardPage";
 import ELogBookLandingPage from "./pages/ELogBookLandingPage";
 import ELogBookPage from "./pages/ELogBookPage";
+import CTChemicalLogPage from "./pages/CTChemicalLogPage";
 import BoilerLogBookPage from "./pages/BoilerLogBookPage";
 import ChemicalLogBookPage from "./pages/ChemicalLogBookPage";
 import ChemicalHomePage from "./pages/ChemicalHomePage";
@@ -97,6 +98,7 @@ const App = () => (
               <Route path="/dashboard" element={<DashboardPage />} />
               <Route path="/e-log-book" element={<ELogBookLandingPage />} />
               <Route path="/e-log-book/chiller" element={<ELogBookPage equipmentType="chiller" />} />
+              <Route path="/e-log-book/ct-chemical" element={<CTChemicalLogPage />} />
               <Route path="/e-log-book/boiler" element={<BoilerLogBookPage />} />
               <Route path="/e-log-book/chemical" element={<ChemicalLandingRoute />} />
               <Route path="/e-log-book/chemical/entry" element={<ChemicalLogBookPage />} />

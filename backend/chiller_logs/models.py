@@ -150,6 +150,25 @@ class ChillerLog(models.Model):
         null=True,
         help_text="Cooling tower blow down time (minutes)"
     )
+    # Daily water consumption per cooling tower (liters) - for limit validation
+    daily_water_consumption_ct1_liters = models.FloatField(
+        validators=[MinValueValidator(0)],
+        blank=True,
+        null=True,
+        help_text="Cooling tower 1 daily water consumption (liters)"
+    )
+    daily_water_consumption_ct2_liters = models.FloatField(
+        validators=[MinValueValidator(0)],
+        blank=True,
+        null=True,
+        help_text="Cooling tower 2 daily water consumption (liters)"
+    )
+    daily_water_consumption_ct3_liters = models.FloatField(
+        validators=[MinValueValidator(0)],
+        blank=True,
+        null=True,
+        help_text="Cooling tower 3 daily water consumption (liters)"
+    )
     # Cooling tower chemicals table - per equipment column
     # Column 1 - Cooling Tower Pump
     cooling_tower_chemical_name = models.CharField(
@@ -291,3 +310,145 @@ class ChillerEquipmentStatusAudit(models.Model):
 
     def __str__(self):
         return f"{self.get_field_name_display()} change on log {self.chiller_log_id}"
+
+
+class ChillerEquipmentLimit(models.Model):
+    """
+    Daily consumption limits per chiller equipment (power, water CT-1/2/3, chemical CT-1/2/3).
+    Used to validate chiller log entries; null means no limit.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    equipment_id = models.CharField(
+        max_length=100,
+        unique=True,
+        db_index=True,
+        help_text="Chiller equipment identifier (e.g. equipment_number)"
+    )
+    client_id = models.CharField(max_length=100, db_index=True, blank=True, null=True)
+    # Power category - daily limit in kW
+    daily_power_limit_kw = models.FloatField(
+        validators=[MinValueValidator(0)],
+        blank=True,
+        null=True,
+        help_text="Daily power consumption limit (kW)"
+    )
+    # Water category - daily limits in liters per cooling tower
+    daily_water_ct1_liters = models.FloatField(
+        validators=[MinValueValidator(0)],
+        blank=True,
+        null=True,
+        help_text="Cooling tower 1 daily water consumption limit (liters)"
+    )
+    daily_water_ct2_liters = models.FloatField(
+        validators=[MinValueValidator(0)],
+        blank=True,
+        null=True,
+        help_text="Cooling tower 2 daily water consumption limit (liters)"
+    )
+    daily_water_ct3_liters = models.FloatField(
+        validators=[MinValueValidator(0)],
+        blank=True,
+        null=True,
+        help_text="Cooling tower 3 daily water consumption limit (liters)"
+    )
+    # Chemical category - daily limits in kg per cooling tower (CT-1, CT-2, CT-3)
+    daily_chemical_ct1_kg = models.FloatField(
+        validators=[MinValueValidator(0)],
+        blank=True,
+        null=True,
+        help_text="Cooling tower 1 daily chemical consumption limit (kg)"
+    )
+    daily_chemical_ct2_kg = models.FloatField(
+        validators=[MinValueValidator(0)],
+        blank=True,
+        null=True,
+        help_text="Cooling tower 2 daily chemical consumption limit (kg)"
+    )
+    daily_chemical_ct3_kg = models.FloatField(
+        validators=[MinValueValidator(0)],
+        blank=True,
+        null=True,
+        help_text="Cooling tower 3 daily chemical consumption limit (kg)"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "chiller_equipment_limits"
+        ordering = ["equipment_id"]
+        verbose_name = "Chiller Equipment Limit"
+        verbose_name_plural = "Chiller Equipment Limits"
+
+    def __str__(self):
+        return f"Limits for {self.equipment_id}"
+
+
+class CoolingTowerChemicalLog(models.Model):
+    """
+    Separate log book for cooling tower chemical details (date, equipment, tower slot, chemical, quantity).
+    """
+    TOWER_SLOT_CHOICES = [
+        ('CT-1', 'Cooling Tower 1'),
+        ('CT-2', 'Cooling Tower 2'),
+        ('CT-3', 'Cooling Tower 3'),
+    ]
+    STATUS_CHOICES = [
+        ('draft', 'Draft'),
+        ('approved', 'Approved'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    date = models.DateField(db_index=True)
+    equipment_id = models.CharField(max_length=100, db_index=True, help_text="Chiller equipment identifier")
+    tower_slot = models.CharField(max_length=10, choices=TOWER_SLOT_CHOICES, db_index=True)
+    chemical_name = models.CharField(max_length=200)
+    quantity_kg = models.FloatField(validators=[MinValueValidator(0)], help_text="Quantity (kg)")
+    batch = models.CharField(max_length=100, blank=True, null=True)
+    operator = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='ct_chemical_logs',
+    )
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'cooling_tower_chemical_logs'
+        ordering = ['-date', '-created_at']
+        verbose_name = 'Cooling Tower Chemical Log'
+        verbose_name_plural = 'Cooling Tower Chemical Logs'
+
+    def __str__(self):
+        return f"{self.date} {self.equipment_id} {self.tower_slot} {self.chemical_name}"
+
+
+class ChillerDashboardConfig(models.Model):
+    """
+    Optional singleton config for chiller dashboard: projected power and electricity rate.
+    Used for "actual vs projected" and "actual vs projected opex cost" on the dashboard.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    projected_power_kwh_month = models.FloatField(
+        validators=[MinValueValidator(0)],
+        blank=True,
+        null=True,
+        help_text="Projected power consumption per month (kWh) for comparison",
+    )
+    electricity_rate_rs_per_kwh = models.FloatField(
+        validators=[MinValueValidator(0)],
+        blank=True,
+        null=True,
+        help_text="Electricity rate (Rs per kWh) for cost calculation",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "chiller_dashboard_config"
+        verbose_name = "Chiller Dashboard Config"
+        verbose_name_plural = "Chiller Dashboard Config"
+
+    def __str__(self):
+        return "Chiller dashboard config"

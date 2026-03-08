@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import ChillerLog
+from .models import ChillerLog, ChillerEquipmentLimit, CoolingTowerChemicalLog
 
 
 class ChillerLogSerializer(serializers.ModelSerializer):
@@ -28,14 +28,16 @@ class ChillerLogSerializer(serializers.ModelSerializer):
             'cooling_tower_pump_status', 'chilled_water_pump_status',
             'cooling_tower_fan_status', 'cooling_tower_blowoff_valve_status',
             'cooling_tower_blowdown_time_min',
+            'daily_water_consumption_ct1_liters', 'daily_water_consumption_ct2_liters',
+            'daily_water_consumption_ct3_liters',
             'cooling_tower_chemical_name', 'cooling_tower_chemical_qty_per_day',
             'chilled_water_pump_chemical_name', 'chilled_water_pump_chemical_qty_kg',
             'cooling_tower_fan_chemical_name', 'cooling_tower_fan_chemical_qty_kg',
             'recording_frequency', 'operator_sign', 'verified_by',
             'remarks', 'comment', 'operator_id', 'operator_name', 'status',
             'approved_by_id', 'approved_at', 'secondary_approved_by_id', 'secondary_approved_at',
-            'corrects_id', 'has_corrections', 'timestamp',
-            'created_at', 'updated_at'
+            'corrects_id', 'has_corrections',
+            'timestamp', 'created_at', 'updated_at'
         ]
         read_only_fields = [
             'id', 'operator_id', 'operator_name', 'approved_by_id', 'approved_at',
@@ -55,4 +57,29 @@ class ChillerLogSerializer(serializers.ModelSerializer):
 
     def get_has_corrections(self, obj: ChillerLog) -> bool:
         return obj.corrections.exists()
+
+
+class ChillerEquipmentLimitSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ChillerEquipmentLimit
+        fields = [
+            'id', 'equipment_id', 'client_id',
+            'daily_power_limit_kw',
+            'daily_water_ct1_liters', 'daily_water_ct2_liters', 'daily_water_ct3_liters',
+            'daily_chemical_ct1_kg', 'daily_chemical_ct2_kg', 'daily_chemical_ct3_kg',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class CoolingTowerChemicalLogSerializer(serializers.ModelSerializer):
+    operator_id = serializers.UUIDField(source='operator.id', read_only=True, allow_null=True)
+
+    class Meta:
+        model = CoolingTowerChemicalLog
+        fields = [
+            'id', 'date', 'equipment_id', 'tower_slot', 'chemical_name', 'quantity_kg', 'batch',
+            'operator_id', 'status', 'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
 

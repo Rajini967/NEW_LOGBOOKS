@@ -1,4 +1,5 @@
-from datetime import date, timedelta
+import calendar
+from datetime import date, datetime, timedelta
 
 from django.db.models.deletion import ProtectedError
 from django.db.models import Count
@@ -11,7 +12,7 @@ from rest_framework.response import Response
 from accounts.permissions import IsManagerOrSuperAdmin
 from reports.utils import create_report_entry
 
-from .models import FilterCategory, FilterMaster, FilterAssignment, FilterSchedule
+from .models import FilterCategory, FilterMaster, FilterAssignment, FilterSchedule, FilterDashboardConfig
 from .serializers import (
     FilterCategorySerializer,
     FilterMasterSerializer,
@@ -218,6 +219,93 @@ class FilterScheduleViewSet(viewsets.ModelViewSet):
         )
         summary = {row["schedule_type"]: row["count"] for row in qs}
         return Response(summary)
+
+    @action(detail=False, methods=["get"], url_path="dashboard_summary")
+    def dashboard_summary(self, request):
+        """
+        GET ?period_type=week|month&date=YYYY-MM-DD
+        Returns counts of filter maintenance done in period (replacement, cleaning, integrity),
+        total_consumption (sum of counts), total_cost_rs (0), and optional projected values.
+        """
+        period_type = (request.query_params.get("period_type") or "month").lower()
+        if period_type not in ("week", "month"):
+            return Response(
+                {"error": "period_type must be week or month"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        date_str = request.query_params.get("date")
+        if not date_str:
+            return Response(
+                {"error": "date is required (YYYY-MM-DD)"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            ref_date = datetime.strptime(date_str.strip()[:10], "%Y-%m-%d").date()
+        except ValueError:
+            return Response(
+                {"error": "date must be YYYY-MM-DD"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if period_type == "week":
+            year, week_no, _ = ref_date.isocalendar()
+            period_start_date = datetime.strptime(
+                f"{year}-W{week_no:02d}-1", "%G-W%V-%u"
+            ).date()
+            period_end_date = period_start_date + timedelta(days=6)
+        else:
+            _, last_day = calendar.monthrange(ref_date.year, ref_date.month)
+            period_start_date = date(ref_date.year, ref_date.month, 1)
+            period_end_date = date(ref_date.year, ref_date.month, last_day)
+
+        base_qs = FilterSchedule.objects.filter(
+            last_done_date__gte=period_start_date,
+            last_done_date__lte=period_end_date,
+        ).exclude(last_done_date__isnull=True)
+
+        counts_by_type = dict(
+            base_qs.values("schedule_type").annotate(count=Count("id")).values_list("schedule_type", "count")
+        )
+        replacement_count = counts_by_type.get("replacement", 0)
+        cleaning_count = counts_by_type.get("cleaning", 0)
+        integrity_count = counts_by_type.get("integrity", 0)
+        total_consumption = replacement_count + cleaning_count + integrity_count
+
+        payload = {
+            "period_type": period_type,
+            "period_start": period_start_date.isoformat(),
+            "period_end": period_end_date.isoformat(),
+            "replacement_count": replacement_count,
+            "cleaning_count": cleaning_count,
+            "integrity_count": integrity_count,
+            "total_consumption": total_consumption,
+            "total_cost_rs": 0,
+        }
+
+        config = FilterDashboardConfig.objects.first()
+        if config:
+            if period_type == "month":
+                payload["projected_replacement_count"] = config.projected_replacement_count_month
+                payload["projected_cleaning_count"] = config.projected_cleaning_count_month
+                payload["projected_integrity_count"] = config.projected_integrity_count_month
+                payload["projected_cost_rs"] = round(config.projected_cost_rs_month, 2) if config.projected_cost_rs_month is not None else None
+            else:
+                _, month_days = calendar.monthrange(ref_date.year, ref_date.month)
+                scale = 7.0 / month_days
+                if config.projected_replacement_count_month is not None:
+                    payload["projected_replacement_count"] = round(config.projected_replacement_count_month * scale)
+                if config.projected_cleaning_count_month is not None:
+                    payload["projected_cleaning_count"] = round(config.projected_cleaning_count_month * scale)
+                if config.projected_integrity_count_month is not None:
+                    payload["projected_integrity_count"] = round(config.projected_integrity_count_month * scale)
+                if config.projected_cost_rs_month is not None:
+                    payload["projected_cost_rs"] = round(config.projected_cost_rs_month * scale, 2)
+            proj_rep = payload.get("projected_replacement_count") or 0
+            proj_clean = payload.get("projected_cleaning_count") or 0
+            proj_int = payload.get("projected_integrity_count") or 0
+            payload["projected_consumption"] = proj_rep + proj_clean + proj_int
+
+        return Response(payload)
 
     @action(detail=True, methods=["post"])
     def approve(self, request, pk=None):

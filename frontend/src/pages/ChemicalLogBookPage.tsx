@@ -16,7 +16,7 @@ import {
 import { useAuth } from "@/contexts/AuthContext";
 import { format } from "date-fns";
 import { toast } from "sonner";
-import { chemicalPrepAPI, chemicalMasterAPI, chemicalAssignmentAPI } from "@/lib/api";
+import { chemicalPrepAPI, chemicalMasterAPI, chemicalAssignmentAPI, chemicalStockAPI } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Link } from "react-router-dom";
 import { Clock, Save, Filter, X, Plus, Trash2, CheckCircle, XCircle, Edit, History, Eye, Package } from "lucide-react";
@@ -117,9 +117,21 @@ const ChemicalLogBookPage: React.FC = () => {
 
   const [chemicalNames, setChemicalNames] = useState<string[]>([]);
   const [equipmentOptions, setEquipmentOptions] = useState<{ id: string; name: string }[]>([]);
+  const [previousReadingsForEquipment, setPreviousReadingsForEquipment] = useState<ChemicalPrepLog[]>([]);
+  const [previousReadingsLoading, setPreviousReadingsLoading] = useState(false);
   const [assignments, setAssignments] = useState<
-    { equipment_name: string; category: "major" | "minor"; chemical_name: string; chemical_formula: string }[]
+    { equipment_name: string; category: "major" | "minor"; chemical_name: string; chemical_formula: string; chemical_id?: string | null; location?: string | null }[]
   >([]);
+  const [selectedChemicalId, setSelectedChemicalId] = useState<string | null>(null);
+  /** When assignment has no chemical master link, we resolve ID from master list by name/formula so stock can still be shown */
+  const [resolvedChemicalId, setResolvedChemicalId] = useState<string | null>(null);
+  const [chemicalMasterList, setChemicalMasterList] = useState<{ id: string; name: string; formula: string }[]>([]);
+  const [selectedStockInfo, setSelectedStockInfo] = useState<{
+    availableQtyKg: number | null;
+    unit: string | null;
+    pricePerUnit: number | null;
+    site: string | null;
+  } | null>(null);
 
   const refreshLogs = async () => {
     try {
@@ -173,6 +185,58 @@ const ChemicalLogBookPage: React.FC = () => {
     refreshLogs();
   }, []);
 
+  // After equipment selection, fetch previous readings with entered-by for that equipment
+  useEffect(() => {
+    if (!formData.equipmentName?.trim()) {
+      setPreviousReadingsForEquipment([]);
+      return;
+    }
+    let cancelled = false;
+    setPreviousReadingsLoading(true);
+    chemicalPrepAPI
+      .list({ equipment_name: formData.equipmentName.trim() })
+      .then((raw: any[]) => {
+        if (cancelled) return;
+        const list: ChemicalPrepLog[] = (Array.isArray(raw) ? raw : []).slice(0, 10).map((prep: any) => {
+          const timestamp = new Date(prep.timestamp);
+          return {
+            id: prep.id,
+            equipmentName: prep.equipment_name,
+            chemicalName: prep.chemical_name,
+            chemicalPercent: prep.chemical_percent,
+            chemicalCategory: prep.chemical_category ?? null,
+            chemicalConcentration: prep.chemical_concentration,
+            solutionConcentration: prep.solution_concentration,
+            waterQty: prep.water_qty,
+            chemicalQty: prep.chemical_qty,
+            batchNo: prep.batch_no,
+            doneBy: prep.done_by || prep.checked_by || prep.operator_name,
+            date: format(timestamp, "yyyy-MM-dd"),
+            time: format(timestamp, "HH:mm:ss"),
+            remarks: prep.remarks || "",
+            comment: prep.comment,
+            checkedBy: prep.checked_by || prep.operator_name,
+            timestamp,
+            status: prep.status,
+            operator_id: prep.operator_id,
+            approved_by_id: prep.approved_by_id,
+            corrects_id: prep.corrects_id,
+            has_corrections: prep.has_corrections,
+          };
+        });
+        setPreviousReadingsForEquipment(list);
+      })
+      .catch(() => {
+        if (!cancelled) setPreviousReadingsForEquipment([]);
+      })
+      .finally(() => {
+        if (!cancelled) setPreviousReadingsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [formData.equipmentName]);
+
   useEffect(() => {
     if (!sessionSettings?.log_entry_interval || logs.length === 0) return;
     const interval = sessionSettings.log_entry_interval as "hourly" | "shift" | "daily";
@@ -193,15 +257,18 @@ const ChemicalLogBookPage: React.FC = () => {
     }
   }, [logs, sessionSettings]);
 
-  // Load chemical names from backend master (no hardcoded list)
+  // Load chemical names and full master list (for resolving chemical ID when assignment has no link)
   useEffect(() => {
     (async () => {
       try {
         const data = await chemicalMasterAPI.list();
-        const names = (data as any[]).map(
-          (c) => `${(c as any).formula} – ${(c as any).name}`,
-        );
-        setChemicalNames(names);
+        const list = (data as any[]).map((c: any) => ({
+          id: c.id,
+          name: String(c.name ?? ""),
+          formula: String(c.formula ?? ""),
+        }));
+        setChemicalMasterList(list);
+        setChemicalNames(list.map((c) => `${c.formula} – ${c.name}`));
       } catch (error: any) {
         console.error("Error loading chemicals:", error);
         toast.error(error?.message || "Failed to load chemical list");
@@ -219,6 +286,8 @@ const ChemicalLogBookPage: React.FC = () => {
           category: ((row as any).category || "major") as "major" | "minor",
           chemical_name: String((row as any).chemical_name ?? ""),
           chemical_formula: String((row as any).chemical_formula ?? ""),
+          chemical_id: (row as any).chemical ?? null,
+          location: (row as any).location != null ? String((row as any).location) : null,
         }));
         setAssignments(rows);
         const seen = new Set<string>();
@@ -235,6 +304,124 @@ const ChemicalLogBookPage: React.FC = () => {
       }
     })();
   }, []);
+
+  // Derive selectedChemicalId from assignment; when assignment has no chemical link, resolve ID from master list
+  useEffect(() => {
+    if (!formData.equipmentName || !formData.chemicalName || assignments.length === 0) {
+      setSelectedChemicalId(null);
+      setResolvedChemicalId(null);
+      return;
+    }
+    const assignment = assignments.find(
+      (a) =>
+        a.equipment_name === formData.equipmentName &&
+        `${a.chemical_formula} – ${a.chemical_name}` === formData.chemicalName,
+    );
+    const fromAssignment = assignment?.chemical_id ?? null;
+    setSelectedChemicalId(fromAssignment);
+
+    // When assignment has no chemical master link, try to resolve by name/formula so we can still show stock
+    if (fromAssignment) {
+      setResolvedChemicalId(null);
+      return;
+    }
+    if (!assignment || chemicalMasterList.length === 0) {
+      setResolvedChemicalId(null);
+      return;
+    }
+    const match = chemicalMasterList.find((c) => {
+      const sameFormulaName =
+        (c.formula || "").trim().toLowerCase() === (assignment.chemical_formula || "").trim().toLowerCase() &&
+        (c.name || "").trim().toLowerCase() === (assignment.chemical_name || "").trim().toLowerCase();
+      const sameDisplay = `${(c.formula || "").trim()} – ${(c.name || "").trim()}` === (formData.chemicalName || "").trim();
+      return sameFormulaName || sameDisplay;
+    });
+    setResolvedChemicalId(match?.id ?? null);
+  }, [formData.equipmentName, formData.chemicalName, assignments, chemicalMasterList]);
+
+  // Normalize assignment location to backend filter value (water_system, cooling_towers, boiler)
+  const normalizeLocationForApi = (loc: string | null | undefined): string | null => {
+    if (!loc || !String(loc).trim()) return null;
+    const v = String(loc).trim().toLowerCase();
+    if (v.includes("water") && !v.includes("cooling")) return "water_system";
+    if (v.includes("cooling") || v === "cooling_towers") return "cooling_towers";
+    if (v === "boiler") return "boiler";
+    return null;
+  };
+
+  // Load stock when chemical is known (from assignment or resolved from master list), or by location + name/formula match
+  const chemicalIdForStock = selectedChemicalId || resolvedChemicalId;
+  const currentAssignment = useMemo(() => {
+    if (!formData.equipmentName || !formData.chemicalName || assignments.length === 0) return null;
+    return assignments.find(
+      (a) =>
+        a.equipment_name === formData.equipmentName &&
+        `${a.chemical_formula} – ${a.chemical_name}` === formData.chemicalName,
+    ) ?? null;
+  }, [formData.equipmentName, formData.chemicalName, assignments]);
+
+  useEffect(() => {
+    if (chemicalIdForStock) {
+      (async () => {
+        try {
+          const stock = await chemicalStockAPI.list({ chemical: chemicalIdForStock });
+          if (Array.isArray(stock) && stock.length > 0) {
+            const first = stock[0] as any;
+            setSelectedStockInfo({
+              availableQtyKg: first.available_qty_kg ?? null,
+              unit: first.unit ?? null,
+              pricePerUnit: first.price_per_unit ?? null,
+              site: first.site ?? null,
+            });
+          } else {
+            setSelectedStockInfo(null);
+          }
+        } catch (error: any) {
+          toast.error(error?.message ?? "Failed to load stock details for selected chemical.");
+          setSelectedStockInfo(null);
+        }
+      })();
+      return;
+    }
+    // Fallback: no chemical ID (e.g. assignment created without linking master). Fetch stock by assignment location and match by name/formula.
+    if (!currentAssignment?.chemical_name && !currentAssignment?.chemical_formula) {
+      setSelectedStockInfo(null);
+      return;
+    }
+    const locationKey = normalizeLocationForApi(currentAssignment?.location ?? undefined);
+    if (!locationKey) {
+      setSelectedStockInfo(null);
+      return;
+    }
+    (async () => {
+      try {
+        const stockList = await chemicalStockAPI.list({ location: locationKey });
+        if (!Array.isArray(stockList) || stockList.length === 0) {
+          setSelectedStockInfo(null);
+          return;
+        }
+        const name = (currentAssignment!.chemical_name || "").trim().toLowerCase();
+        const formula = (currentAssignment!.chemical_formula || "").trim().toLowerCase();
+        const match = stockList.find((row: any) => {
+          const rName = (row.chemical_name ?? "").trim().toLowerCase();
+          const rFormula = (row.chemical_formula ?? "").trim().toLowerCase();
+          return rName === name && rFormula === formula;
+        });
+        if (match) {
+          setSelectedStockInfo({
+            availableQtyKg: match.available_qty_kg ?? null,
+            unit: match.unit ?? null,
+            pricePerUnit: match.price_per_unit ?? null,
+            site: match.site ?? null,
+          });
+        } else {
+          setSelectedStockInfo(null);
+        }
+      } catch (error: any) {
+        setSelectedStockInfo(null);
+      }
+    })();
+  }, [chemicalIdForStock, currentAssignment]);
 
   const uniqueCheckedBy = useMemo(() => {
     if (!logs.length) return [];
@@ -379,6 +566,28 @@ const ChemicalLogBookPage: React.FC = () => {
             toast.error("Water quantity must be numeric.");
             return;
           }
+        }
+      }
+
+      // Stock check: when chemical is known (or resolved by location), block if no stock or qty > available
+      const stockCheckApplies =
+        chemicalIdForStock ||
+        (currentAssignment && normalizeLocationForApi(currentAssignment.location ?? undefined));
+      if (stockCheckApplies) {
+        if (
+          !selectedStockInfo ||
+          selectedStockInfo.availableQtyKg == null ||
+          selectedStockInfo.availableQtyKg === 0
+        ) {
+          toast.error("No stock available for this chemical. Please add stock before logging.");
+          return;
+        }
+        const enteredQty = parseFloat(formData.chemicalQty);
+        if (enteredQty > selectedStockInfo.availableQtyKg) {
+          toast.error(
+            `Entered quantity exceeds available stock (${selectedStockInfo.availableQtyKg} ${selectedStockInfo.unit ?? "kg"}).`,
+          );
+          return;
         }
       }
 
@@ -780,6 +989,7 @@ const ChemicalLogBookPage: React.FC = () => {
                               ? `${assignment.chemical_formula} – ${assignment.chemical_name}`
                               : formData.chemicalName,
                           });
+                          setSelectedChemicalId(assignment?.chemical_id ?? null);
                         }}
                       >
                         <SelectTrigger>
@@ -811,6 +1021,33 @@ const ChemicalLogBookPage: React.FC = () => {
                     </div>
                   </div>
 
+                  {/* Previous readings for selected equipment with entered-by */}
+                  {formData.equipmentName?.trim() && (
+                    <div className="rounded-lg border bg-muted/30 p-3 space-y-2">
+                      <p className="text-sm font-medium">Previous readings (Entered by)</p>
+                      {previousReadingsLoading ? (
+                        <p className="text-xs text-muted-foreground">Loading…</p>
+                      ) : previousReadingsForEquipment.length === 0 ? (
+                        <p className="text-xs text-muted-foreground">No previous entries for this equipment.</p>
+                      ) : (
+                        <div className="max-h-40 overflow-y-auto space-y-2">
+                          {previousReadingsForEquipment.map((log) => (
+                            <div key={log.id} className="text-xs border-b border-border/50 pb-2 last:border-0 last:pb-0">
+                              <span className="font-medium">{log.date} {log.time}</span>
+                              <span className="text-muted-foreground"> — Entered by: {log.checkedBy || log.doneBy || "—"}</span>
+                              <div className="mt-1 text-muted-foreground">
+                                {log.chemicalName}
+                                {log.solutionConcentration != null ? ` · Solution ${log.solutionConcentration}%` : ""}
+                                {log.waterQty != null ? ` · Water ${log.waterQty} L` : ""}
+                                {log.chemicalQty != null ? ` · Chemical ${log.chemicalQty} g` : ""}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   <div className="space-y-2">
                     <Label>Chemical Name *</Label>
                     <Input
@@ -819,6 +1056,26 @@ const ChemicalLogBookPage: React.FC = () => {
                       disabled
                       placeholder="Auto from equipment assignment"
                     />
+                    {formData.chemicalName && (chemicalIdForStock || (currentAssignment && normalizeLocationForApi(currentAssignment.location ?? undefined))) && (
+                      <div className="mt-2 text-sm text-muted-foreground">
+                        {selectedStockInfo &&
+                        selectedStockInfo.availableQtyKg != null &&
+                        selectedStockInfo.availableQtyKg > 0 ? (
+                            <span>
+                              Available stock: {selectedStockInfo.availableQtyKg}{" "}
+                              {selectedStockInfo.unit ?? "kg"}
+                              {selectedStockInfo.pricePerUnit != null &&
+                                ` at price ${selectedStockInfo.pricePerUnit} per ${selectedStockInfo.unit ?? "kg"}`}
+                              {selectedStockInfo.site ? ` (site: ${selectedStockInfo.site})` : ""}
+                            </span>
+                          ) : (
+                            <span className="text-destructive">
+                              No stock available for this chemical. You cannot enter quantity until
+                              stock is added.
+                            </span>
+                          )}
+                      </div>
+                    )}
                   </div>
 
                   <div className="space-y-2">
@@ -915,6 +1172,12 @@ const ChemicalLogBookPage: React.FC = () => {
                             })
                           }
                           placeholder="e.g., 0.32"
+                          disabled={
+                            !!(chemicalIdForStock || (currentAssignment && normalizeLocationForApi(currentAssignment.location ?? undefined))) &&
+                            (!selectedStockInfo ||
+                              selectedStockInfo.availableQtyKg == null ||
+                              selectedStockInfo.availableQtyKg === 0)
+                          }
                         />
                       </div>
                     </div>

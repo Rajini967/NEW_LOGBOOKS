@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Header } from "@/components/layout/Header";
-import { ArrowLeft, Loader2, Plus } from "lucide-react";
+import { ArrowLeft, Loader2, Plus, Pencil, Trash2 } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,6 +13,16 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { chemicalStockAPI } from "@/lib/api";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
@@ -46,6 +56,14 @@ const ChemicalStockPage: React.FC = () => {
     price: "",
     site: "",
   });
+
+  const [editOpen, setEditOpen] = useState(false);
+  const [editingRow, setEditingRow] = useState<ChemicalStockRow | null>(null);
+  const [editForm, setEditForm] = useState({ stock: "", price: "", site: "" });
+  const [editSubmitting, setEditSubmitting] = useState(false);
+
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [deleteSubmitting, setDeleteSubmitting] = useState(false);
 
   const load = async (location?: "water_system" | "cooling_towers" | "boiler") => {
     setIsLoading(true);
@@ -122,6 +140,62 @@ const ChemicalStockPage: React.FC = () => {
       toast.error(error?.message || "Failed to create stock entry");
     } finally {
       setCreateSubmitting(false);
+    }
+  };
+
+  const openEdit = (row: ChemicalStockRow) => {
+    setEditingRow(row);
+    setEditForm({
+      stock: String(row.available_qty_kg),
+      price: row.price_per_unit != null ? String(row.price_per_unit) : "",
+      site: row.site ?? "",
+    });
+    setEditOpen(true);
+  };
+
+  const handleEditSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingRow) return;
+    const stock = editForm.stock.trim() ? parseFloat(editForm.stock) : 0;
+    if (Number.isNaN(stock) || stock < 0) {
+      toast.error("Stock must be a number >= 0.");
+      return;
+    }
+    const price = editForm.price.trim() ? parseFloat(editForm.price) : null;
+    if (price !== null && (Number.isNaN(price) || price < 0)) {
+      toast.error("Price must be a number >= 0.");
+      return;
+    }
+    setEditSubmitting(true);
+    try {
+      await chemicalStockAPI.update(editingRow.id, {
+        available_qty_kg: stock,
+        price_per_unit: price,
+        site: editForm.site.trim() || null,
+      });
+      toast.success("Stock entry updated.");
+      setEditOpen(false);
+      setEditingRow(null);
+      void load(locationFilter === "all" ? undefined : locationFilter);
+    } catch (error: any) {
+      toast.error(error?.message || "Failed to update stock entry");
+    } finally {
+      setEditSubmitting(false);
+    }
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!deleteConfirmId) return;
+    setDeleteSubmitting(true);
+    try {
+      await chemicalStockAPI.delete(deleteConfirmId);
+      toast.success("Stock entry deleted.");
+      setDeleteConfirmId(null);
+      void load(locationFilter === "all" ? undefined : locationFilter);
+    } catch (error: any) {
+      toast.error(error?.message || "Failed to delete stock entry");
+    } finally {
+      setDeleteSubmitting(false);
     }
   };
 
@@ -288,13 +362,18 @@ const ChemicalStockPage: React.FC = () => {
                     <th className="px-4 py-2 text-left font-medium text-muted-foreground">
                       Site
                     </th>
+                    {isAdmin && (
+                      <th className="px-4 py-2 text-right font-medium text-muted-foreground w-24">
+                        Actions
+                      </th>
+                    )}
                   </tr>
                 </thead>
                 <tbody>
                   {isLoading ? (
                     <tr>
                       <td
-                        colSpan={5}
+                        colSpan={isAdmin ? 6 : 5}
                         className="px-4 py-6 text-center text-muted-foreground"
                       >
                         <div className="flex items-center justify-center gap-2">
@@ -306,7 +385,7 @@ const ChemicalStockPage: React.FC = () => {
                   ) : rows.length === 0 ? (
                     <tr>
                       <td
-                        colSpan={5}
+                        colSpan={isAdmin ? 6 : 5}
                         className="px-4 py-6 text-center text-muted-foreground"
                       >
                         No stock records found.
@@ -340,6 +419,32 @@ const ChemicalStockPage: React.FC = () => {
                         <td className="px-4 py-2">
                           {row.site || "—"}
                         </td>
+                        {isAdmin && (
+                          <td className="px-4 py-2 text-right">
+                            <div className="flex items-center justify-end gap-1">
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8"
+                                onClick={() => openEdit(row)}
+                                title="Edit"
+                              >
+                                <Pencil className="w-4 h-4" />
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 text-destructive hover:text-destructive"
+                                onClick={() => setDeleteConfirmId(row.id)}
+                                title="Delete"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </Button>
+                            </div>
+                          </td>
+                        )}
                       </tr>
                     ))
                   )}
@@ -349,6 +454,106 @@ const ChemicalStockPage: React.FC = () => {
           </div>
         </div>
       </main>
+
+      {/* Edit dialog */}
+      <Dialog open={editOpen} onOpenChange={(open) => { if (!open) { setEditOpen(false); setEditingRow(null); } }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Edit stock entry</DialogTitle>
+          </DialogHeader>
+          {editingRow && (
+            <form onSubmit={handleEditSubmit} className="space-y-3 mt-2">
+              <div className="space-y-2">
+                <Label>Location</Label>
+                <Input value={editingRow.location} disabled className="bg-muted" />
+              </div>
+              <div className="space-y-2">
+                <Label>Chemical</Label>
+                <Input
+                  value={`${editingRow.chemical_formula} – ${editingRow.chemical_name}`}
+                  disabled
+                  className="bg-muted"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit-stock">Stock (kg)</Label>
+                <Input
+                  id="edit-stock"
+                  type="number"
+                  min={0}
+                  step="any"
+                  value={editForm.stock}
+                  onChange={(e) =>
+                    setEditForm((prev) => ({ ...prev, stock: e.target.value }))
+                  }
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit-price">Price (per kg)</Label>
+                <Input
+                  id="edit-price"
+                  type="number"
+                  min={0}
+                  step="any"
+                  value={editForm.price}
+                  onChange={(e) =>
+                    setEditForm((prev) => ({ ...prev, price: e.target.value }))
+                  }
+                  placeholder="Optional"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit-site">Site</Label>
+                <Input
+                  id="edit-site"
+                  value={editForm.site}
+                  onChange={(e) =>
+                    setEditForm((prev) => ({ ...prev, site: e.target.value }))
+                  }
+                  placeholder="Optional"
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => { setEditOpen(false); setEditingRow(null); }}
+                >
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={editSubmitting}>
+                  {editSubmitting ? "Saving..." : "Save"}
+                </Button>
+              </div>
+            </form>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete confirmation popup */}
+      <AlertDialog open={!!deleteConfirmId} onOpenChange={(open) => { if (!open) setDeleteConfirmId(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete stock entry</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete this stock entry? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setDeleteConfirmId(null)}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                void handleDeleteConfirm();
+              }}
+              disabled={deleteSubmitting}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deleteSubmitting ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };

@@ -103,6 +103,19 @@ interface BoilerLog {
   foHsdNgConsumption?: number;
   mobreyFunctioning?: string;
   manualBlowdownTime?: string;
+  dieselStockLiters?: number | null;
+  dieselCostRupees?: number | null;
+  furnaceOilStockLiters?: number | null;
+  furnaceOilCostRupees?: number | null;
+  brigadeStockKg?: number | null;
+  brigadeCostRupees?: number | null;
+  dailyPowerConsumptionKwh?: number | null;
+  dailyWaterConsumptionLiters?: number | null;
+  dailyChemicalConsumptionKg?: number | null;
+  dailyDieselConsumptionLiters?: number | null;
+  dailyFurnaceOilConsumptionLiters?: number | null;
+  dailyBrigadeConsumptionKg?: number | null;
+  steamConsumptionKgHr?: number | null;
   remarks: string;
   comment?: string;
   checkedBy: string;
@@ -137,6 +150,8 @@ const BoilerLogBookPage: React.FC = () => {
   const [readingsModalLogId, setReadingsModalLogId] = useState<string | null>(null);
   const [editingLogId, setEditingLogId] = useState<string | null>(null);
   const [equipmentOptions, setEquipmentOptions] = useState<{ id: string; equipment_number: string; name: string }[]>([]);
+  const [previousReadingsForEquipment, setPreviousReadingsForEquipment] = useState<BoilerLog[]>([]);
+  const [previousReadingsLoading, setPreviousReadingsLoading] = useState(false);
 
   const [formData, setFormData] = useState({
     equipmentId: "",
@@ -158,6 +173,19 @@ const BoilerLogBookPage: React.FC = () => {
     foHsdNgConsumption: "",
     mobreyFunctioning: "",
     manualBlowdownTime: "",
+    dieselStockLiters: "",
+    dieselCostRupees: "",
+    furnaceOilStockLiters: "",
+    furnaceOilCostRupees: "",
+    brigadeStockKg: "",
+    brigadeCostRupees: "",
+    dailyPowerConsumptionKwh: "",
+    dailyWaterConsumptionLiters: "",
+    dailyChemicalConsumptionKg: "",
+    dailyDieselConsumptionLiters: "",
+    dailyFurnaceOilConsumptionLiters: "",
+    dailyBrigadeConsumptionKg: "",
+    steamConsumptionKgHr: "",
     remarks: "",
     date: "",
     time: "",
@@ -269,6 +297,19 @@ const BoilerLogBookPage: React.FC = () => {
           foHsdNgConsumption: log.fo_hsd_ng_consumption ?? undefined,
           mobreyFunctioning: log.mobrey_functioning ?? undefined,
           manualBlowdownTime: log.manual_blowdown_time ?? undefined,
+          dieselStockLiters: log.diesel_stock_liters ?? undefined,
+          dieselCostRupees: log.diesel_cost_rupees ?? undefined,
+          furnaceOilStockLiters: log.furnace_oil_stock_liters ?? undefined,
+          furnaceOilCostRupees: log.furnace_oil_cost_rupees ?? undefined,
+          brigadeStockKg: log.brigade_stock_kg ?? undefined,
+          brigadeCostRupees: log.brigade_cost_rupees ?? undefined,
+          dailyPowerConsumptionKwh: log.daily_power_consumption_kwh ?? undefined,
+          dailyWaterConsumptionLiters: log.daily_water_consumption_liters ?? undefined,
+          dailyChemicalConsumptionKg: log.daily_chemical_consumption_kg ?? undefined,
+          dailyDieselConsumptionLiters: log.daily_diesel_consumption_liters ?? undefined,
+          dailyFurnaceOilConsumptionLiters: log.daily_furnace_oil_consumption_liters ?? undefined,
+          dailyBrigadeConsumptionKg: log.daily_brigade_consumption_kg ?? undefined,
+          steamConsumptionKgHr: log.steam_consumption_kg_hr ?? undefined,
           remarks: log.remarks || "",
           comment: log.comment || "",
           checkedBy: log.operator_name,
@@ -295,6 +336,54 @@ const BoilerLogBookPage: React.FC = () => {
   useEffect(() => {
     refreshLogs();
   }, []);
+
+  // After equipment selection, fetch and show previous readings with entered-by for that equipment
+  useEffect(() => {
+    if (!formData.equipmentId) {
+      setPreviousReadingsForEquipment([]);
+      return;
+    }
+    let cancelled = false;
+    setPreviousReadingsLoading(true);
+    boilerLogAPI
+      .list({ equipment_id: formData.equipmentId })
+      .then((raw: any[]) => {
+        if (cancelled) return;
+        const list: BoilerLog[] = raw.slice(0, 10).map((log: any) => {
+          const timestamp = new Date(log.timestamp);
+          return {
+            id: log.id,
+            equipmentId: log.equipment_id,
+            date: format(timestamp, "yyyy-MM-dd"),
+            time: format(timestamp, "HH:mm:ss"),
+            feedWaterTemp: log.feed_water_temp,
+            oilTemp: log.oil_temp,
+            steamTemp: log.steam_temp,
+            steamPressure: log.steam_pressure,
+            steamFlowLPH: log.steam_flow_lph,
+            remarks: log.remarks || "",
+            comment: log.comment,
+            checkedBy: log.operator_name,
+            timestamp,
+            status: log.status,
+            operator_id: log.operator_id,
+            approved_by_id: log.approved_by_id,
+            corrects_id: log.corrects_id,
+            has_corrections: log.has_corrections,
+          } as BoilerLog;
+        });
+        setPreviousReadingsForEquipment(list);
+      })
+      .catch(() => {
+        if (!cancelled) setPreviousReadingsForEquipment([]);
+      })
+      .finally(() => {
+        if (!cancelled) setPreviousReadingsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [formData.equipmentId]);
 
   useEffect(() => {
     if (!sessionSettings?.log_entry_interval || logs.length === 0) return;
@@ -455,6 +544,19 @@ const BoilerLogBookPage: React.FC = () => {
         fo_hsd_ng_consumption: formData.foHsdNgConsumption ? parseFloat(formData.foHsdNgConsumption) : undefined,
         mobrey_functioning: formData.mobreyFunctioning || undefined,
         manual_blowdown_time: formData.manualBlowdownTime || undefined,
+        diesel_stock_liters: formData.dieselStockLiters ? parseFloat(formData.dieselStockLiters) : undefined,
+        diesel_cost_rupees: formData.dieselCostRupees ? parseFloat(formData.dieselCostRupees) : undefined,
+        furnace_oil_stock_liters: formData.furnaceOilStockLiters ? parseFloat(formData.furnaceOilStockLiters) : undefined,
+        furnace_oil_cost_rupees: formData.furnaceOilCostRupees ? parseFloat(formData.furnaceOilCostRupees) : undefined,
+        brigade_stock_kg: formData.brigadeStockKg ? parseFloat(formData.brigadeStockKg) : undefined,
+        brigade_cost_rupees: formData.brigadeCostRupees ? parseFloat(formData.brigadeCostRupees) : undefined,
+        daily_power_consumption_kwh: formData.dailyPowerConsumptionKwh ? parseFloat(formData.dailyPowerConsumptionKwh) : undefined,
+        daily_water_consumption_liters: formData.dailyWaterConsumptionLiters ? parseFloat(formData.dailyWaterConsumptionLiters) : undefined,
+        daily_chemical_consumption_kg: formData.dailyChemicalConsumptionKg ? parseFloat(formData.dailyChemicalConsumptionKg) : undefined,
+        daily_diesel_consumption_liters: formData.dailyDieselConsumptionLiters ? parseFloat(formData.dailyDieselConsumptionLiters) : undefined,
+        daily_furnace_oil_consumption_liters: formData.dailyFurnaceOilConsumptionLiters ? parseFloat(formData.dailyFurnaceOilConsumptionLiters) : undefined,
+        daily_brigade_consumption_kg: formData.dailyBrigadeConsumptionKg ? parseFloat(formData.dailyBrigadeConsumptionKg) : undefined,
+        steam_consumption_kg_hr: formData.steamConsumptionKgHr ? parseFloat(formData.steamConsumptionKgHr) : undefined,
         remarks: formData.remarks || undefined,
       };
       const editingBoilerLog = editingLogId ? logs.find((l) => l.id === editingLogId) : null;
@@ -496,6 +598,19 @@ const BoilerLogBookPage: React.FC = () => {
           foHsdNgConsumption: "",
           mobreyFunctioning: "",
           manualBlowdownTime: "",
+          dieselStockLiters: "",
+          dieselCostRupees: "",
+          furnaceOilStockLiters: "",
+          furnaceOilCostRupees: "",
+          brigadeStockKg: "",
+          brigadeCostRupees: "",
+          dailyPowerConsumptionKwh: "",
+          dailyWaterConsumptionLiters: "",
+          dailyChemicalConsumptionKg: "",
+          dailyDieselConsumptionLiters: "",
+          dailyFurnaceOilConsumptionLiters: "",
+          dailyBrigadeConsumptionKg: "",
+          steamConsumptionKgHr: "",
           remarks: "",
           date: "",
           time: "",
@@ -526,6 +641,19 @@ const BoilerLogBookPage: React.FC = () => {
           foHsdNgConsumption: "",
           mobreyFunctioning: "",
           manualBlowdownTime: "",
+          dieselStockLiters: "",
+          dieselCostRupees: "",
+          furnaceOilStockLiters: "",
+          furnaceOilCostRupees: "",
+          brigadeStockKg: "",
+          brigadeCostRupees: "",
+          dailyPowerConsumptionKwh: "",
+          dailyWaterConsumptionLiters: "",
+          dailyChemicalConsumptionKg: "",
+          dailyDieselConsumptionLiters: "",
+          dailyFurnaceOilConsumptionLiters: "",
+          dailyBrigadeConsumptionKg: "",
+          steamConsumptionKgHr: "",
           remarks: "",
           date: "",
           time: "",
@@ -535,7 +663,13 @@ const BoilerLogBookPage: React.FC = () => {
       }
     } catch (error: any) {
       console.error("Error saving boiler entry:", error);
-      toast.error(error?.message || "Failed to save boiler entry");
+      if (error?.response?.status === 400) {
+        const d = error?.response?.data?.detail;
+        const msg = Array.isArray(d) ? d.join(" ") : typeof d === "string" ? d : error?.message || "Validation failed (check limits).";
+        toast.error(msg);
+      } else {
+        toast.error(error?.message || "Failed to save boiler entry");
+      }
     }
   };
 
@@ -575,6 +709,19 @@ const BoilerLogBookPage: React.FC = () => {
       foHsdNgConsumption: log.foHsdNgConsumption != null ? String(log.foHsdNgConsumption) : "",
       mobreyFunctioning: log.mobreyFunctioning ?? "",
       manualBlowdownTime: log.manualBlowdownTime ?? "",
+      dieselStockLiters: log.dieselStockLiters != null ? String(log.dieselStockLiters) : "",
+      dieselCostRupees: log.dieselCostRupees != null ? String(log.dieselCostRupees) : "",
+      furnaceOilStockLiters: log.furnaceOilStockLiters != null ? String(log.furnaceOilStockLiters) : "",
+      furnaceOilCostRupees: log.furnaceOilCostRupees != null ? String(log.furnaceOilCostRupees) : "",
+      brigadeStockKg: log.brigadeStockKg != null ? String(log.brigadeStockKg) : "",
+      brigadeCostRupees: log.brigadeCostRupees != null ? String(log.brigadeCostRupees) : "",
+      dailyPowerConsumptionKwh: log.dailyPowerConsumptionKwh != null ? String(log.dailyPowerConsumptionKwh) : "",
+      dailyWaterConsumptionLiters: log.dailyWaterConsumptionLiters != null ? String(log.dailyWaterConsumptionLiters) : "",
+      dailyChemicalConsumptionKg: log.dailyChemicalConsumptionKg != null ? String(log.dailyChemicalConsumptionKg) : "",
+      dailyDieselConsumptionLiters: log.dailyDieselConsumptionLiters != null ? String(log.dailyDieselConsumptionLiters) : "",
+      dailyFurnaceOilConsumptionLiters: log.dailyFurnaceOilConsumptionLiters != null ? String(log.dailyFurnaceOilConsumptionLiters) : "",
+      dailyBrigadeConsumptionKg: log.dailyBrigadeConsumptionKg != null ? String(log.dailyBrigadeConsumptionKg) : "",
+      steamConsumptionKgHr: log.steamConsumptionKgHr != null ? String(log.steamConsumptionKgHr) : "",
       remarks: log.remarks ?? "",
       date: log.date ?? "",
       time: log.time ?? "",
@@ -850,6 +997,30 @@ const BoilerLogBookPage: React.FC = () => {
                     </div>
                   </div>
 
+                  {/* Previous readings for selected equipment with entered-by */}
+                  {formData.equipmentId && (
+                    <div className="rounded-lg border bg-muted/30 p-3 space-y-2">
+                      <p className="text-sm font-medium">Previous readings (Entered by)</p>
+                      {previousReadingsLoading ? (
+                        <p className="text-xs text-muted-foreground">Loading…</p>
+                      ) : previousReadingsForEquipment.length === 0 ? (
+                        <p className="text-xs text-muted-foreground">No previous entries for this equipment.</p>
+                      ) : (
+                        <div className="max-h-40 overflow-y-auto space-y-2">
+                          {previousReadingsForEquipment.map((log) => (
+                            <div key={log.id} className="text-xs border-b border-border/50 pb-2 last:border-0 last:pb-0">
+                              <span className="font-medium">{log.date} {log.time}</span>
+                              <span className="text-muted-foreground"> — Entered by: {log.checkedBy || "—"}</span>
+                              <div className="mt-1 text-muted-foreground">
+                                Feed {log.feedWaterTemp}°C · Oil {log.oilTemp}°C · Steam {log.steamTemp}°C / {log.steamPressure} bar
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {/* Date and Time (editable when correcting rejected or pending-secondary-approval entry) */}
                   {editingLogId && (() => {
                     const editingLog = logs.find((l) => l.id === editingLogId);
@@ -1058,6 +1229,72 @@ const BoilerLogBookPage: React.FC = () => {
                       <div className="space-y-2">
                         <Label>Manual Blow Down Time <span className="text-muted-foreground text-xs">(e.g. 14:30)</span></Label>
                         <Input type="time" value={formData.manualBlowdownTime} onChange={(e) => setFormData({ ...formData, manualBlowdownTime: e.target.value })} placeholder="14:30" />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Fuel stock */}
+                  <div className="space-y-3 pt-4 mt-2 border-t">
+                    <h3 className="text-sm font-semibold border-b pb-2">Fuel stock</h3>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label>Diesel <span className="text-muted-foreground text-xs">(L)</span></Label>
+                        <Input type="number" step="0.1" min={0} value={formData.dieselStockLiters} onChange={(e) => setFormData({ ...formData, dieselStockLiters: e.target.value })} placeholder="Liters" />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Diesel cost <span className="text-muted-foreground text-xs">(Rs)</span></Label>
+                        <Input type="number" step="0.01" min={0} value={formData.dieselCostRupees} onChange={(e) => setFormData({ ...formData, dieselCostRupees: e.target.value })} placeholder="Rupees" />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Furnace oil <span className="text-muted-foreground text-xs">(L)</span></Label>
+                        <Input type="number" step="0.1" min={0} value={formData.furnaceOilStockLiters} onChange={(e) => setFormData({ ...formData, furnaceOilStockLiters: e.target.value })} placeholder="Liters" />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Furnace oil cost <span className="text-muted-foreground text-xs">(Rs)</span></Label>
+                        <Input type="number" step="0.01" min={0} value={formData.furnaceOilCostRupees} onChange={(e) => setFormData({ ...formData, furnaceOilCostRupees: e.target.value })} placeholder="Rupees" />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Brigade <span className="text-muted-foreground text-xs">(kg)</span></Label>
+                        <Input type="number" step="0.1" min={0} value={formData.brigadeStockKg} onChange={(e) => setFormData({ ...formData, brigadeStockKg: e.target.value })} placeholder="kg" />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Brigade cost <span className="text-muted-foreground text-xs">(Rs)</span></Label>
+                        <Input type="number" step="0.01" min={0} value={formData.brigadeCostRupees} onChange={(e) => setFormData({ ...formData, brigadeCostRupees: e.target.value })} placeholder="Rupees" />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Daily consumption (for limit validation) */}
+                  <div className="space-y-3 pt-4 mt-2 border-t">
+                    <h3 className="text-sm font-semibold border-b pb-2">Daily consumption</h3>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label>Daily power consumption <span className="text-muted-foreground text-xs">(kWh)</span></Label>
+                        <Input type="number" step="0.1" min={0} value={formData.dailyPowerConsumptionKwh} onChange={(e) => setFormData({ ...formData, dailyPowerConsumptionKwh: e.target.value })} placeholder="kWh" />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Daily water consumption <span className="text-muted-foreground text-xs">(L)</span></Label>
+                        <Input type="number" step="0.1" min={0} value={formData.dailyWaterConsumptionLiters} onChange={(e) => setFormData({ ...formData, dailyWaterConsumptionLiters: e.target.value })} placeholder="Liters" />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Daily chemical consumption <span className="text-muted-foreground text-xs">(kg)</span></Label>
+                        <Input type="number" step="0.1" min={0} value={formData.dailyChemicalConsumptionKg} onChange={(e) => setFormData({ ...formData, dailyChemicalConsumptionKg: e.target.value })} placeholder="kg" />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Daily diesel consumption <span className="text-muted-foreground text-xs">(L)</span></Label>
+                        <Input type="number" step="0.1" min={0} value={formData.dailyDieselConsumptionLiters} onChange={(e) => setFormData({ ...formData, dailyDieselConsumptionLiters: e.target.value })} placeholder="L" />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Daily furnace oil consumption <span className="text-muted-foreground text-xs">(L)</span></Label>
+                        <Input type="number" step="0.1" min={0} value={formData.dailyFurnaceOilConsumptionLiters} onChange={(e) => setFormData({ ...formData, dailyFurnaceOilConsumptionLiters: e.target.value })} placeholder="L" />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Daily brigade consumption <span className="text-muted-foreground text-xs">(kg)</span></Label>
+                        <Input type="number" step="0.1" min={0} value={formData.dailyBrigadeConsumptionKg} onChange={(e) => setFormData({ ...formData, dailyBrigadeConsumptionKg: e.target.value })} placeholder="kg" />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Steam consumption <span className="text-muted-foreground text-xs">(kg/hr)</span></Label>
+                        <Input type="number" step="0.1" min={0} value={formData.steamConsumptionKgHr} onChange={(e) => setFormData({ ...formData, steamConsumptionKgHr: e.target.value })} placeholder="kg/hr" />
                       </div>
                     </div>
                   </div>
@@ -1420,12 +1657,42 @@ const BoilerLogBookPage: React.FC = () => {
                   </div>
                 );
               };
+              const fuelKeys = ["dieselStockLiters", "dieselCostRupees", "furnaceOilStockLiters", "furnaceOilCostRupees", "brigadeStockKg", "brigadeCostRupees"];
+              const dailyKeys = ["dailyPowerConsumptionKwh", "dailyWaterConsumptionLiters", "dailyChemicalConsumptionKg"];
+              const fuelLabels: Record<string, string> = { dieselStockLiters: "Diesel (L)", dieselCostRupees: "Diesel cost (Rs)", furnaceOilStockLiters: "Furnace oil (L)", furnaceOilCostRupees: "Furnace oil cost (Rs)", brigadeStockKg: "Brigade (kg)", brigadeCostRupees: "Brigade cost (Rs)" };
+              const dailyLabels: Record<string, string> = { dailyPowerConsumptionKwh: "Daily power (kWh)", dailyWaterConsumptionLiters: "Daily water (L)", dailyChemicalConsumptionKg: "Daily chemical (kg)" };
               return (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <SectionCard title="Temperature" icon={Thermometer} keys={tempKeys} />
-                  <SectionCard title="Pressure" icon={Gauge} keys={pressureKeys} />
-                  <SectionCard title="Flow" icon={Droplets} keys={flowKeys} />
-                  <SectionCard title="Other" icon={Package} keys={otherKeys} />
+                <div className="space-y-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <SectionCard title="Temperature" icon={Thermometer} keys={tempKeys} />
+                    <SectionCard title="Pressure" icon={Gauge} keys={pressureKeys} />
+                    <SectionCard title="Flow" icon={Droplets} keys={flowKeys} />
+                    <SectionCard title="Other" icon={Package} keys={otherKeys} />
+                  </div>
+                  {(fuelKeys.some((k) => logRecord[k] != null)) ? (
+                    <div className="rounded-xl border border-border/60 bg-card p-4 shadow-sm">
+                      <h4 className="text-sm font-semibold text-foreground mb-3">Fuel stock</h4>
+                      <div className="grid grid-cols-2 gap-2">
+                        {fuelKeys.map((k) => {
+                          const v = logRecord[k];
+                          if (v === undefined || v === null) return null;
+                          return <div key={k} className="flex justify-between text-sm py-1"><span className="text-muted-foreground">{fuelLabels[k] ?? k}</span><span className="tabular-nums">{String(v)}</span></div>;
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
+                  {(dailyKeys.some((k) => logRecord[k] != null)) ? (
+                    <div className="rounded-xl border border-border/60 bg-card p-4 shadow-sm">
+                      <h4 className="text-sm font-semibold text-foreground mb-3">Daily consumption</h4>
+                      <div className="grid grid-cols-2 gap-2">
+                        {dailyKeys.map((k) => {
+                          const v = logRecord[k];
+                          if (v === undefined || v === null) return null;
+                          return <div key={k} className="flex justify-between text-sm py-1"><span className="text-muted-foreground">{dailyLabels[k] ?? k}</span><span className="tabular-nums">{String(v)}</span></div>;
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               );
             })()}

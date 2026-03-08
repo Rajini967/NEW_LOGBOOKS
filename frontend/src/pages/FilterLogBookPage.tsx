@@ -29,6 +29,7 @@ import {
   filterAssignmentAPI,
   filterCategoryAPI,
   filterLogAPI,
+  filterMasterAPI,
   filterScheduleAPI,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -60,6 +61,20 @@ interface EquipmentOption {
   id: string;
   equipment_number: string;
   name: string;
+}
+
+/** Option from Filter Register (approved filters) for the New Filter Log Entry dropdown */
+interface FilterRegisterOption {
+  id: string;
+  filter_id: string;
+  category_name: string;
+  make: string;
+  model: string;
+  serial_number?: string | null;
+  size_l?: number | null;
+  size_w?: number | null;
+  size_h?: number | null;
+  micron_size: string;
 }
 
 interface FilterAssignmentRow {
@@ -120,7 +135,10 @@ const FilterLogBookPage: React.FC = () => {
   const [editingLogId, setEditingLogId] = useState<string | null>(null);
   const [categoryOptions, setCategoryOptions] = useState<FilterCategoryOption[]>([]);
   const [equipmentOptions, setEquipmentOptions] = useState<EquipmentOption[]>([]);
+  const [filterRegisterOptions, setFilterRegisterOptions] = useState<FilterRegisterOption[]>([]);
   const [selectedEquipmentUuid, setSelectedEquipmentUuid] = useState<string>("");
+  const [previousReadingsForEquipment, setPreviousReadingsForEquipment] = useState<FilterLog[]>([]);
+  const [previousReadingsLoading, setPreviousReadingsLoading] = useState(false);
 
   const [formData, setFormData] = useState({
     equipmentId: "",
@@ -259,6 +277,31 @@ const FilterLogBookPage: React.FC = () => {
     }
   };
 
+  /** Load approved filters from Filter Register for the dropdown */
+  const loadFilterRegister = async () => {
+    try {
+      const raw = await filterMasterAPI.list({ status: "approved" });
+      const list = Array.isArray(raw) ? raw : [];
+      const options: FilterRegisterOption[] = list
+        .filter((f: any) => f?.filter_id)
+        .map((f: any) => ({
+          id: f.id,
+          filter_id: f.filter_id,
+          category_name: f.category_name ?? (f.category?.name ?? ""),
+          make: f.make ?? "",
+          model: f.model ?? "",
+          serial_number: f.serial_number,
+          size_l: f.size_l,
+          size_w: f.size_w,
+          size_h: f.size_h,
+          micron_size: f.micron_size ?? "",
+        }));
+      setFilterRegisterOptions(options);
+    } catch (error) {
+      console.error("Error loading filter register:", error);
+    }
+  };
+
   const formatFilterSize = (a: FilterAssignmentRow) => {
     const parts = [a.filter_size_l, a.filter_size_w, a.filter_size_h].filter(
       (v) => v != null
@@ -268,7 +311,6 @@ const FilterLogBookPage: React.FC = () => {
   };
 
   const onEquipmentSelected = async (equipmentUuid: string) => {
-    setSelectedEquipmentUuid(equipmentUuid);
     const eq = equipmentOptions.find((e) => e.id === equipmentUuid);
     setFormData((prev) => ({
       ...prev,
@@ -294,6 +336,65 @@ const FilterLogBookPage: React.FC = () => {
       // ignore
     }
 
+    try {
+      const overdue = await filterScheduleAPI.list({
+        equipment: equipmentUuid,
+        overdue: true,
+      });
+      if (Array.isArray(overdue) && overdue.length > 0) {
+        const types = Array.from(new Set(overdue.map((s: any) => s.schedule_type))).join(", ");
+        toast.warning(`Maintenance overdue for this equipment: ${types}`);
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  /** When user selects a filter from the Filter Register, fill form from that filter */
+  const onFilterFromRegisterSelected = (filterId: string) => {
+    const filter = filterRegisterOptions.find((f) => f.filter_id === filterId);
+    if (!filter) return;
+    const sizeStr =
+      [filter.size_l, filter.size_w, filter.size_h].every((v) => v != null)
+        ? `${filter.size_l} × ${filter.size_w} × ${filter.size_h}`
+        : "";
+    setFormData((prev) => ({
+      ...prev,
+      equipmentId: filter.filter_id,
+      filterNo: filter.filter_id,
+      filterMicron: filter.micron_size || prev.filterMicron,
+      filterSize: sizeStr || prev.filterSize,
+      category: (filter.category_name ?? prev.category) as FilterCategory,
+    }));
+  };
+
+  /** When user selects equipment, fetch tag information (and assignment details) from filter assignment */
+  const onEquipmentSelectedForTagInfo = async (equipmentUuid: string) => {
+    setSelectedEquipmentUuid(equipmentUuid);
+    try {
+      const assignments = (await filterAssignmentAPI.list({
+        equipment: equipmentUuid,
+      })) as FilterAssignmentRow[];
+      const selectedFilterUuid = formData.equipmentId
+        ? filterRegisterOptions.find((f) => f.filter_id === formData.equipmentId)?.id
+        : null;
+      const active = selectedFilterUuid
+        ? assignments?.find((a: any) => a.filter === selectedFilterUuid)
+        : assignments?.[0];
+      if (active) {
+        setFormData((prev) => ({
+          ...prev,
+          tagInfo: prev.tagInfo?.trim() ? prev.tagInfo : (active.tag_info ?? ""),
+          filterNo: prev.filterNo?.trim() ? prev.filterNo : active.filter_id || prev.filterNo,
+          filterMicron: prev.filterMicron?.trim() ? prev.filterMicron : (active.filter_micron_size ?? prev.filterMicron),
+          filterSize: prev.filterSize?.trim() ? prev.filterSize : formatFilterSize(active),
+        }));
+      } else {
+        setFormData((prev) => ({ ...prev, tagInfo: "" }));
+      }
+    } catch {
+      setFormData((prev) => ({ ...prev, tagInfo: "" }));
+    }
     try {
       const overdue = await filterScheduleAPI.list({
         equipment: equipmentUuid,
@@ -358,6 +459,7 @@ const FilterLogBookPage: React.FC = () => {
   useEffect(() => {
     void loadCategories();
     void loadEquipment();
+    void loadFilterRegister();
     void refreshLogs();
   }, []);
 
@@ -380,6 +482,57 @@ const FilterLogBookPage: React.FC = () => {
       setMissedReadingNextDue(null);
     }
   }, [logs, sessionSettings]);
+
+  // After equipment selection, fetch previous readings with entered-by for that equipment
+  useEffect(() => {
+    if (!formData.equipmentId) {
+      setPreviousReadingsForEquipment([]);
+      return;
+    }
+    let cancelled = false;
+    setPreviousReadingsLoading(true);
+    filterLogAPI
+      .list({ equipment_id: formData.equipmentId })
+      .then((raw: any[]) => {
+        if (cancelled) return;
+        const list: FilterLog[] = (Array.isArray(raw) ? raw : []).slice(0, 10).map((log: any) => {
+          const timestamp = new Date(log.timestamp);
+          return {
+            id: log.id,
+            equipmentId: log.equipment_id,
+            category: log.category,
+            filterNo: log.filter_no,
+            filterMicron: log.filter_micron || "",
+            filterSize: log.filter_size || "",
+            tagInfo: log.tag_info || "",
+            installedDate: log.installed_date,
+            integrityDoneDate: log.integrity_done_date,
+            integrityDueDate: log.integrity_due_date,
+            cleaningDoneDate: log.cleaning_done_date,
+            cleaningDueDate: log.cleaning_due_date,
+            replacementDueDate: log.replacement_due_date,
+            remarks: log.remarks || "",
+            checkedBy: log.operator_name,
+            timestamp,
+            status: log.status,
+            operator_id: log.operator_id,
+            approved_by_id: log.approved_by_id,
+            corrects_id: log.corrects_id,
+            has_corrections: log.has_corrections,
+          };
+        });
+        setPreviousReadingsForEquipment(list);
+      })
+      .catch(() => {
+        if (!cancelled) setPreviousReadingsForEquipment([]);
+      })
+      .finally(() => {
+        if (!cancelled) setPreviousReadingsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [formData.equipmentId]);
 
   const uniqueCheckedBy = useMemo(() => {
     if (!logs.length) return [];
@@ -534,8 +687,6 @@ const FilterLogBookPage: React.FC = () => {
   const handleEditLog = (log: FilterLog) => {
     const timestampStr = format(log.timestamp, "yyyy-MM-dd'T'HH:mm");
     const [datePart, timePart] = timestampStr.split("T");
-    const match = equipmentOptions.find((e) => e.equipment_number === log.equipmentId);
-    setSelectedEquipmentUuid(match?.id || "");
     setFormData({
       equipmentId: log.equipmentId,
       category: log.category,
@@ -850,13 +1001,13 @@ const FilterLogBookPage: React.FC = () => {
                   New Entry
                 </Button>
               </DialogTrigger>
-              <DialogContent className="sm:max-w-[700px] max-h-[90vh] overflow-y-auto">
+              <DialogContent className="sm:max-w-[700px] max-h-[90vh] flex flex-col overflow-hidden">
                 <DialogHeader>
                   <DialogTitle>
                     {editingLogId ? "Edit Filter Log Entry" : "New Filter Log Entry"}
                   </DialogTitle>
                 </DialogHeader>
-                <form onSubmit={handleSubmit} className="space-y-4">
+                <form onSubmit={handleSubmit} className="flex flex-col flex-1 min-h-0 overflow-y-auto space-y-4">
                   <div className="bg-muted/50 rounded-lg p-3 flex items-center gap-3">
                     <Clock className="w-5 h-5 text-muted-foreground" />
                     <div>
@@ -907,20 +1058,27 @@ const FilterLogBookPage: React.FC = () => {
 
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
-                      <Label>Equipment ID *</Label>
+                      <Label>Filter (from Register) *</Label>
                       <Select
-                        value={selectedEquipmentUuid}
-                        onValueChange={(value) => void onEquipmentSelected(value)}
+                        value={formData.equipmentId}
+                        onValueChange={(value) => onFilterFromRegisterSelected(value)}
                       >
                         <SelectTrigger>
-                          <SelectValue placeholder="Select equipment" />
+                          <SelectValue placeholder="Select filter from register" />
                         </SelectTrigger>
-                        <SelectContent className="max-h-60 overflow-y-auto">
-                          {equipmentOptions.map((eq) => (
-                            <SelectItem key={eq.id} value={eq.id}>
-                              {eq.equipment_number} – {eq.name}
+                        <SelectContent className="!z-[9999] max-h-60 overflow-y-auto" position="popper">
+                          {filterRegisterOptions.length === 0 ? (
+                            <SelectItem value="__none__" disabled className="text-muted-foreground">
+                              No approved filters. Add and approve in Filter Register.
                             </SelectItem>
-                          ))}
+                          ) : (
+                            filterRegisterOptions.map((f) => (
+                              <SelectItem key={f.id} value={f.filter_id}>
+                                {f.filter_id} – {f.make} {f.model}
+                                {f.category_name ? ` (${f.category_name})` : ""}
+                              </SelectItem>
+                            ))
+                          )}
                         </SelectContent>
                       </Select>
                       {formData.equipmentId ? (
@@ -931,28 +1089,71 @@ const FilterLogBookPage: React.FC = () => {
                     </div>
                     <div className="space-y-2">
                       <Label>Category</Label>
-                      <Select
+                      <Input
+                        type="text"
                         value={formData.category}
-                        onValueChange={(value) =>
-                          setFormData({
-                            ...formData,
-                            category: value as FilterCategory,
-                          })
-                        }
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select category" />
-                        </SelectTrigger>
-                        <SelectContent className="max-h-48 overflow-y-auto">
-                          {categoryOptions.length > 0 &&
-                            categoryOptions.map((opt) => (
-                              <SelectItem key={opt.value} value={opt.value}>
-                                {opt.label}
-                              </SelectItem>
-                            ))}
-                        </SelectContent>
-                      </Select>
+                        readOnly
+                        disabled
+                        className="bg-muted"
+                        placeholder="Auto-filled from selected filter"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Fetched from Filter Register when you select a filter above.
+                      </p>
                     </div>
+                  </div>
+
+                  {/* Previous readings for selected equipment with entered-by */}
+                  {formData.equipmentId && (
+                    <div className="rounded-lg border bg-muted/30 p-3 space-y-2">
+                      <p className="text-sm font-medium">Previous readings (Entered by)</p>
+                      {previousReadingsLoading ? (
+                        <p className="text-xs text-muted-foreground">Loading…</p>
+                      ) : previousReadingsForEquipment.length === 0 ? (
+                        <p className="text-xs text-muted-foreground">No previous entries for this equipment.</p>
+                      ) : (
+                        <div className="max-h-40 overflow-y-auto space-y-2">
+                          {previousReadingsForEquipment.map((log) => (
+                            <div key={log.id} className="text-xs border-b border-border/50 pb-2 last:border-0 last:pb-0">
+                              <span className="font-medium">{format(log.timestamp, "yyyy-MM-dd HH:mm")}</span>
+                              <span className="text-muted-foreground"> — Entered by: {log.checkedBy || "—"}</span>
+                              <div className="mt-1 text-muted-foreground">
+                                {log.category} · {log.filterNo}
+                                {log.filterMicron ? ` · ${log.filterMicron}` : ""}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="space-y-2">
+                    <Label>Equipment Name (for tag info)</Label>
+                    <Select
+                      value={selectedEquipmentUuid}
+                      onValueChange={(value) => onEquipmentSelectedForTagInfo(value)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select equipment to fetch tag information" />
+                      </SelectTrigger>
+                      <SelectContent className="!z-[9999] max-h-60 overflow-y-auto" position="popper">
+                        {equipmentOptions.length === 0 ? (
+                          <SelectItem value="__none__" disabled className="text-muted-foreground">
+                            No equipment found. Add in Equipment Master (Filter/HVAC category).
+                          </SelectItem>
+                        ) : (
+                          equipmentOptions.map((eq) => (
+                            <SelectItem key={eq.id} value={eq.id}>
+                              {eq.equipment_number} – {eq.name}
+                            </SelectItem>
+                          ))
+                        )}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      Select the equipment where this filter is installed; tag information will be auto-filled from the filter assignment.
+                    </p>
                   </div>
 
                   <div className="space-y-2">
@@ -981,7 +1182,7 @@ const FilterLogBookPage: React.FC = () => {
                           tagInfo: e.target.value,
                         })
                       }
-                      placeholder="Auto-filled from assignment (editable)"
+                      placeholder="Select equipment above to auto-fill from assignment (editable)"
                     />
                   </div>
 

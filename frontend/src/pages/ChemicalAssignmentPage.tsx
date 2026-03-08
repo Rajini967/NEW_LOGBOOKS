@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { Header } from "@/components/layout/Header";
 import { ArrowLeft, Trash2 } from "lucide-react";
@@ -7,9 +7,25 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { chemicalAssignmentAPI } from "@/lib/api";
+import { chemicalAssignmentAPI, chemicalStockAPI } from "@/lib/api";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
+
+// Map display labels from stock API to backend filter keys
+const LOCATION_DISPLAY_TO_KEY: Record<string, string> = {
+  "Water system": "water_system",
+  "Cooling towers": "cooling_towers",
+  "Boiler": "boiler",
+};
+function locationDisplayToKey(display: string): string {
+  const key = LOCATION_DISPLAY_TO_KEY[display];
+  if (key) return key;
+  const lower = display.trim().toLowerCase();
+  if (lower.includes("water") && !lower.includes("cooling")) return "water_system";
+  if (lower.includes("cooling")) return "cooling_towers";
+  if (lower === "boiler") return "boiler";
+  return display;
+}
 
 interface AssignmentRow {
   id: string;
@@ -37,13 +53,19 @@ const ChemicalAssignmentPage: React.FC = () => {
     chemicalName: string;
     equipmentName: string;
     category: "major" | "minor" | "";
+    selectedChemicalId: string | null;
   }>({
     location: "",
     chemicalFormula: "",
     chemicalName: "",
     equipmentName: "",
     category: "",
+    selectedChemicalId: null,
   });
+
+  const [stockByLocation, setStockByLocation] = useState<any[]>([]);
+  const [stockLoading, setStockLoading] = useState(false);
+  const [locationsFromStock, setLocationsFromStock] = useState<{ value: string; label: string }[]>([]);
 
   const loadAssignments = async () => {
     setIsLoading(true);
@@ -61,6 +83,78 @@ const ChemicalAssignmentPage: React.FC = () => {
   useEffect(() => {
     void loadAssignments();
   }, []);
+
+  // Load distinct locations from stock details (only locations that have stock entries)
+  useEffect(() => {
+    let cancelled = false;
+    chemicalStockAPI
+      .list()
+      .then((data) => {
+        if (cancelled) return;
+        const list = Array.isArray(data) ? data : [];
+        const seen = new Set<string>();
+        const locations: { value: string; label: string }[] = [];
+        for (const row of list) {
+          const display = String(row.location ?? "").trim();
+          if (!display || seen.has(display)) continue;
+          seen.add(display);
+          const key = locationDisplayToKey(display);
+          locations.push({ value: key, label: display });
+        }
+        locations.sort((a, b) => a.label.localeCompare(b.label));
+        setLocationsFromStock(locations);
+      })
+      .catch(() => {
+        if (!cancelled) setLocationsFromStock([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // When location is selected, fetch stock for that location so we can show chemical dropdown
+  useEffect(() => {
+    if (!form.location) {
+      setStockByLocation([]);
+      return;
+    }
+    let cancelled = false;
+    setStockLoading(true);
+    chemicalStockAPI
+      .list({ location: form.location })
+      .then((data) => {
+        if (!cancelled) setStockByLocation(Array.isArray(data) ? data : []);
+      })
+      .catch(() => {
+        if (!cancelled) setStockByLocation([]);
+      })
+      .finally(() => {
+        if (!cancelled) setStockLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [form.location]);
+
+  // Unique chemicals from stock (by chemical id) for dropdown
+  const chemicalsFromStock = useMemo(() => {
+    const seen = new Set<string>();
+    const out: { id: string; chemical_name: string; chemical_formula: string; display: string }[] = [];
+    for (const row of stockByLocation) {
+      const id = row.chemical ?? row.chemical_id;
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      const name = String(row.chemical_name ?? "").trim();
+      const formula = String(row.chemical_formula ?? "").trim();
+      out.push({
+        id,
+        chemical_name: name,
+        chemical_formula: formula,
+        display: formula ? `${formula} – ${name}` : name || id,
+      });
+    }
+    return out.sort((a, b) => a.display.localeCompare(b.display));
+  }, [stockByLocation]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -80,6 +174,7 @@ const ChemicalAssignmentPage: React.FC = () => {
     }
     try {
       await chemicalAssignmentAPI.create({
+        chemical: form.selectedChemicalId || undefined,
         location: form.location.trim() || undefined,
         chemical_formula: form.chemicalFormula.trim() || undefined,
         chemical_name: chemicalName,
@@ -93,6 +188,7 @@ const ChemicalAssignmentPage: React.FC = () => {
         chemicalName: "",
         equipmentName: "",
         category: "",
+        selectedChemicalId: null,
       });
       await loadAssignments();
     } catch (error: any) {
@@ -144,39 +240,79 @@ const ChemicalAssignmentPage: React.FC = () => {
               <h2 className="text-lg font-semibold">New assignment</h2>
               <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 <div className="space-y-2">
-                  <Label htmlFor="location">Location</Label>
-                  <Input
-                    id="location"
-                    value={form.location}
-                    onChange={(e) =>
-                      setForm((prev) => ({ ...prev, location: e.target.value }))
+                  <Label>Location</Label>
+                  <Select
+                    value={form.location || "__none__"}
+                    onValueChange={(v) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        location: v === "__none__" ? "" : v,
+                        chemicalFormula: "",
+                        chemicalName: "",
+                        selectedChemicalId: null,
+                      }))
                     }
-                    placeholder="Enter location"
-                  />
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select location" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">Select location</SelectItem>
+                      {locationsFromStock.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Only locations that have stock entries are listed. Chemicals at this location will appear below.
+                  </p>
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="chemical-formula">Chemical Formula</Label>
-                  <Input
-                    id="chemical-formula"
-                    value={form.chemicalFormula}
-                    onChange={(e) =>
-                      setForm((prev) => ({ ...prev, chemicalFormula: e.target.value }))
-                    }
-                    placeholder="Enter chemical formula"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="chemical-name">Chemical Name</Label>
-                  <Input
-                    id="chemical-name"
-                    value={form.chemicalName}
-                    onChange={(e) =>
-                      setForm((prev) => ({ ...prev, chemicalName: e.target.value }))
-                    }
-                    placeholder="Enter chemical name"
-                  />
+                  <Label>Chemical (from stock at selected location)</Label>
+                  <Select
+                    value={form.selectedChemicalId ?? "__none__"}
+                    onValueChange={(v) => {
+                      if (v === "__none__") {
+                        setForm((prev) => ({
+                          ...prev,
+                          selectedChemicalId: null,
+                          chemicalName: "",
+                          chemicalFormula: "",
+                        }));
+                        return;
+                      }
+                      const chem = chemicalsFromStock.find((c) => c.id === v);
+                      if (chem) {
+                        setForm((prev) => ({
+                          ...prev,
+                          selectedChemicalId: chem.id,
+                          chemicalName: chem.chemical_name,
+                          chemicalFormula: chem.chemical_formula,
+                        }));
+                      }
+                    }}
+                    disabled={!form.location || stockLoading || chemicalsFromStock.length === 0}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder={stockLoading ? "Loading..." : form.location ? "Select chemical" : "Select location first"} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">Select chemical</SelectItem>
+                      {chemicalsFromStock.map((c) => (
+                        <SelectItem key={c.id} value={c.id}>
+                          {c.display}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {form.location && !stockLoading && chemicalsFromStock.length === 0 && (
+                    <p className="text-xs text-amber-600">
+                      No stock entries at this location. Add stock in Chemical Stock Details first.
+                    </p>
+                  )}
                 </div>
 
                 <div className="space-y-2">

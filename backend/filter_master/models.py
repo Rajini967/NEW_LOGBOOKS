@@ -2,6 +2,7 @@ import uuid
 from datetime import date
 
 from django.conf import settings
+from django.core.validators import MinValueValidator
 from django.db import models
 
 from equipment.models import Equipment
@@ -225,4 +226,43 @@ class FilterSchedule(models.Model):
             return
         if self.next_due_date < today and self.status != "overdue":
             self.status = "overdue"
+
+
+class FilterDashboardConfig(models.Model):
+    """
+    Optional singleton config for filters dashboard: projected counts and cost per month.
+    Used for "actual vs projected" consumption (activities) and cost on the dashboard.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    projected_replacement_count_month = models.PositiveIntegerField(
+        blank=True,
+        null=True,
+        help_text="Projected number of filter replacements per month for comparison",
+    )
+    projected_cleaning_count_month = models.PositiveIntegerField(
+        blank=True,
+        null=True,
+        help_text="Projected number of filter cleanings per month for comparison",
+    )
+    projected_integrity_count_month = models.PositiveIntegerField(
+        blank=True,
+        null=True,
+        help_text="Projected number of filter integrity activities per month for comparison",
+    )
+    projected_cost_rs_month = models.FloatField(
+        validators=[MinValueValidator(0)],
+        blank=True,
+        null=True,
+        help_text="Projected filter-related cost per month (Rs) for comparison",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "filter_dashboard_config"
+        verbose_name = "Filter Dashboard Config"
+        verbose_name_plural = "Filter Dashboard Config"
+
+    def __str__(self):
+        return "Filter Dashboard Config"
 
