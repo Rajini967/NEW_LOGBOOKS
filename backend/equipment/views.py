@@ -82,3 +82,29 @@ class EquipmentViewSet(viewsets.ModelViewSet):
             return [IsAuthenticated(), IsManagerOrSuperAdmin()]
         return [IsAuthenticated()]
 
+    def destroy(self, request, *args, **kwargs):
+        """
+        Prevent deleting equipment that is referenced by FilterAssignment (PROTECT FK).
+        Return a clear 400 error instead of a 500 traceback.
+        """
+        instance = self.get_object()
+        try:
+            return super().destroy(request, *args, **kwargs)
+        except ProtectedError as e:
+            # e.protected_objects contains the related objects blocking deletion
+            related_names = {type(obj).__name__ for obj in (e.protected_objects or [])}
+            if "FilterAssignment" in related_names:
+                msg = (
+                    "This equipment cannot be deleted because it is assigned to one or more filters. "
+                    "Remove the filter assignments first (E Log Book → Filter → settings/register or schedules), then try again."
+                )
+            else:
+                msg = (
+                    "This equipment cannot be deleted because it is referenced by other records. "
+                    "Remove those references first, or deactivate the equipment instead."
+                )
+            return Response(
+                {"detail": msg},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+

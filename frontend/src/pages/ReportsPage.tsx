@@ -56,6 +56,7 @@ import {
   compressorLogAPI,
   hvacValidationAPI,
   testCertificateAPI,
+  filterMasterAPI,
 } from '@/lib/api';
 
 type ApprovedReportType =
@@ -614,6 +615,7 @@ export default function ReportsPage() {
         'compressor_logs': (id) => compressorLogAPI.get(id),
         'chemical_preparations': (id) => chemicalPrepAPI.get(id),
         'hvac_validations': (id) => hvacValidationAPI.get(id),
+        'filter_master': (id) => filterMasterAPI.get(id),
         'air_velocity_tests': (id) => testCertificateAPI.airVelocity.get(id),
         'filter_integrity_tests': (id) => testCertificateAPI.filterIntegrity.get(id),
         'recovery_tests': (id) => testCertificateAPI.recovery.get(id),
@@ -638,6 +640,8 @@ export default function ReportsPage() {
         return { ...data, equipmentType: 'compressor' };
       } else if (sourceTable === 'chemical_preparations') {
         return { ...data, equipmentType: 'chemical' };
+      } else if (sourceTable === 'filter_master') {
+        return { ...data, reportType: 'filter_register' };
       } else if (sourceTable === 'air_velocity_tests') {
         // Transform air velocity test data
         return {
@@ -961,6 +965,8 @@ export default function ReportsPage() {
         if (log.equipmentType === 'chiller') {
           const chillerLogs = await chillerLogAPI.list();
           allLogs = chillerLogs.map((l: any) => ({
+            date: l.timestamp ? format(new Date(l.timestamp), 'dd/MM/yy') : '',
+            time: l.timestamp ? format(new Date(l.timestamp), 'HH:mm') : '',
             id: l.id,
             equipmentType: 'chiller',
             equipmentId: l.equipment_id,
@@ -971,10 +977,43 @@ export default function ReportsPage() {
             ctDifferentialTemp: l.ct_differential_temp,
             chillerWaterInletPressure: l.chiller_water_inlet_pressure,
             chillerMakeupWaterFlow: l.chiller_makeup_water_flow,
+            evapWaterInletPressure: l.evap_water_inlet_pressure,
+            evapWaterOutletPressure: l.evap_water_outlet_pressure,
+            evapEnteringWaterTemp: l.evap_entering_water_temp,
+            evapLeavingWaterTemp: l.evap_leaving_water_temp,
+            evapApproachTemp: l.evap_approach_temp,
+            condWaterInletPressure: l.cond_water_inlet_pressure,
+            condWaterOutletPressure: l.cond_water_outlet_pressure,
+            condEnteringWaterTemp: l.cond_entering_water_temp,
+            condLeavingWaterTemp: l.cond_leaving_water_temp,
+            condApproachTemp: l.cond_approach_temp,
+            chillerControlSignal: l.chiller_control_signal,
+            avgMotorCurrent: l.avg_motor_current,
+            compressorRunningTimeMin: l.compressor_running_time_min,
+            starterEnergyKwh: l.starter_energy_kwh,
+            coolingTowerPumpStatus: l.cooling_tower_pump_status,
+            chilledWaterPumpStatus: l.chilled_water_pump_status,
+            coolingTowerFanStatus: l.cooling_tower_fan_status,
+            coolingTowerBlowoffValveStatus: l.cooling_tower_blowoff_valve_status,
+            coolingTowerBlowdownTimeMin: l.cooling_tower_blowdown_time_min,
+            dailyWaterConsumptionCt1Liters: l.daily_water_consumption_ct1_liters,
+            dailyWaterConsumptionCt2Liters: l.daily_water_consumption_ct2_liters,
+            dailyWaterConsumptionCt3Liters: l.daily_water_consumption_ct3_liters,
+            coolingTowerChemicalName: l.cooling_tower_chemical_name,
+            coolingTowerChemicalQtyPerDay: l.cooling_tower_chemical_qty_per_day,
+            chilledWaterPumpChemicalName: l.chilled_water_pump_chemical_name,
+            chilledWaterPumpChemicalQtyKg: l.chilled_water_pump_chemical_qty_kg,
+            coolingTowerFanChemicalName: l.cooling_tower_fan_chemical_name,
+            coolingTowerFanChemicalQtyKg: l.cooling_tower_fan_chemical_qty_kg,
+            recordingFrequency: l.recording_frequency,
+            operatorSign: l.operator_sign,
+            verifiedBy: l.verified_by,
+            comment: l.comment,
             remarks: l.remarks,
             checkedBy: l.operator_name,
             timestamp: new Date(l.timestamp),
             status: l.status,
+            raw: l,
           }));
           const blob = await generateChillerMonitoringPDF({ logs: allLogs });
           downloadPDF(blob, 'Chiller Monitoring.pdf');
@@ -983,6 +1022,8 @@ export default function ReportsPage() {
         } else if (log.equipmentType === 'boiler') {
           const boilerLogs = await boilerLogAPI.list();
           allLogs = boilerLogs.map((l: any) => ({
+            date: l.timestamp ? format(new Date(l.timestamp), 'dd/MM/yy') : '',
+            time: l.timestamp ? format(new Date(l.timestamp), 'HH:mm') : '',
             id: l.id,
             equipmentType: 'boiler',
             equipmentId: l.equipment_id,
@@ -991,10 +1032,38 @@ export default function ReportsPage() {
             steamTemp: l.steam_temp,
             steamPressure: l.steam_pressure,
             steamFlowLPH: l.steam_flow_lph,
+            foHsdNgDayTankLevel: l.fo_hsd_ng_day_tank_level,
+            feedWaterTankLevel: l.feed_water_tank_level,
+            foPreHeaterTemp: l.fo_pre_heater_temp,
+            burnerOilPressure: l.burner_oil_pressure,
+            burnerHeaterTemp: l.burner_heater_temp,
+            boilerSteamPressure: l.boiler_steam_pressure,
+            stackTemperature: l.stack_temperature,
+            steamPressureAfterPrv: l.steam_pressure_after_prv,
+            feedWaterHardnessPpm: l.feed_water_hardness_ppm,
+            feedWaterTdsPpm: l.feed_water_tds_ppm,
+            foHsdNgConsumption: l.fo_hsd_ng_consumption,
+            mobreyFunctioning: l.mobrey_functioning,
+            manualBlowdownTime: l.manual_blowdown_time,
+            dieselStockLiters: l.diesel_stock_liters,
+            dieselCostRupees: l.diesel_cost_rupees,
+            furnaceOilStockLiters: l.furnace_oil_stock_liters,
+            furnaceOilCostRupees: l.furnace_oil_cost_rupees,
+            brigadeStockKg: l.brigade_stock_kg,
+            brigadeCostRupees: l.brigade_cost_rupees,
+            dailyPowerConsumptionKwh: l.daily_power_consumption_kwh,
+            dailyWaterConsumptionLiters: l.daily_water_consumption_liters,
+            dailyChemicalConsumptionKg: l.daily_chemical_consumption_kg,
+            dailyDieselConsumptionLiters: l.daily_diesel_consumption_liters,
+            dailyFurnaceOilConsumptionLiters: l.daily_furnace_oil_consumption_liters,
+            dailyBrigadeConsumptionKg: l.daily_brigade_consumption_kg,
+            steamConsumptionKgHr: l.steam_consumption_kg_hr,
+            comment: l.comment,
             remarks: l.remarks,
             checkedBy: l.operator_name,
             timestamp: new Date(l.timestamp),
             status: l.status,
+            raw: l,
           }));
           const blob = await generateBoilerMonitoringPDF({ logs: allLogs });
           downloadPDF(blob, 'Boiler Monitoring.pdf');
@@ -1003,6 +1072,8 @@ export default function ReportsPage() {
         } else if (log.equipmentType === 'chemical') {
           const chemicalPreps = await chemicalPrepAPI.list();
           allLogs = chemicalPreps.map((l: any) => ({
+            date: l.timestamp ? format(new Date(l.timestamp), 'dd/MM/yy') : '',
+            time: l.timestamp ? format(new Date(l.timestamp), 'HH:mm') : '',
             id: l.id,
             equipmentType: 'chemical',
             equipmentName: l.equipment_name,
@@ -1011,10 +1082,17 @@ export default function ReportsPage() {
             solutionConcentration: l.solution_concentration,
             waterQty: l.water_qty,
             chemicalQty: l.chemical_qty,
-            remarks: l.remarks,
+            batchNo: l.batch_no,
+            doneBy: l.done_by,
+            comment: l.comment,
             checkedBy: l.checked_by || l.operator_name,
+            operatorName: l.operator_name,
+            approvedAt: l.approved_at,
+            secondaryApprovedAt: l.secondary_approved_at,
+            remarks: l.remarks,
             timestamp: new Date(l.timestamp),
             status: l.status,
+            raw: l,
           }));
           const blob = await generateChemicalMonitoringPDF({ logs: allLogs });
           downloadPDF(blob, 'Chemical Monitoring.pdf');
@@ -1107,6 +1185,85 @@ export default function ReportsPage() {
       return detailsHTML;
     }
     
+    if (reportType === 'filter_register' || log.reportType === 'filter_register') {
+      const safe = (v: any) => (v === null || v === undefined || v === '' ? 'N/A' : String(v));
+      const renderRow = (label: string, value: any) =>
+        `<div class=\"info\"><span class=\"label\">${label}:</span><span class=\"value\">${safe(value)}</span></div>`;
+
+      let detailsHTML = '<h2>Filter Register Details</h2>';
+
+      // Primary fields (friendly order)
+      detailsHTML += renderRow('Filter ID', log.filter_id || log.filterId || 'N/A');
+      detailsHTML += renderRow('Category', log.category_name || log.categoryName || log.category || 'N/A');
+      detailsHTML += renderRow('Make', log.make);
+      detailsHTML += renderRow('Model', log.model);
+      detailsHTML += renderRow('Serial Number', log.serial_number || log.serialNumber);
+      detailsHTML += renderRow('Micron Size', log.micron_size || log.micronSize);
+      detailsHTML += renderRow('Size (L)', log.size_l ?? log.sizeL);
+      detailsHTML += renderRow('Size (W)', log.size_w ?? log.sizeW);
+      detailsHTML += renderRow('Size (H)', log.size_h ?? log.sizeH);
+      detailsHTML += renderRow('Certificate File', log.certificate_file || log.certificateFile);
+      detailsHTML += renderRow('Status', log.status);
+      detailsHTML += renderRow('Client ID', log.client_id || log.clientId);
+      detailsHTML += renderRow('Active', log.is_active ?? log.isActive);
+      detailsHTML += renderRow('Created At', log.created_at || log.createdAt);
+      detailsHTML += renderRow('Updated At', log.updated_at || log.updatedAt);
+      detailsHTML += renderRow('Created By', log.created_by || log.createdBy);
+      detailsHTML += renderRow('Approved By', log.approved_by || log.approvedBy);
+      detailsHTML += renderRow('Approved At', log.approved_at || log.approvedAt);
+
+      // Additional fields (anything else returned by API)
+      const known = new Set([
+        'id',
+        'filter_id',
+        'filterId',
+        'category',
+        'category_name',
+        'categoryName',
+        'make',
+        'model',
+        'serial_number',
+        'serialNumber',
+        'size_l',
+        'sizeL',
+        'size_w',
+        'sizeW',
+        'size_h',
+        'sizeH',
+        'micron_size',
+        'micronSize',
+        'certificate_file',
+        'certificateFile',
+        'status',
+        'created_by',
+        'createdBy',
+        'approved_by',
+        'approvedBy',
+        'approved_at',
+        'approvedAt',
+        'client_id',
+        'clientId',
+        'is_active',
+        'isActive',
+        'created_at',
+        'createdAt',
+        'updated_at',
+        'updatedAt',
+        'reportType',
+      ]);
+
+      const extraKeys = Object.keys(log).filter((k) => !known.has(k)).sort();
+      if (extraKeys.length > 0) {
+        detailsHTML += '<h2>Additional Fields</h2>';
+        for (const k of extraKeys) {
+          const v = (log as any)[k];
+          detailsHTML += renderRow(k, typeof v === 'object' ? JSON.stringify(v) : v);
+        }
+      }
+
+      return detailsHTML;
+    }
+
     let detailsHTML = '<h2>Log Details</h2>';
     
     if (log.equipmentType === 'chiller') {
@@ -1255,6 +1412,8 @@ export default function ReportsPage() {
         if (log.equipmentType === 'chiller') {
           const chillerLogs = await chillerLogAPI.list();
           allLogs = chillerLogs.map((l: any) => ({
+            date: l.timestamp ? format(new Date(l.timestamp), 'dd/MM/yy') : '',
+            time: l.timestamp ? format(new Date(l.timestamp), 'HH:mm') : '',
             id: l.id,
             equipmentType: 'chiller',
             equipmentId: l.equipment_id,
@@ -1265,10 +1424,43 @@ export default function ReportsPage() {
             ctDifferentialTemp: l.ct_differential_temp,
             chillerWaterInletPressure: l.chiller_water_inlet_pressure,
             chillerMakeupWaterFlow: l.chiller_makeup_water_flow,
+            evapWaterInletPressure: l.evap_water_inlet_pressure,
+            evapWaterOutletPressure: l.evap_water_outlet_pressure,
+            evapEnteringWaterTemp: l.evap_entering_water_temp,
+            evapLeavingWaterTemp: l.evap_leaving_water_temp,
+            evapApproachTemp: l.evap_approach_temp,
+            condWaterInletPressure: l.cond_water_inlet_pressure,
+            condWaterOutletPressure: l.cond_water_outlet_pressure,
+            condEnteringWaterTemp: l.cond_entering_water_temp,
+            condLeavingWaterTemp: l.cond_leaving_water_temp,
+            condApproachTemp: l.cond_approach_temp,
+            chillerControlSignal: l.chiller_control_signal,
+            avgMotorCurrent: l.avg_motor_current,
+            compressorRunningTimeMin: l.compressor_running_time_min,
+            starterEnergyKwh: l.starter_energy_kwh,
+            coolingTowerPumpStatus: l.cooling_tower_pump_status,
+            chilledWaterPumpStatus: l.chilled_water_pump_status,
+            coolingTowerFanStatus: l.cooling_tower_fan_status,
+            coolingTowerBlowoffValveStatus: l.cooling_tower_blowoff_valve_status,
+            coolingTowerBlowdownTimeMin: l.cooling_tower_blowdown_time_min,
+            dailyWaterConsumptionCt1Liters: l.daily_water_consumption_ct1_liters,
+            dailyWaterConsumptionCt2Liters: l.daily_water_consumption_ct2_liters,
+            dailyWaterConsumptionCt3Liters: l.daily_water_consumption_ct3_liters,
+            coolingTowerChemicalName: l.cooling_tower_chemical_name,
+            coolingTowerChemicalQtyPerDay: l.cooling_tower_chemical_qty_per_day,
+            chilledWaterPumpChemicalName: l.chilled_water_pump_chemical_name,
+            chilledWaterPumpChemicalQtyKg: l.chilled_water_pump_chemical_qty_kg,
+            coolingTowerFanChemicalName: l.cooling_tower_fan_chemical_name,
+            coolingTowerFanChemicalQtyKg: l.cooling_tower_fan_chemical_qty_kg,
+            recordingFrequency: l.recording_frequency,
+            operatorSign: l.operator_sign,
+            verifiedBy: l.verified_by,
+            comment: l.comment,
             remarks: l.remarks,
             checkedBy: l.operator_name,
             timestamp: new Date(l.timestamp),
             status: l.status,
+            raw: l,
           }));
           const blob = await generateChillerMonitoringPDF({ logs: allLogs });
           const success = printPDF(blob);
@@ -1281,6 +1473,8 @@ export default function ReportsPage() {
         } else if (log.equipmentType === 'boiler') {
           const boilerLogs = await boilerLogAPI.list();
           allLogs = boilerLogs.map((l: any) => ({
+            date: l.timestamp ? format(new Date(l.timestamp), 'dd/MM/yy') : '',
+            time: l.timestamp ? format(new Date(l.timestamp), 'HH:mm') : '',
             id: l.id,
             equipmentType: 'boiler',
             equipmentId: l.equipment_id,
@@ -1289,10 +1483,38 @@ export default function ReportsPage() {
             steamTemp: l.steam_temp,
             steamPressure: l.steam_pressure,
             steamFlowLPH: l.steam_flow_lph,
+            foHsdNgDayTankLevel: l.fo_hsd_ng_day_tank_level,
+            feedWaterTankLevel: l.feed_water_tank_level,
+            foPreHeaterTemp: l.fo_pre_heater_temp,
+            burnerOilPressure: l.burner_oil_pressure,
+            burnerHeaterTemp: l.burner_heater_temp,
+            boilerSteamPressure: l.boiler_steam_pressure,
+            stackTemperature: l.stack_temperature,
+            steamPressureAfterPrv: l.steam_pressure_after_prv,
+            feedWaterHardnessPpm: l.feed_water_hardness_ppm,
+            feedWaterTdsPpm: l.feed_water_tds_ppm,
+            foHsdNgConsumption: l.fo_hsd_ng_consumption,
+            mobreyFunctioning: l.mobrey_functioning,
+            manualBlowdownTime: l.manual_blowdown_time,
+            dieselStockLiters: l.diesel_stock_liters,
+            dieselCostRupees: l.diesel_cost_rupees,
+            furnaceOilStockLiters: l.furnace_oil_stock_liters,
+            furnaceOilCostRupees: l.furnace_oil_cost_rupees,
+            brigadeStockKg: l.brigade_stock_kg,
+            brigadeCostRupees: l.brigade_cost_rupees,
+            dailyPowerConsumptionKwh: l.daily_power_consumption_kwh,
+            dailyWaterConsumptionLiters: l.daily_water_consumption_liters,
+            dailyChemicalConsumptionKg: l.daily_chemical_consumption_kg,
+            dailyDieselConsumptionLiters: l.daily_diesel_consumption_liters,
+            dailyFurnaceOilConsumptionLiters: l.daily_furnace_oil_consumption_liters,
+            dailyBrigadeConsumptionKg: l.daily_brigade_consumption_kg,
+            steamConsumptionKgHr: l.steam_consumption_kg_hr,
+            comment: l.comment,
             remarks: l.remarks,
             checkedBy: l.operator_name,
             timestamp: new Date(l.timestamp),
             status: l.status,
+            raw: l,
           }));
           const blob = await generateBoilerMonitoringPDF({ logs: allLogs });
           const success = printPDF(blob);
@@ -1305,6 +1527,8 @@ export default function ReportsPage() {
         } else if (log.equipmentType === 'chemical') {
           const chemicalPreps = await chemicalPrepAPI.list();
           allLogs = chemicalPreps.map((l: any) => ({
+            date: l.timestamp ? format(new Date(l.timestamp), 'dd/MM/yy') : '',
+            time: l.timestamp ? format(new Date(l.timestamp), 'HH:mm') : '',
             id: l.id,
             equipmentType: 'chemical',
             equipmentName: l.equipment_name,
@@ -1313,10 +1537,17 @@ export default function ReportsPage() {
             solutionConcentration: l.solution_concentration,
             waterQty: l.water_qty,
             chemicalQty: l.chemical_qty,
-            remarks: l.remarks,
+            batchNo: l.batch_no,
+            doneBy: l.done_by,
+            comment: l.comment,
             checkedBy: l.checked_by || l.operator_name,
+            operatorName: l.operator_name,
+            approvedAt: l.approved_at,
+            secondaryApprovedAt: l.secondary_approved_at,
+            remarks: l.remarks,
             timestamp: new Date(l.timestamp),
             status: l.status,
+            raw: l,
           }));
           const blob = await generateChemicalMonitoringPDF({ logs: allLogs });
           const success = printPDF(blob);
@@ -1693,12 +1924,48 @@ export default function ReportsPage() {
                       </div>
                     )}
                   </div>
-                  {selectedReport.remarks && (
-                    <div>
-                      <Label className="text-xs text-muted-foreground">Remarks</Label>
-                      <p className="text-sm mt-1">{selectedReport.remarks}</p>
-                    </div>
-                  )}
+                  {(() => {
+                    const data = selectedReport.originalData;
+                    const operatorRemarks =
+                      typeof data?.remarks === 'string' ? data.remarks.trim() : '';
+                    const operatorComment =
+                      typeof data?.comment === 'string' ? data.comment.trim() : '';
+                    const approvalRemarks = (selectedReport.remarks || '').trim();
+
+                    // Prefer showing operator-entered fields from the original record.
+                    // The Report row "remarks" is approver remarks; show it separately to avoid confusion.
+                    const showOperatorRemarks = !!operatorRemarks;
+                    const showOperatorComment = !!operatorComment;
+                    const showApprovalRemarks =
+                      !!approvalRemarks &&
+                      approvalRemarks !== operatorRemarks &&
+                      approvalRemarks !== operatorComment;
+
+                    if (!showOperatorRemarks && !showOperatorComment && !showApprovalRemarks) return null;
+
+                    return (
+                      <div className="space-y-3">
+                        {showOperatorRemarks && (
+                          <div>
+                            <Label className="text-xs text-muted-foreground">Remarks</Label>
+                            <p className="text-sm mt-1 whitespace-pre-wrap">{operatorRemarks}</p>
+                          </div>
+                        )}
+                        {showOperatorComment && (
+                          <div>
+                            <Label className="text-xs text-muted-foreground">Comment</Label>
+                            <p className="text-sm mt-1 whitespace-pre-wrap">{operatorComment}</p>
+                          </div>
+                        )}
+                        {showApprovalRemarks && (
+                          <div>
+                            <Label className="text-xs text-muted-foreground">Approval remarks</Label>
+                            <p className="text-sm mt-1 whitespace-pre-wrap">{approvalRemarks}</p>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
                 <div className="flex justify-end gap-2">
                   <Button variant="outline" onClick={() => setIsViewDialogOpen(false)}>

@@ -57,7 +57,23 @@ const styles = StyleSheet.create({
   footerLine: {
     marginBottom: 5,
   },
+  detailsTitle: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    marginTop: 10,
+    marginBottom: 8,
+    textAlign: 'center',
+    textTransform: 'uppercase',
+  },
+  smallCell: {
+    fontSize: 7,
+    padding: 4,
+  },
 });
+
+type LimitConfig =
+  | { type: 'NMT'; max: number; unit: string }
+  | { type: 'NLT'; min: number; unit: string };
 
 interface ChillerMonitoringData {
   logs: Array<{
@@ -71,6 +87,42 @@ interface ChillerMonitoringData {
     ctDifferentialTemp?: number;
     chillerWaterInletPressure?: number;
     chillerMakeupWaterFlow?: number;
+    // Evaporator
+    evapWaterInletPressure?: number;
+    evapWaterOutletPressure?: number;
+    evapEnteringWaterTemp?: number;
+    evapLeavingWaterTemp?: number;
+    evapApproachTemp?: number;
+    // Condenser
+    condWaterInletPressure?: number;
+    condWaterOutletPressure?: number;
+    condEnteringWaterTemp?: number;
+    condLeavingWaterTemp?: number;
+    condApproachTemp?: number;
+    // Electrical / control
+    chillerControlSignal?: number;
+    avgMotorCurrent?: number;
+    compressorRunningTimeMin?: number;
+    starterEnergyKwh?: number;
+    // Status / consumption
+    coolingTowerPumpStatus?: string;
+    chilledWaterPumpStatus?: string;
+    coolingTowerFanStatus?: string;
+    coolingTowerBlowoffValveStatus?: string;
+    coolingTowerBlowdownTimeMin?: number;
+    dailyWaterConsumptionCt1Liters?: number;
+    dailyWaterConsumptionCt2Liters?: number;
+    dailyWaterConsumptionCt3Liters?: number;
+    coolingTowerChemicalName?: string;
+    coolingTowerChemicalQtyPerDay?: number;
+    chilledWaterPumpChemicalName?: string;
+    chilledWaterPumpChemicalQtyKg?: number;
+    coolingTowerFanChemicalName?: string;
+    coolingTowerFanChemicalQtyKg?: number;
+    recordingFrequency?: string;
+    operatorSign?: string;
+    verifiedBy?: string;
+    comment?: string;
     remarks?: string;
     checkedBy?: string;
   }>;
@@ -81,27 +133,41 @@ interface ChillerMonitoringCertificateProps {
 }
 
 export function ChillerMonitoringCertificate({ data }: ChillerMonitoringCertificateProps) {
-  const limits = {
-    chillerSupplyTemp: { max: 8, unit: '°C', type: 'NMT' },
-    chillerReturnTemp: { max: 15, unit: '°C', type: 'NMT' },
-    coolingTowerSupplyTemp: { max: 25, unit: '°C', type: 'NMT' },
-    coolingTowerReturnTemp: { max: 30, unit: '°C', type: 'NMT' },
-    ctDifferentialTemp: { max: 5, unit: '°C', type: 'NMT' },
-    chillerWaterInletPressure: { min: 2, unit: 'bar', type: 'NLT' },
+  const limits: Record<string, LimitConfig> = {
+    // Summary row
+    chillerSupplyTemp: { type: 'NMT', max: 8, unit: '°C' },
+    chillerReturnTemp: { type: 'NMT', max: 15, unit: '°C' },
+    coolingTowerSupplyTemp: { type: 'NMT', max: 25, unit: '°C' },
+    coolingTowerReturnTemp: { type: 'NMT', max: 30, unit: '°C' },
+    ctDifferentialTemp: { type: 'NMT', max: 5, unit: '°C' },
+    chillerWaterInletPressure: { type: 'NLT', min: 2, unit: 'bar' },
+    // Evaporator (from model help_text)
+    evapWaterInletPressure: { type: 'NLT', min: 2.3, unit: 'kg/cm²' },
+    evapEnteringWaterTemp: { type: 'NMT', max: 18, unit: '°C' },
+    evapApproachTemp: { type: 'NMT', max: 4, unit: '°C' },
+    // Condenser (from model help_text)
+    condWaterInletPressure: { type: 'NLT', min: 1.5, unit: 'kg/cm²' },
+    condWaterOutletPressure: { type: 'NLT', min: 1.0, unit: 'kg/cm²' },
+    condEnteringWaterTemp: { type: 'NMT', max: 35, unit: '°C' },
+    condLeavingWaterTemp: { type: 'NMT', max: 40, unit: '°C' },
   };
 
   const checkLimit = (field: string, value: number | undefined): boolean => {
     if (value === undefined) return false;
-    const limit = limits[field as keyof typeof limits];
+    const limit = limits[field];
     if (!limit) return false;
-    if (limit.type === 'NMT' && limit.max !== undefined) {
+    if (limit.type === 'NMT' && 'max' in limit) {
       return value > limit.max;
     }
-    if (limit.type === 'NLT' && limit.min !== undefined) {
+    if (limit.type === 'NLT' && 'min' in limit) {
       return value < limit.min;
     }
     return false;
   };
+
+  // Use first non-empty remarks value from logs for footer
+  const footerRemarks =
+    data.logs.find((log) => (log.remarks || '').toString().trim().length > 0)?.remarks || '';
 
   return (
     <Document>
@@ -218,9 +284,209 @@ export function ChillerMonitoringCertificate({ data }: ChillerMonitoringCertific
           ))}
         </View>
 
-        {/* Footer */}
+      </Page>
+
+      {/* DETAILS – All parameters on one page */}
+      <Page size="A4" style={styles.page}>
+        <PDFHeader />
+        <Text style={styles.detailsTitle}>RAW DATA FOR CHILLER MONITORING (DETAILS – ALL PARAMETERS)</Text>
+
+        {/* Evaporator */}
+        <View style={styles.table}>
+          <View style={[styles.tableRow, styles.tableHeader]}>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>Date</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>Time</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '16%' }]}>Evap inlet pressure</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '16%' }]}>Evap outlet pressure</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '16%' }]}>Evap entering temp</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '16%' }]}>Evap leaving temp</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '16%' }, styles.tableCellLast]}>Evap approach</Text>
+          </View>
+
+          {data.logs.map((log, index) => (
+            <View key={`evap-${index}`} style={styles.tableRow}>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>{log.date || ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>{log.time || ''}</Text>
+              <Text
+                style={[
+                  styles.tableCell,
+                  styles.smallCell,
+                  { width: '16%' },
+                  checkLimit('evapWaterInletPressure', log.evapWaterInletPressure) && styles.redText,
+                ]}
+              >
+                {log.evapWaterInletPressure ?? ''}
+              </Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '16%' }]}>{log.evapWaterOutletPressure ?? ''}</Text>
+              <Text
+                style={[
+                  styles.tableCell,
+                  styles.smallCell,
+                  { width: '16%' },
+                  checkLimit('evapEnteringWaterTemp', log.evapEnteringWaterTemp) && styles.redText,
+                ]}
+              >
+                {log.evapEnteringWaterTemp ?? ''}
+              </Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '16%' }]}>{log.evapLeavingWaterTemp ?? ''}</Text>
+              <Text
+                style={[
+                  styles.tableCell,
+                  styles.smallCell,
+                  { width: '16%' },
+                  styles.tableCellLast,
+                  checkLimit('evapApproachTemp', log.evapApproachTemp) && styles.redText,
+                ]}
+              >
+                {log.evapApproachTemp ?? ''}
+              </Text>
+            </View>
+          ))}
+        </View>
+
+        {/* Condenser + Electrical */}
+        <View style={styles.table}>
+          <View style={[styles.tableRow, styles.tableHeader]}>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '8%' }]}>Date</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '8%' }]}>Time</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>Cond inlet P</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>Cond outlet P</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>Cond enter T</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>Cond leave T</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>Cond approach</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>Control %</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>Motor A</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }, styles.tableCellLast]}>Energy kWh</Text>
+          </View>
+
+          {data.logs.map((log, index) => (
+            <View key={`cond-${index}`} style={styles.tableRow}>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '8%' }]}>{log.date || ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '8%' }]}>{log.time || ''}</Text>
+              <Text
+                style={[
+                  styles.tableCell,
+                  styles.smallCell,
+                  { width: '12%' },
+                  checkLimit('condWaterInletPressure', log.condWaterInletPressure) && styles.redText,
+                ]}
+              >
+                {log.condWaterInletPressure ?? ''}
+              </Text>
+              <Text
+                style={[
+                  styles.tableCell,
+                  styles.smallCell,
+                  { width: '12%' },
+                  checkLimit('condWaterOutletPressure', log.condWaterOutletPressure) && styles.redText,
+                ]}
+              >
+                {log.condWaterOutletPressure ?? ''}
+              </Text>
+              <Text
+                style={[
+                  styles.tableCell,
+                  styles.smallCell,
+                  { width: '12%' },
+                  checkLimit('condEnteringWaterTemp', log.condEnteringWaterTemp) && styles.redText,
+                ]}
+              >
+                {log.condEnteringWaterTemp ?? ''}
+              </Text>
+              <Text
+                style={[
+                  styles.tableCell,
+                  styles.smallCell,
+                  { width: '12%' },
+                  checkLimit('condLeavingWaterTemp', log.condLeavingWaterTemp) && styles.redText,
+                ]}
+              >
+                {log.condLeavingWaterTemp ?? ''}
+              </Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>{log.condApproachTemp ?? ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>{log.chillerControlSignal ?? ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>{log.avgMotorCurrent ?? ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }, styles.tableCellLast]}>{log.starterEnergyKwh ?? ''}</Text>
+            </View>
+          ))}
+        </View>
+
+        {/* Water, chemicals & status */}
+        <View style={styles.table}>
+          <View style={[styles.tableRow, styles.tableHeader]}>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>Date</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>Time</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '18%' }]}>CT 1 – Daily water (L)</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '18%' }]}>CT 2 – Daily water (L)</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '18%' }]}>CT 3 – Daily water (L)</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '18%' }]}>CT Blow down time (min)</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '8%' }, styles.tableCellLast]}>Status</Text>
+          </View>
+
+          {data.logs.map((log, index) => (
+            <View key={`water-${index}`} style={styles.tableRow}>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>{log.date || ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>{log.time || ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '18%' }]}>{log.dailyWaterConsumptionCt1Liters ?? ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '18%' }]}>{log.dailyWaterConsumptionCt2Liters ?? ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '18%' }]}>{log.dailyWaterConsumptionCt3Liters ?? ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '18%' }]}>{log.coolingTowerBlowdownTimeMin ?? ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '8%' }, styles.tableCellLast]}>
+                {(log.coolingTowerPumpStatus || log.chilledWaterPumpStatus || log.coolingTowerFanStatus) ? 'See below' : ''}
+              </Text>
+            </View>
+          ))}
+        </View>
+
+        <View style={styles.table}>
+          <View style={[styles.tableRow, styles.tableHeader]}>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '8%' }]}>Date</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '8%' }]}>Time</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>CT Pump status</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>Chilled Pump status</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>CT Fan status</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>CT Pump chem (name / kg)</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>Chilled Pump chem (name / kg)</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>CT Fan chem (name / kg)</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '9%' }]}>Recording freq</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '9%' }]}>Operator sign</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }, styles.tableCellLast]}>Verified by</Text>
+          </View>
+
+          {data.logs.map((log, index) => (
+            <View key={`status-${index}`} style={styles.tableRow}>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '8%' }]}>{log.date || ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '8%' }]}>{log.time || ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>{log.coolingTowerPumpStatus || ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>{log.chilledWaterPumpStatus || ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>{log.coolingTowerFanStatus || ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>
+                {log.coolingTowerChemicalName
+                  ? `${log.coolingTowerChemicalName}${log.coolingTowerChemicalQtyPerDay != null ? ` / ${log.coolingTowerChemicalQtyPerDay}` : ''}`
+                  : ''}
+              </Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>
+                {log.chilledWaterPumpChemicalName
+                  ? `${log.chilledWaterPumpChemicalName}${log.chilledWaterPumpChemicalQtyKg != null ? ` / ${log.chilledWaterPumpChemicalQtyKg}` : ''}`
+                  : ''}
+              </Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>
+                {log.coolingTowerFanChemicalName
+                  ? `${log.coolingTowerFanChemicalName}${log.coolingTowerFanChemicalQtyKg != null ? ` / ${log.coolingTowerFanChemicalQtyKg}` : ''}`
+                  : ''}
+              </Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '9%' }]}>{log.recordingFrequency || ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '9%' }]}>{log.operatorSign || ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }, styles.tableCellLast]}>{log.verifiedBy || ''}</Text>
+            </View>
+          ))}
+        </View>
+
+        {/* Footer with overall remarks and digital sign */}
         <View style={styles.footer}>
-          <Text style={styles.footerLine}>Remarks:</Text>
+          <Text style={styles.footerLine}>
+            Remarks: {footerRemarks ? String(footerRemarks) : ''}
+          </Text>
           <Text style={styles.footerLine}>Digital sign</Text>
         </View>
       </Page>

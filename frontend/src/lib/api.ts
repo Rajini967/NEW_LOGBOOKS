@@ -1456,9 +1456,11 @@ export const testCertificateAPI = {
 // Dashboard summary (Quick Stats) and weekly consumption
 export type DashboardSummary = {
   active_chillers_count: number;
+  avg_pressure_bar: number | null;
   pending_approvals_count: number;
   approved_today_count: number;
   total_log_entries: number;
+  hvac_validations_pending_count: number;
   active_alerts: number;
   compliance_score: number | null;
 };
@@ -1471,6 +1473,27 @@ export type WeeklyConsumptionDay = {
   fuel_liters: number;
 };
 
+export type RecentActivityItem = {
+  id: string;
+  type: 'utility' | 'chemical' | 'validation';
+  action: string;
+  operator: string;
+  timestamp: string;
+  status: 'pending' | 'approved' | 'rejected';
+};
+
+export type EquipmentStatusItem = {
+  id: string;
+  name: string;
+  equipment_number: string;
+  type: 'chiller' | 'boiler' | 'compressor';
+  status: 'running' | 'idle' | 'alert';
+  t1: number | null;
+  t2: number | null;
+  p1: number | null;
+  p2: number | null;
+};
+
 export const dashboardSummaryAPI = {
   getSummary: async () => {
     const response = await api.get<DashboardSummary>('/reports/dashboard_summary/');
@@ -1480,6 +1503,16 @@ export const dashboardSummaryAPI = {
     const response = await api.get<WeeklyConsumptionDay[]>('/reports/weekly_consumption/', {
       params: params ? { date: params.date } : {},
     });
+    return Array.isArray(response.data) ? response.data : [];
+  },
+  getRecentActivity: async (limit?: number) => {
+    const response = await api.get<RecentActivityItem[]>('/reports/recent_activity/', {
+      params: limit != null ? { limit } : {},
+    });
+    return Array.isArray(response.data) ? response.data : [];
+  },
+  getEquipmentStatus: async () => {
+    const response = await api.get<EquipmentStatusItem[]>('/reports/equipment_status/');
     return Array.isArray(response.data) ? response.data : [];
   },
 };

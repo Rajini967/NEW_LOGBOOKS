@@ -605,7 +605,7 @@ export default function SettingsPage() {
                         />
                       </div>
                       <div className="space-y-1">
-                        <Label className="text-xs">Cooling Tower Pump – Water limit (L)</Label>
+                        <Label className="text-xs">Cooling Tower 1 – Water limit (L)</Label>
                         <Input
                           type="number"
                           min={0}
@@ -622,7 +622,7 @@ export default function SettingsPage() {
                         />
                       </div>
                       <div className="space-y-1">
-                        <Label className="text-xs">Chilled Water Pump – Water limit (L)</Label>
+                        <Label className="text-xs">Cooling Tower 2 – Water limit (L)</Label>
                         <Input
                           type="number"
                           min={0}
@@ -639,7 +639,7 @@ export default function SettingsPage() {
                         />
                       </div>
                       <div className="space-y-1">
-                        <Label className="text-xs">Cooling Tower Fan – Water limit (L)</Label>
+                        <Label className="text-xs">Cooling Tower 3 – Water limit (L)</Label>
                         <Input
                           type="number"
                           min={0}

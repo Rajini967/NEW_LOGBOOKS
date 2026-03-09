@@ -45,9 +45,11 @@ export default function DashboardPage() {
   const [overdueDialogOpen, setOverdueDialogOpen] = useState(false);
   const [dashboardSummary, setDashboardSummary] = useState<{
     active_chillers_count: number;
+    avg_pressure_bar?: number | null;
     pending_approvals_count: number;
     approved_today_count: number;
     total_log_entries: number;
+    hvac_validations_pending_count?: number;
     active_alerts: number;
     compliance_score: number | null;
   } | null>(null);
@@ -137,7 +139,11 @@ export default function DashboardPage() {
           />
           <MetricCard
             title="Avg Pressure"
-            value="—"
+            value={
+              dashboardSummary?.avg_pressure_bar != null
+                ? dashboardSummary.avg_pressure_bar
+                : '—'
+            }
             unit="bar"
             icon={Gauge}
             status="normal"
@@ -151,7 +157,7 @@ export default function DashboardPage() {
           />
           <MetricCard
             title="HVAC Validations"
-            value="—"
+            value={dashboardSummary?.hvac_validations_pending_count ?? '—'}
             unit="pending"
             icon={Wind}
             status="normal"

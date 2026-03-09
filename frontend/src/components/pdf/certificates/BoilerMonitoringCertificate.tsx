@@ -54,6 +54,18 @@ const styles = StyleSheet.create({
   footerLine: {
     marginBottom: 5,
   },
+  detailsTitle: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    marginTop: 10,
+    marginBottom: 8,
+    textAlign: 'center',
+    textTransform: 'uppercase',
+  },
+  smallCell: {
+    fontSize: 7,
+    padding: 4,
+  },
 });
 
 interface BoilerMonitoringData {
@@ -66,6 +78,36 @@ interface BoilerMonitoringData {
     steamTemp?: number;
     steamPressure?: number;
     steamFlowLPH?: number;
+    // Hourly/shift parameters
+    foHsdNgDayTankLevel?: number;
+    feedWaterTankLevel?: number;
+    foPreHeaterTemp?: number;
+    burnerOilPressure?: number;
+    burnerHeaterTemp?: number;
+    boilerSteamPressure?: number;
+    stackTemperature?: number;
+    steamPressureAfterPrv?: number;
+    feedWaterHardnessPpm?: number;
+    feedWaterTdsPpm?: number;
+    foHsdNgConsumption?: number;
+    mobreyFunctioning?: string;
+    manualBlowdownTime?: string;
+    // Stocks / costs
+    dieselStockLiters?: number | null;
+    dieselCostRupees?: number | null;
+    furnaceOilStockLiters?: number | null;
+    furnaceOilCostRupees?: number | null;
+    brigadeStockKg?: number | null;
+    brigadeCostRupees?: number | null;
+    // Daily consumption
+    dailyPowerConsumptionKwh?: number | null;
+    dailyWaterConsumptionLiters?: number | null;
+    dailyChemicalConsumptionKg?: number | null;
+    dailyDieselConsumptionLiters?: number | null;
+    dailyFurnaceOilConsumptionLiters?: number | null;
+    dailyBrigadeConsumptionKg?: number | null;
+    steamConsumptionKgHr?: number | null;
+    comment?: string;
     remarks?: string;
     checkedBy?: string;
   }>;
@@ -195,6 +237,76 @@ export function BoilerMonitoringCertificate({ data }: BoilerMonitoringCertificat
         <View style={styles.footer}>
           <Text style={styles.footerLine}>Remarks:</Text>
           <Text style={styles.footerLine}>Digital sign</Text>
+        </View>
+      </Page>
+
+      {/* DETAILS – Hourly / Shift parameters */}
+      <Page size="A4" style={styles.page}>
+        <PDFHeader />
+        <Text style={styles.detailsTitle}>RAW DATA FOR BOILER MONITORING (DETAILS – HOURLY/SHIFT)</Text>
+
+        <View style={styles.table}>
+          <View style={[styles.tableRow, styles.tableHeader]}>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '8%' }]}>Date</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '8%' }]}>Time</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>Day tank (L)</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>FW tank (KL)</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>Preheater °C</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>Burner P</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>Heater °C</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>Stack °C</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>Hardness</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }, styles.tableCellLast]}>TDS</Text>
+          </View>
+
+          {data.logs.map((log, index) => (
+            <View key={index} style={styles.tableRow}>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '8%' }]}>{log.date || ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '8%' }]}>{log.time || ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>{log.foHsdNgDayTankLevel ?? ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>{log.feedWaterTankLevel ?? ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>{log.foPreHeaterTemp ?? ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>{log.burnerOilPressure ?? ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>{log.burnerHeaterTemp ?? ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>{log.stackTemperature ?? ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>{log.feedWaterHardnessPpm ?? ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }, styles.tableCellLast]}>{log.feedWaterTdsPpm ?? ''}</Text>
+            </View>
+          ))}
+        </View>
+      </Page>
+
+      {/* DETAILS – Daily consumption / stock */}
+      <Page size="A4" style={styles.page}>
+        <PDFHeader />
+        <Text style={styles.detailsTitle}>RAW DATA FOR BOILER MONITORING (DETAILS – DAILY)</Text>
+
+        <View style={styles.table}>
+          <View style={[styles.tableRow, styles.tableHeader]}>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '8%' }]}>Date</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '8%' }]}>Time</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>Power kWh</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>Water L</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>Chem kg</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>Diesel L</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>FO L</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>Brigade kg</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }, styles.tableCellLast]}>Steam kg/hr</Text>
+          </View>
+
+          {data.logs.map((log, index) => (
+            <View key={index} style={styles.tableRow}>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '8%' }]}>{log.date || ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '8%' }]}>{log.time || ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>{log.dailyPowerConsumptionKwh ?? ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>{log.dailyWaterConsumptionLiters ?? ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>{log.dailyChemicalConsumptionKg ?? ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>{log.dailyDieselConsumptionLiters ?? ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>{log.dailyFurnaceOilConsumptionLiters ?? ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>{log.dailyBrigadeConsumptionKg ?? ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }, styles.tableCellLast]}>{log.steamConsumptionKgHr ?? ''}</Text>
+            </View>
+          ))}
         </View>
       </Page>
     </Document>

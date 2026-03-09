@@ -50,6 +50,18 @@ const styles = StyleSheet.create({
   footerLine: {
     marginBottom: 5,
   },
+  detailsTitle: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    marginTop: 10,
+    marginBottom: 8,
+    textAlign: 'center',
+    textTransform: 'uppercase',
+  },
+  smallCell: {
+    fontSize: 7,
+    padding: 4,
+  },
 });
 
 interface ChemicalMonitoringData {
@@ -62,6 +74,13 @@ interface ChemicalMonitoringData {
     solutionConcentration?: number;
     waterQty?: number;
     chemicalQty?: number;
+    batchNo?: string;
+    doneBy?: string;
+    comment?: string;
+    operatorName?: string;
+    approvedAt?: string | null;
+    secondaryApprovedAt?: string | null;
+    raw?: any;
     remarks?: string;
     checkedBy?: string;
   }>;
@@ -147,6 +166,38 @@ export function ChemicalMonitoringCertificate({ data }: ChemicalMonitoringCertif
         <View style={styles.footer}>
           <Text style={styles.footerLine}>Remarks:</Text>
           <Text style={styles.footerLine}>Digital sign</Text>
+        </View>
+      </Page>
+
+      {/* DETAILS */}
+      <Page size="A4" style={styles.page}>
+        <PDFHeader />
+        <Text style={styles.detailsTitle}>RAW DATA FOR CHEMICAL MONITORING (DETAILS)</Text>
+
+        <View style={styles.table}>
+          <View style={[styles.tableRow, styles.tableHeader]}>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>Date</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>Time</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '14%' }]}>Batch No</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>Done By</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '14%' }]}>Operator</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '14%' }]}>Approved At</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '14%' }]}>Secondary Approved</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }, styles.tableCellLast]}>Comment</Text>
+          </View>
+
+          {data.logs.map((log, index) => (
+            <View key={index} style={styles.tableRow}>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>{log.date || ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>{log.time || ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '14%' }]}>{log.batchNo || ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>{log.doneBy || ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '14%' }]}>{log.operatorName || ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '14%' }]}>{log.approvedAt || ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '14%' }]}>{log.secondaryApprovedAt || ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }, styles.tableCellLast]}>{log.comment || ''}</Text>
+            </View>
+          ))}
         </View>
       </Page>
     </Document>
