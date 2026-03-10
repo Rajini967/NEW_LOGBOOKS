@@ -944,42 +944,6 @@ export const filtersDashboardAPI = {
   },
 };
 
-// Cooling Tower Chemical Log API (separate log book)
-export const ctChemicalLogAPI = {
-  list: async (params?: { equipment_id?: string; date_from?: string; date_to?: string; tower_slot?: string }) => {
-    const response = await api.get('/ct-chemical-logs/', { params });
-    if ((response.data as any).results) return (response.data as any).results;
-    return Array.isArray(response.data) ? response.data : [];
-  },
-  get: async (id: string) => {
-    const response = await api.get(`/ct-chemical-logs/${id}/`);
-    return response.data;
-  },
-  create: async (data: {
-    date: string;
-    equipment_id: string;
-    tower_slot: string;
-    chemical_name: string;
-    quantity_kg: number;
-    batch?: string | null;
-    status?: string;
-  }) => {
-    const response = await api.post('/ct-chemical-logs/', data);
-    return response.data;
-  },
-  update: async (id: string, data: any) => {
-    const response = await api.put(`/ct-chemical-logs/${id}/`, data);
-    return response.data;
-  },
-  patch: async (id: string, data: any) => {
-    const response = await api.patch(`/ct-chemical-logs/${id}/`, data);
-    return response.data;
-  },
-  delete: async (id: string) => {
-    await api.delete(`/ct-chemical-logs/${id}/`);
-  },
-};
-
 // Boiler Log API functions
 export const boilerLogAPI = {
   list: async (params?: { date_from?: string; date_to?: string; equipment_id?: string }) => {

@@ -52,6 +52,8 @@ interface CategoryOption {
   name: string;
 }
 
+type LogEntryIntervalType = "hourly" | "shift" | "daily";
+
 interface Equipment {
   id: string;
   equipment_number: string;
@@ -66,6 +68,8 @@ interface Equipment {
   client_id?: string;
   is_active: boolean;
   status?: "pending" | "approved" | "rejected";
+  log_entry_interval?: LogEntryIntervalType | null;
+  shift_duration_hours?: number | null;
 }
 
 export default function EquipmentListPage() {
@@ -88,6 +92,8 @@ export default function EquipmentListPage() {
     department: "",
     category: "",
     is_active: true,
+    log_entry_interval: "" as "" | LogEntryIntervalType,
+    shift_duration_hours: "" as "" | number,
   });
 
   const [confirmAction, setConfirmAction] = useState<{
@@ -138,6 +144,8 @@ export default function EquipmentListPage() {
       department: "",
       category: "",
       is_active: true,
+      log_entry_interval: "",
+      shift_duration_hours: "",
     });
     setIsEditMode(false);
     setEditingId(null);
@@ -164,6 +172,8 @@ export default function EquipmentListPage() {
       department: item.department,
       category: item.category,
       is_active: item.is_active ?? true,
+      log_entry_interval: (item.log_entry_interval as LogEntryIntervalType) || "",
+      shift_duration_hours: item.shift_duration_hours ?? "",
     });
     setIsDialogOpen(true);
   };
@@ -225,10 +235,17 @@ export default function EquipmentListPage() {
       toast.error("Equipment Category is required");
       return;
     }
+    if (formData.log_entry_interval === "shift") {
+      const hours = formData.shift_duration_hours;
+      if (hours === "" || hours == null || hours < 1 || hours > 24) {
+        toast.error("Shift duration must be between 1 and 24 hours when interval is Shift.");
+        return;
+      }
+    }
 
     setIsLoading(true);
     try {
-      const payload = {
+      const payload: Record<string, unknown> = {
         equipment_number: formData.equipment_number.trim(),
         name: formData.name.trim(),
         capacity: formData.capacity.trim() || null,
@@ -236,6 +253,16 @@ export default function EquipmentListPage() {
         category: formData.category,
         is_active: formData.is_active,
       };
+      if (formData.log_entry_interval) {
+        payload.log_entry_interval = formData.log_entry_interval;
+        payload.shift_duration_hours =
+          formData.log_entry_interval === "shift" && formData.shift_duration_hours !== ""
+            ? formData.shift_duration_hours
+            : null;
+      } else {
+        payload.log_entry_interval = null;
+        payload.shift_duration_hours = null;
+      }
 
       if (isEditMode && editingId) {
         const updated = await equipmentAPI.update(editingId, payload as any);
@@ -504,6 +531,53 @@ export default function EquipmentListPage() {
                       }
                       placeholder='e.g. "1000 TR" or "5 TPH"'
                     />
+                  </div>
+
+                  <div className="space-y-2 pt-2 border-t border-border">
+                    <Label>Log entry interval</Label>
+                    <Select
+                      value={formData.log_entry_interval || "__none__"}
+                      onValueChange={(v) =>
+                        setFormData((prev) => ({
+                          ...prev,
+                          log_entry_interval: v === "__none__" ? "" : (v as LogEntryIntervalType),
+                          shift_duration_hours: v === "shift" ? prev.shift_duration_hours : "",
+                        }))
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Use global default" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">Use global default</SelectItem>
+                        <SelectItem value="hourly">Hourly</SelectItem>
+                        <SelectItem value="shift">Shift</SelectItem>
+                        <SelectItem value="daily">Daily</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      Override the global log entry interval for this equipment. Empty = use Settings default.
+                    </p>
+                    {formData.log_entry_interval === "shift" && (
+                      <div className="space-y-1 pt-2">
+                        <Label htmlFor="shift_duration_hours">Shift duration (hours)</Label>
+                        <Input
+                          id="shift_duration_hours"
+                          type="number"
+                          min={1}
+                          max={24}
+                          value={formData.shift_duration_hours === "" ? "" : formData.shift_duration_hours}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setFormData((prev) => ({
+                              ...prev,
+                              shift_duration_hours: v === "" ? "" : parseInt(v, 10) || 8,
+                            }));
+                          }}
+                          placeholder="e.g. 8"
+                        />
+                      </div>
+                    )}
                   </div>
 
                   <div className="space-y-2 pt-2 border-t border-border">

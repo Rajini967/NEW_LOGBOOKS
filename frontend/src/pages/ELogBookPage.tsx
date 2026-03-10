@@ -42,7 +42,11 @@ import { LogbookSchema } from '@/types/logbook-config';
 import { FieldWithValidation } from '@/components/logbook/FieldWithValidation';
 import { EntryIntervalBadge } from '@/components/logbook/EntryIntervalBadge';
 import { MissedReadingPopup } from '@/components/logbook/MissedReadingPopup';
-import { getNextDueAndMissed } from '@/lib/missed-reading';
+import {
+  getNextDueAndMissed,
+  computeMissedByEquipment,
+  type EquipmentMissInfo,
+} from '@/lib/missed-reading';
 
 interface ELogBook {
   id: string;
@@ -254,6 +258,8 @@ interface EquipmentOption {
   id: string;
   equipment_number: string;
   name: string;
+  log_entry_interval?: string | null;
+  shift_duration_hours?: number | null;
 }
 
 export default function ELogBookPage() {
@@ -347,10 +353,10 @@ export default function ELogBookPage() {
     time: '',
   });
   
-  // Whether the current entry is the first chiller reading of the day for the selected equipment
+  // Whether the current entry is the first chiller reading of the day for the current operator
   const todayKey =
-    formData.equipmentId && formData.equipmentType === 'chiller'
-      ? `${formData.equipmentId}_${format(new Date(), 'yyyy-MM-dd')}`
+    user?.id && formData.equipmentType === 'chiller'
+      ? `${user.id}_${format(new Date(), 'yyyy-MM-dd')}`
       : '';
   const hasFirstChillerLogToday = !!(todayKey && firstChillerLogByDay[todayKey]);
   const canEditRunningSection = !hasFirstChillerLogToday;
@@ -364,6 +370,7 @@ export default function ELogBookPage() {
   const [rejectComment, setRejectComment] = useState('');
   const [showMissedReadingPopup, setShowMissedReadingPopup] = useState(false);
   const [missedReadingNextDue, setMissedReadingNextDue] = useState<Date | null>(null);
+  const [missedEquipments, setMissedEquipments] = useState<EquipmentMissInfo[] | null>(null);
   const [selectedLogId, setSelectedLogId] = useState<string | null>(null);
   const [selectedLogIds, setSelectedLogIds] = useState<string[]>([]);
   const [approvalComment, setApprovalComment] = useState('');
@@ -455,7 +462,13 @@ export default function ELogBookPage() {
         const map = (arr: any[]) =>
           (arr || [])
             .filter((e) => e?.is_active !== false && e?.status === 'approved')
-            .map((e) => ({ id: e.id, equipment_number: e.equipment_number, name: e.name || '' }));
+            .map((e) => ({
+              id: e.id,
+              equipment_number: e.equipment_number,
+              name: e.name || '',
+              log_entry_interval: e.log_entry_interval ?? null,
+              shift_duration_hours: e.shift_duration_hours ?? null,
+            }));
         setEquipmentByType({
           chiller: map(chillerEq as any[]),
           boiler: map(boilerEq as any[]),
@@ -541,22 +554,60 @@ export default function ELogBookPage() {
     };
   }, [formData.equipmentId, formData.equipmentType]);
 
-  // Missed scheduled reading popup: when logs and session settings are ready, check if next due has passed
+  // Missed scheduled reading popup: when logs and session settings are ready, check if next due has passed (equipment-wise)
   useEffect(() => {
     if (!sessionSettings?.log_entry_interval || logs.length === 0) return;
-    const interval = sessionSettings.log_entry_interval as 'hourly' | 'shift' | 'daily';
-    const shiftHours = sessionSettings.shift_duration_hours ?? 8;
-    const latest = logs[0];
-    const lastTs = latest?.timestamp ? (latest.timestamp instanceof Date ? latest.timestamp : new Date(latest.timestamp)) : null;
-    const { nextDue, isMissed } = getNextDueAndMissed(lastTs, interval, shiftHours);
-    if (isMissed && nextDue) {
-      setMissedReadingNextDue(nextDue);
+    const chillerOptions = equipmentByType.chiller ?? [];
+    const metaByNumber = new Map<
+      string,
+      { log_entry_interval?: string | null; shift_duration_hours?: number | null }
+    >();
+    for (const e of chillerOptions) {
+      metaByNumber.set(e.equipment_number, {
+        log_entry_interval: e.log_entry_interval ?? null,
+        shift_duration_hours: e.shift_duration_hours ?? null,
+      });
+    }
+    const defaultInterval = sessionSettings.log_entry_interval as 'hourly' | 'shift' | 'daily';
+    const defaultShift = sessionSettings.shift_duration_hours ?? 8;
+
+    const resolveInterval = (equipmentId?: string): 'hourly' | 'shift' | 'daily' => {
+      const meta = equipmentId ? metaByNumber.get(equipmentId) : undefined;
+      return (meta?.log_entry_interval as 'hourly' | 'shift' | 'daily') || defaultInterval || 'daily';
+    };
+    const resolveShift = (equipmentId?: string): number => {
+      const meta = equipmentId ? metaByNumber.get(equipmentId) : undefined;
+      return meta?.shift_duration_hours ?? defaultShift;
+    };
+
+    const perEquipment = computeMissedByEquipment(
+      logs.map((l) => ({
+        equipment_id: l.equipmentId,
+        timestamp: l.timestamp,
+      })),
+      {
+        resolveInterval: (eqId) => resolveInterval(eqId),
+        resolveShiftHours: (eqId) => resolveShift(eqId),
+      },
+    );
+
+    const missedOnly = perEquipment.filter((m) => m.isMissed);
+    if (missedOnly.length > 0) {
+      setMissedEquipments(missedOnly);
+      // Use the earliest missed nextDue for the legacy description
+      const firstNext =
+        missedOnly
+          .map((m) => m.nextDue)
+          .filter((d): d is Date => !!d)
+          .sort((a, b) => a.getTime() - b.getTime())[0] || null;
+      setMissedReadingNextDue(firstNext);
       setShowMissedReadingPopup(true);
     } else {
+      setMissedEquipments(null);
       setShowMissedReadingPopup(false);
       setMissedReadingNextDue(null);
     }
-  }, [logs, sessionSettings]);
+  }, [logs, sessionSettings, equipmentByType]);
 
   // Refresh logs from API
   const refreshLogs = async () => {
@@ -633,11 +684,12 @@ export default function ELogBookPage() {
       console.log('Total chiller logs after refresh:', allLogs.length, allLogs);
       setLogs(allLogs);
 
-      // Rebuild map of first chiller log per equipment per day
+      // Rebuild map of first chiller log per operator per day
       const firstMap: Record<string, ELogBook> = {};
       allLogs.forEach(log => {
         if (log.equipmentType !== 'chiller') return;
-        const key = `${log.equipmentId}_${log.date}`;
+        if (!log.operator_id) return;
+        const key = `${log.operator_id}_${log.date}`;
         const existing = firstMap[key];
         if (!existing || log.timestamp.getTime() < existing.timestamp.getTime()) {
           firstMap[key] = log;
@@ -797,9 +849,9 @@ export default function ELogBookPage() {
         const now = new Date();
         const today = format(now, 'yyyy-MM-dd');
 
-        // Determine if this is the first chiller log of the day for this equipment
-        const key = `${formData.equipmentId}_${today}`;
-        const firstLogForDay = firstChillerLogByDay[key];
+        // Determine operator-day baseline log (first chiller log by this operator today)
+        const key = user?.id ? `${user.id}_${today}` : '';
+        const firstLogForDay = key ? firstChillerLogByDay[key] : undefined;
 
         // If not the first log, enforce remarks when pump/fan status changes
         if (firstLogForDay) {
@@ -1429,12 +1481,13 @@ export default function ELogBookPage() {
         <EntryIntervalBadge />
       </div>
 
-      {showMissedReadingPopup && missedReadingNextDue && (
+      {showMissedReadingPopup && (
         <MissedReadingPopup
           open={showMissedReadingPopup}
-          onClose={() => { setShowMissedReadingPopup(false); setMissedReadingNextDue(null); }}
+          onClose={() => { setShowMissedReadingPopup(false); setMissedReadingNextDue(null); setMissedEquipments(null); }}
           logTypeLabel="Chiller"
-          nextDue={missedReadingNextDue}
+          nextDue={missedReadingNextDue ?? undefined}
+          equipmentList={missedEquipments ?? undefined}
         />
       )}
 
@@ -1729,8 +1782,8 @@ export default function ELogBookPage() {
                             }));
                             if (formData.equipmentType === 'chiller') {
                               const today = format(new Date(), 'yyyy-MM-dd');
-                              const key = `${v}_${today}`;
-                              const firstLog = firstChillerLogByDay[key];
+                              const key = user?.id ? `${user.id}_${today}` : '';
+                              const firstLog = key ? firstChillerLogByDay[key] : undefined;
                               if (firstLog) {
                                 const initialPumps = decodePumpPair(
                                   firstLog.coolingTowerPumpStatus,
@@ -2612,7 +2665,7 @@ export default function ELogBookPage() {
                     <div className="border-t pt-4 mt-2 space-y-4">
                       {!canEditRunningSection && (
                         <p className="text-sm text-muted-foreground">
-                          Pump/fan running status, blow down time and chemical quantities are set by the first
+                          Pump/fan running status, blow down time and chemical quantities are set by your first
                           reading of the day. Subsequent entries can view but cannot change these values.
                         </p>
                       )}

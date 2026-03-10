@@ -22,7 +22,8 @@ function formatEntryIntervalLabel(
 }
 
 /**
- * Displays the configured log book entry interval (common for all log monitors).
+ * Displays the configured log book entry interval.
+ * Intervals can vary by equipment; the global default is shown here.
  * Renders nothing if session settings are not loaded yet.
  */
 export function EntryIntervalBadge() {
@@ -32,16 +33,16 @@ export function EntryIntervalBadge() {
 
   if (!interval) return null;
 
-  const label = formatEntryIntervalLabel(
+  const defaultLabel = formatEntryIntervalLabel(
     interval as LogEntryIntervalType,
     shiftHours
   );
 
   return (
-    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+    <div className="flex items-center gap-2 text-sm text-muted-foreground" title="Per-equipment intervals can be set in Equipment Master. This is the global default.">
       <Clock className="h-4 w-4" />
       <span>
-        Entry interval: <span className="font-medium text-foreground">{label}</span>
+        Entry interval: <span className="font-medium text-foreground">by equipment (default: {defaultLabel})</span>
       </span>
     </div>
   );

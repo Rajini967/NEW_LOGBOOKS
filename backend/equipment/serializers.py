@@ -52,6 +52,8 @@ class EquipmentSerializer(serializers.ModelSerializer):
             "client_id",
             "is_active",
             "status",
+            "log_entry_interval",
+            "shift_duration_hours",
             "created_by",
             "created_by_name",
             "approved_by",
@@ -88,6 +90,22 @@ class EquipmentSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({"department": "Department is required."})
         if category is None:
             raise serializers.ValidationError({"category": "Equipment category is required."})
+
+        log_entry_interval = attrs.get("log_entry_interval")
+        if log_entry_interval is None and self.instance:
+            log_entry_interval = getattr(self.instance, "log_entry_interval", None)
+        shift_duration_hours = attrs.get("shift_duration_hours")
+        if shift_duration_hours is None and self.instance:
+            shift_duration_hours = getattr(self.instance, "shift_duration_hours", None)
+
+        if log_entry_interval == "shift":
+            hours = shift_duration_hours
+            if hours is None:
+                hours = getattr(self.instance, "shift_duration_hours", 8) if self.instance else 8
+            if hours is not None and (hours < 1 or hours > 24):
+                raise serializers.ValidationError(
+                    {"shift_duration_hours": "Shift duration must be between 1 and 24 hours when interval is 'shift'."}
+                )
 
         return super().validate(attrs)
 

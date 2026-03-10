@@ -4,6 +4,8 @@ from django.conf import settings
 from django.core.validators import RegexValidator
 from django.db import models
 
+from accounts.models import LogEntryInterval
+
 
 class Department(models.Model):
     """Department master."""
@@ -115,6 +117,18 @@ class Equipment(models.Model):
         related_name="approved_equipment",
     )
     approved_at = models.DateTimeField(blank=True, null=True)
+    log_entry_interval = models.CharField(
+        max_length=10,
+        choices=LogEntryInterval.choices,
+        null=True,
+        blank=True,
+        help_text="Per-equipment log entry interval. Null = use global SessionSetting default.",
+    )
+    shift_duration_hours = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Shift length in hours; used when this equipment's log_entry_interval is 'shift'.",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

@@ -86,6 +86,9 @@ interface FilterAssignmentRow {
   filter_size_w?: number | null;
   filter_size_h?: number | null;
   tag_info?: string | null;
+  equipment?: string;
+  equipment_number?: string;
+  equipment_name?: string;
 }
 
 interface FilterLog {
@@ -135,6 +138,9 @@ const FilterLogBookPage: React.FC = () => {
   const [editingLogId, setEditingLogId] = useState<string | null>(null);
   const [categoryOptions, setCategoryOptions] = useState<FilterCategoryOption[]>([]);
   const [equipmentOptions, setEquipmentOptions] = useState<EquipmentOption[]>([]);
+  const [filterIdToEquipmentInterval, setFilterIdToEquipmentInterval] = useState<
+    Map<string, { log_entry_interval?: string | null; shift_duration_hours?: number | null }>
+  >(new Map());
   const [filterRegisterOptions, setFilterRegisterOptions] = useState<FilterRegisterOption[]>([]);
   const [selectedEquipmentUuid, setSelectedEquipmentUuid] = useState<string>("");
   const [previousReadingsForEquipment, setPreviousReadingsForEquipment] = useState<FilterLog[]>([]);
@@ -237,6 +243,40 @@ const FilterLogBookPage: React.FC = () => {
       setCategoryOptions(options);
     } catch (error) {
       console.error("Error loading filter categories:", error);
+    }
+  };
+
+  /** Load filter_id -> equipment interval map for missed-reading resolution */
+  const loadFilterIdToEquipmentInterval = async () => {
+    try {
+      const assignments = (await filterAssignmentAPI.list()) as FilterAssignmentRow[];
+      const equipmentIds = [...new Set((assignments || []).map((a) => a.equipment).filter(Boolean))] as string[];
+      if (equipmentIds.length === 0) {
+        setFilterIdToEquipmentInterval(new Map());
+        return;
+      }
+      const allEquipment = (await equipmentAPI.list()) as any[];
+      const eqIntervalMap = new Map<string, { log_entry_interval?: string | null; shift_duration_hours?: number | null }>();
+      for (const e of allEquipment || []) {
+        if (e?.id && (e.log_entry_interval != null || e.shift_duration_hours != null)) {
+          eqIntervalMap.set(e.id, {
+            log_entry_interval: e.log_entry_interval ?? null,
+            shift_duration_hours: e.shift_duration_hours ?? null,
+          });
+        }
+      }
+      const filterToInterval = new Map<string, { log_entry_interval?: string | null; shift_duration_hours?: number | null }>();
+      for (const a of assignments || []) {
+        if (a.filter_id && a.equipment) {
+          const interval = eqIntervalMap.get(a.equipment);
+          if (interval) {
+            filterToInterval.set(a.filter_id, interval);
+          }
+        }
+      }
+      setFilterIdToEquipmentInterval(filterToInterval);
+    } catch {
+      setFilterIdToEquipmentInterval(new Map());
     }
   };
 
@@ -462,19 +502,22 @@ const FilterLogBookPage: React.FC = () => {
     void loadCategories();
     void loadEquipment();
     void loadFilterRegister();
+    void loadFilterIdToEquipmentInterval();
     void refreshLogs();
   }, []);
 
   useEffect(() => {
     if (!sessionSettings?.log_entry_interval || logs.length === 0) return;
-    const interval = sessionSettings.log_entry_interval as "hourly" | "shift" | "daily";
-    const shiftHours = sessionSettings.shift_duration_hours ?? 8;
     const latest = logs[0];
     const lastTs = latest?.timestamp
       ? latest.timestamp instanceof Date
         ? latest.timestamp
         : new Date(latest.timestamp)
       : null;
+    const filterId = latest?.equipmentId || "";
+    const eqInterval = filterId ? filterIdToEquipmentInterval.get(filterId) : undefined;
+    const interval = (eqInterval?.log_entry_interval || sessionSettings.log_entry_interval) as "hourly" | "shift" | "daily";
+    const shiftHours = eqInterval?.shift_duration_hours ?? sessionSettings.shift_duration_hours ?? 8;
     const { nextDue, isMissed } = getNextDueAndMissed(lastTs, interval, shiftHours);
     if (isMissed && nextDue) {
       setMissedReadingNextDue(nextDue);
@@ -483,7 +526,7 @@ const FilterLogBookPage: React.FC = () => {
       setShowMissedReadingPopup(false);
       setMissedReadingNextDue(null);
     }
-  }, [logs, sessionSettings]);
+  }, [logs, sessionSettings, filterIdToEquipmentInterval]);
 
   // After equipment selection, fetch previous readings with entered-by for that equipment
   useEffect(() => {

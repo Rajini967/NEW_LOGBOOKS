@@ -5,9 +5,8 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from accounts.models import SessionSetting
 from accounts.permissions import CanApproveReports, CanLogEntries
-from core.log_slot_utils import get_slot_range
+from core.log_slot_utils import get_interval_for_equipment, get_slot_range
 from reports.utils import log_limit_change
 
 from .models import FilterLog
@@ -59,9 +58,7 @@ class FilterLogViewSet(viewsets.ModelViewSet):
         validated = serializer.validated_data
         equipment_id = validated.get('equipment_id')
         timestamp = validated.get('timestamp') or timezone.now()
-        setting = SessionSetting.get_solo()
-        interval = getattr(setting, 'log_entry_interval', None) or 'hourly'
-        shift_hours = getattr(setting, 'shift_duration_hours', None) or 8
+        interval, shift_hours = get_interval_for_equipment(equipment_id or '', 'filter')
         slot_start, slot_end = get_slot_range(timestamp, interval, shift_hours)
         if FilterLog.objects.filter(
             equipment_id=equipment_id,

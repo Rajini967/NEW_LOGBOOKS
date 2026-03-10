@@ -16,7 +16,7 @@ import {
 import { useAuth } from "@/contexts/AuthContext";
 import { format } from "date-fns";
 import { toast } from "sonner";
-import { chemicalPrepAPI, chemicalMasterAPI, chemicalAssignmentAPI, chemicalStockAPI } from "@/lib/api";
+import { chemicalPrepAPI, chemicalMasterAPI, chemicalAssignmentAPI, chemicalStockAPI, equipmentAPI, equipmentCategoryAPI } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Link } from "react-router-dom";
 import { Clock, Save, Filter, X, Plus, Trash2, CheckCircle, XCircle, Edit, History, Eye, Package } from "lucide-react";
@@ -117,6 +117,9 @@ const ChemicalLogBookPage: React.FC = () => {
 
   const [chemicalNames, setChemicalNames] = useState<string[]>([]);
   const [equipmentOptions, setEquipmentOptions] = useState<{ id: string; name: string }[]>([]);
+  const [equipmentWithIntervals, setEquipmentWithIntervals] = useState<
+    { equipment_number: string; name: string; log_entry_interval?: string | null; shift_duration_hours?: number | null }[]
+  >([]);
   const [previousReadingsForEquipment, setPreviousReadingsForEquipment] = useState<ChemicalPrepLog[]>([]);
   const [previousReadingsLoading, setPreviousReadingsLoading] = useState(false);
   const [assignments, setAssignments] = useState<
@@ -239,14 +242,23 @@ const ChemicalLogBookPage: React.FC = () => {
 
   useEffect(() => {
     if (!sessionSettings?.log_entry_interval || logs.length === 0) return;
-    const interval = sessionSettings.log_entry_interval as "hourly" | "shift" | "daily";
-    const shiftHours = sessionSettings.shift_duration_hours ?? 8;
     const latest = logs[0];
     const lastTs = latest?.timestamp
       ? latest.timestamp instanceof Date
         ? latest.timestamp
         : new Date(latest.timestamp)
       : null;
+    const equipmentName = latest?.equipmentName || "";
+    const partBeforeDash = equipmentName.split(" – ")[0]?.trim() || equipmentName;
+    const eq = equipmentWithIntervals.find(
+      (e) =>
+        e.equipment_number === partBeforeDash ||
+        e.equipment_number === equipmentName ||
+        e.name === equipmentName ||
+        `${e.equipment_number} – ${e.name}` === equipmentName,
+    );
+    const interval = (eq?.log_entry_interval || sessionSettings.log_entry_interval) as "hourly" | "shift" | "daily";
+    const shiftHours = eq?.shift_duration_hours ?? sessionSettings.shift_duration_hours ?? 8;
     const { nextDue, isMissed } = getNextDueAndMissed(lastTs, interval, shiftHours);
     if (isMissed && nextDue) {
       setMissedReadingNextDue(nextDue);
@@ -255,7 +267,7 @@ const ChemicalLogBookPage: React.FC = () => {
       setShowMissedReadingPopup(false);
       setMissedReadingNextDue(null);
     }
-  }, [logs, sessionSettings]);
+  }, [logs, sessionSettings, equipmentWithIntervals]);
 
   // Load chemical names and full master list (for resolving chemical ID when assignment has no link)
   useEffect(() => {
@@ -312,6 +324,33 @@ const ChemicalLogBookPage: React.FC = () => {
 
     return map;
   }, [assignments]);
+
+  // Load chemical equipment with intervals for missed-reading resolution
+  useEffect(() => {
+    (async () => {
+      try {
+        const categories = (await equipmentCategoryAPI.list()) as { id: string; name: string }[];
+        const chemicalCat = categories?.find((c) => {
+          const n = (c.name || "").toLowerCase().trim();
+          return n === "chemical" || n === "chemicals";
+        });
+        if (chemicalCat) {
+          const list = (await equipmentAPI.list({ category: chemicalCat.id })) as any[];
+          const withIntervals = (list || []).map((e: any) => ({
+            equipment_number: e.equipment_number || "",
+            name: e.name || "",
+            log_entry_interval: e.log_entry_interval ?? null,
+            shift_duration_hours: e.shift_duration_hours ?? null,
+          }));
+          setEquipmentWithIntervals(withIntervals);
+        } else {
+          setEquipmentWithIntervals([]);
+        }
+      } catch {
+        setEquipmentWithIntervals([]);
+      }
+    })();
+  }, []);
 
   // Load equipment options and assignments so Equipment dropdown auto-fills category + chemical
   useEffect(() => {

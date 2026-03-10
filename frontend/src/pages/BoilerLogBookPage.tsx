@@ -259,6 +259,8 @@ const BoilerLogBookPage: React.FC = () => {
             id: e.id,
             equipment_number: e.equipment_number,
             name: e.name || "",
+            log_entry_interval: e.log_entry_interval ?? null,
+            shift_duration_hours: e.shift_duration_hours ?? null,
           }));
         setEquipmentOptions(options);
       } catch (error) {
@@ -391,14 +393,15 @@ const BoilerLogBookPage: React.FC = () => {
 
   useEffect(() => {
     if (!sessionSettings?.log_entry_interval || logs.length === 0) return;
-    const interval = sessionSettings.log_entry_interval as "hourly" | "shift" | "daily";
-    const shiftHours = sessionSettings.shift_duration_hours ?? 8;
     const latest = logs[0];
     const lastTs = latest?.timestamp
       ? latest.timestamp instanceof Date
         ? latest.timestamp
         : new Date(latest.timestamp)
       : null;
+    const eq = equipmentOptions.find((e) => e.equipment_number === latest?.equipmentId);
+    const interval = (eq?.log_entry_interval || sessionSettings.log_entry_interval) as "hourly" | "shift" | "daily";
+    const shiftHours = eq?.shift_duration_hours ?? sessionSettings.shift_duration_hours ?? 8;
     const { nextDue, isMissed } = getNextDueAndMissed(lastTs, interval, shiftHours);
     if (isMissed && nextDue) {
       setMissedReadingNextDue(nextDue);
@@ -407,7 +410,7 @@ const BoilerLogBookPage: React.FC = () => {
       setShowMissedReadingPopup(false);
       setMissedReadingNextDue(null);
     }
-  }, [logs, sessionSettings]);
+  }, [logs, sessionSettings, equipmentOptions]);
 
   const uniqueCheckedBy = useMemo(() => {
     if (!logs.length) return [];

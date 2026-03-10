@@ -977,6 +977,7 @@ export default function SettingsPage() {
             <div>
               <h3 className="text-lg font-semibold text-foreground">Log Book Entry Interval</h3>
               <p className="text-sm text-muted-foreground">Configure mandatory entry schedule for all log monitors (chiller, boiler, filter, chemical, etc.)</p>
+              <p className="text-xs text-muted-foreground mt-1">Used when an equipment does not have its own interval. Per-equipment intervals can be set in Equipment Master (edit equipment).</p>
             </div>
           </div>
 

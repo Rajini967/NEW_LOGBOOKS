@@ -7,8 +7,7 @@ from datetime import datetime, timedelta
 import calendar
 from django.db import models
 from django.utils import timezone
-from accounts.models import SessionSetting
-from core.log_slot_utils import get_slot_range
+from core.log_slot_utils import get_interval_for_equipment, get_slot_range
 from .models import Chemical, ChemicalStock, ChemicalPreparation, ChemicalAssignment, ChemicalDashboardConfig
 from .serializers import (
     ChemicalSerializer,
@@ -203,9 +202,7 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
         equipment_name = validated.get("equipment_name")
         timestamp = validated.get("timestamp") or timezone.now()
         if equipment_name is not None:
-            setting = SessionSetting.get_solo()
-            interval = getattr(setting, "log_entry_interval", None) or "hourly"
-            shift_hours = getattr(setting, "shift_duration_hours", None) or 8
+            interval, shift_hours = get_interval_for_equipment(equipment_name or "", "chemical")
             slot_start, slot_end = get_slot_range(timestamp, interval, shift_hours)
             if ChemicalPreparation.objects.filter(
                 equipment_name=equipment_name,

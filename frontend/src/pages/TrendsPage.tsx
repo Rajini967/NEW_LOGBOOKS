@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Header } from '@/components/layout/Header';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -26,6 +26,8 @@ import {
 } from 'recharts';
 
 type LogType = 'chiller' | 'boiler' | 'compressor';
+
+const TRENDS_FILTERS_STORAGE_KEY = 'logbook.trends.filters.v1';
 
 const CHILLER_PARAMS: { key: string; label: string }[] = [
   { key: 'chiller_supply_temp', label: 'Chiller supply temp (°C)' },
@@ -105,20 +107,56 @@ function computeStats(
 
 export default function TrendsPage() {
   const { user } = useAuth();
-  const [logType, setLogType] = useState<LogType>('chiller');
-  const [equipmentId, setEquipmentId] = useState<string>('');
-  const [dateFrom, setDateFrom] = useState<string>(() => {
+  const fetchSeqRef = useRef(0);
+
+  const defaultFrom = useMemo(() => {
     const d = new Date();
     d.setDate(d.getDate() - 30);
     return format(d, 'yyyy-MM-dd');
-  });
-  const [dateTo, setDateTo] = useState<string>(() => format(new Date(), 'yyyy-MM-dd'));
+  }, []);
+  const defaultTo = useMemo(() => format(new Date(), 'yyyy-MM-dd'), []);
+
+  const loadSavedFilters = (): {
+    logType: LogType;
+    equipmentId: string;
+    dateFrom: string;
+    dateTo: string;
+  } | null => {
+    try {
+      const raw = localStorage.getItem(TRENDS_FILTERS_STORAGE_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as any;
+      const logType = (parsed?.logType as LogType) || 'chiller';
+      if (!['chiller', 'boiler', 'compressor'].includes(logType)) return null;
+      const equipmentId = typeof parsed?.equipmentId === 'string' ? parsed.equipmentId : '';
+      const dateFrom = typeof parsed?.dateFrom === 'string' ? parsed.dateFrom : defaultFrom;
+      const dateTo = typeof parsed?.dateTo === 'string' ? parsed.dateTo : defaultTo;
+      return { logType, equipmentId, dateFrom, dateTo };
+    } catch {
+      return null;
+    }
+  };
+
+  // Applied filters (drive fetch + chart/summary)
+  const saved = loadSavedFilters();
+  const [logType, setLogType] = useState<LogType>(saved?.logType ?? 'chiller');
+  const [equipmentId, setEquipmentId] = useState<string>(saved?.equipmentId ?? '');
+  const [dateFrom, setDateFrom] = useState<string>(saved?.dateFrom ?? defaultFrom);
+  const [dateTo, setDateTo] = useState<string>(saved?.dateTo ?? defaultTo);
+
+  // Draft filters (bound to inputs; only applied when clicking Apply)
+  const [draftLogType, setDraftLogType] = useState<LogType>(saved?.logType ?? 'chiller');
+  const [draftEquipmentId, setDraftEquipmentId] = useState<string>(saved?.equipmentId ?? '');
+  const [draftDateFrom, setDraftDateFrom] = useState<string>(saved?.dateFrom ?? defaultFrom);
+  const [draftDateTo, setDraftDateTo] = useState<string>(saved?.dateTo ?? defaultTo);
+
   const [rawLogs, setRawLogs] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
 
   const params = PARAMS_BY_TYPE[logType];
 
   const fetchLogs = async () => {
+    const seq = ++fetchSeqRef.current;
     setLoading(true);
     try {
       const paramsObj: { date_from?: string; date_to?: string; equipment_id?: string } = {};
@@ -132,7 +170,7 @@ export default function TrendsPage() {
       } else if (logType === 'boiler') {
         list = await boilerLogAPI.list(paramsObj);
       } else {
-        list = await compressorLogAPI.list();
+        list = await compressorLogAPI.list(paramsObj);
       }
 
       const sorted = (list || []).slice().sort((a, b) => {
@@ -140,25 +178,13 @@ export default function TrendsPage() {
         const tb = new Date(b.timestamp).getTime();
         return ta - tb;
       });
-      if (logType === 'compressor' && (dateFrom || dateTo || equipmentId)) {
-        const from = dateFrom ? new Date(dateFrom + 'T00:00:00').getTime() : 0;
-        const to = dateTo ? new Date(dateTo + 'T23:59:59').getTime() : Number.MAX_SAFE_INTEGER;
-        const filtered = sorted.filter((log) => {
-          const t = new Date(log.timestamp).getTime();
-          if (t < from || t > to) return false;
-          if (equipmentId && log.equipment_id !== equipmentId) return false;
-          return true;
-        });
-        setRawLogs(filtered);
-      } else {
-        setRawLogs(sorted);
-      }
+      if (seq === fetchSeqRef.current) setRawLogs(sorted);
     } catch (err) {
       console.error('Failed to fetch trend data', err);
       toast.error('Failed to load trend data');
-      setRawLogs([]);
+      if (seq === fetchSeqRef.current) setRawLogs([]);
     } finally {
-      setLoading(false);
+      if (seq === fetchSeqRef.current) setLoading(false);
     }
   };
 
@@ -166,10 +192,31 @@ export default function TrendsPage() {
     fetchLogs();
   }, [logType, dateFrom, dateTo, equipmentId]);
 
+  const applyFilters = () => {
+    // Normalize equipment selection when switching log types
+    const next: { logType: LogType; equipmentId: string; dateFrom: string; dateTo: string } = {
+      logType: draftLogType,
+      equipmentId: draftEquipmentId,
+      dateFrom: draftDateFrom,
+      dateTo: draftDateTo,
+    };
+    setLogType(next.logType);
+    setEquipmentId(next.equipmentId);
+    setDateFrom(next.dateFrom);
+    setDateTo(next.dateTo);
+    try {
+      localStorage.setItem(TRENDS_FILTERS_STORAGE_KEY, JSON.stringify(next));
+    } catch {
+      // ignore persistence errors
+    }
+  };
+
   const equipmentOptions = useMemo(() => {
+    // Avoid showing stale equipment options when draft log type differs from applied log type
+    if (draftLogType !== logType) return [];
     const ids = Array.from(new Set(rawLogs.map((l) => l.equipment_id).filter(Boolean))) as string[];
     return ids.sort();
-  }, [rawLogs]);
+  }, [rawLogs, draftLogType, logType]);
 
   const chartData = useMemo(() => {
     return rawLogs.map((log) => {
@@ -203,7 +250,14 @@ export default function TrendsPage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
             <div className="space-y-2">
               <Label>Log type</Label>
-              <Select value={logType} onValueChange={(v) => setLogType(v as LogType)}>
+              <Select
+                value={draftLogType}
+                onValueChange={(v) => {
+                  const next = v as LogType;
+                  setDraftLogType(next);
+                  setDraftEquipmentId('');
+                }}
+              >
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
@@ -216,7 +270,10 @@ export default function TrendsPage() {
             </div>
             <div className="space-y-2">
               <Label>Equipment (optional)</Label>
-              <Select value={equipmentId || '_all'} onValueChange={(v) => setEquipmentId(v === '_all' ? '' : v)}>
+              <Select
+                value={draftEquipmentId || '_all'}
+                onValueChange={(v) => setDraftEquipmentId(v === '_all' ? '' : v)}
+              >
                 <SelectTrigger>
                   <SelectValue placeholder="All" />
                 </SelectTrigger>
@@ -234,20 +291,20 @@ export default function TrendsPage() {
               <Label>From date</Label>
               <Input
                 type="date"
-                value={dateFrom}
-                onChange={(e) => setDateFrom(e.target.value)}
+                value={draftDateFrom}
+                onChange={(e) => setDraftDateFrom(e.target.value)}
               />
             </div>
             <div className="space-y-2">
               <Label>To date</Label>
               <Input
                 type="date"
-                value={dateTo}
-                onChange={(e) => setDateTo(e.target.value)}
+                value={draftDateTo}
+                onChange={(e) => setDraftDateTo(e.target.value)}
               />
             </div>
             <div className="flex items-end">
-              <Button onClick={() => fetchLogs()} disabled={loading}>
+              <Button onClick={applyFilters} disabled={loading}>
                 {loading ? 'Loading...' : 'Apply'}
               </Button>
             </div>

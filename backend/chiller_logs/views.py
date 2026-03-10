@@ -4,10 +4,9 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import ValidationError
 from django.utils import timezone
-from accounts.models import SessionSetting
-from core.log_slot_utils import get_slot_range
-from .models import ChillerLog, ChillerEquipmentStatusAudit, ChillerEquipmentLimit, CoolingTowerChemicalLog, ChillerDashboardConfig
-from .serializers import ChillerLogSerializer, ChillerEquipmentLimitSerializer, CoolingTowerChemicalLogSerializer
+from core.log_slot_utils import get_interval_for_equipment, get_slot_range
+from .models import ChillerLog, ChillerEquipmentStatusAudit, ChillerEquipmentLimit, ChillerDashboardConfig
+from .serializers import ChillerLogSerializer, ChillerEquipmentLimitSerializer
 from accounts.permissions import CanLogEntries, CanApproveReports, IsSuperAdminOrManager
 from reports.utils import log_limit_change
 from django.db.models import Sum
@@ -125,9 +124,7 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
         validated = serializer.validated_data
         equipment_id = validated.get('equipment_id')
         timestamp = validated.get('timestamp') or timezone.now()
-        setting = SessionSetting.get_solo()
-        interval = getattr(setting, 'log_entry_interval', None) or 'hourly'
-        shift_hours = getattr(setting, 'shift_duration_hours', None) or 8
+        interval, shift_hours = get_interval_for_equipment(equipment_id or '', 'chiller')
         slot_start, slot_end = get_slot_range(timestamp, interval, shift_hours)
         if ChillerLog.objects.filter(
             equipment_id=equipment_id,
@@ -154,17 +151,18 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
         overrides = {}
         changes = []
 
-        first_log = None
-        if equipment_id:
-            today = timezone.localdate()
-            first_log = (
-                ChillerLog.objects.filter(
-                    equipment_id=equipment_id,
-                    timestamp__date=today,
-                )
-                .order_by('timestamp')
-                .first()
+        # Baseline pump/fan status is based on the operator's first reading of the day
+        # (not per equipment). Subsequent entries by the same operator inherit these values
+        # when omitted and require remarks if changed.
+        today = timezone.localdate()
+        first_log = (
+            ChillerLog.objects.filter(
+                operator=self.request.user,
+                timestamp__date=today,
             )
+            .order_by('timestamp')
+            .first()
+        )
 
         # If a first log exists for the day, treat its pump/fan status
         # as the initial_equipment_status and compare against it.
@@ -537,9 +535,7 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
 
         # Duplicate check: allow only if the only entry in this slot is the one being corrected
         check_ts = payload.get('timestamp') or timezone.now()
-        setting = SessionSetting.get_solo()
-        interval = getattr(setting, 'log_entry_interval', None) or 'hourly'
-        shift_hours = getattr(setting, 'shift_duration_hours', None) or 8
+        interval, shift_hours = get_interval_for_equipment(original.equipment_id or '', 'chiller')
         slot_start, slot_end = get_slot_range(check_ts, interval, shift_hours)
         if ChillerLog.objects.filter(
             equipment_id=original.equipment_id,
@@ -720,44 +716,3 @@ class ChillerEquipmentLimitViewSet(viewsets.ModelViewSet):
         if equipment_id:
             qs = qs.filter(equipment_id=equipment_id)
         return qs
-
-
-class CoolingTowerChemicalLogViewSet(viewsets.ModelViewSet):
-    """ViewSet for cooling tower chemical log (separate log book)."""
-    permission_classes = [IsAuthenticated]
-    serializer_class = CoolingTowerChemicalLogSerializer
-    queryset = CoolingTowerChemicalLog.objects.all()
-
-    def get_permissions(self):
-        if self.action in ('create', 'update', 'partial_update', 'destroy'):
-            return [IsAuthenticated(), CanLogEntries()]
-        return [IsAuthenticated()]
-
-    def get_queryset(self):
-        qs = super().get_queryset()
-        equipment_id = self.request.query_params.get('equipment_id')
-        date_from = self.request.query_params.get('date_from')
-        date_to = self.request.query_params.get('date_to')
-        tower_slot = self.request.query_params.get('tower_slot')
-        if equipment_id:
-            qs = qs.filter(equipment_id=equipment_id)
-        if date_from:
-            try:
-                from datetime import datetime
-                dt = datetime.fromisoformat(date_from.replace('Z', '+00:00')).date()
-                qs = qs.filter(date__gte=dt)
-            except (ValueError, TypeError):
-                pass
-        if date_to:
-            try:
-                from datetime import datetime
-                dt = datetime.fromisoformat(date_to.replace('Z', '+00:00')).date()
-                qs = qs.filter(date__lte=dt)
-            except (ValueError, TypeError):
-                pass
-        if tower_slot:
-            qs = qs.filter(tower_slot=tower_slot)
-        return qs.order_by('-date', '-created_at')
-
-    def perform_create(self, serializer):
-        serializer.save(operator=self.request.user)

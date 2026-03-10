@@ -7,8 +7,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import ValidationError
-from accounts.models import SessionSetting
-from core.log_slot_utils import get_slot_range
+from core.log_slot_utils import get_interval_for_equipment, get_slot_range
 from .models import BoilerLog, BoilerEquipmentLimit, BoilerDashboardConfig
 from .serializers import BoilerLogSerializer, BoilerEquipmentLimitSerializer
 from accounts.permissions import CanLogEntries, CanApproveReports, IsSuperAdminOrManager
@@ -125,9 +124,7 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
         validated = serializer.validated_data
         equipment_id = validated.get('equipment_id')
         timestamp = validated.get('timestamp') or timezone.now()
-        setting = SessionSetting.get_solo()
-        interval = getattr(setting, 'log_entry_interval', None) or 'hourly'
-        shift_hours = getattr(setting, 'shift_duration_hours', None) or 8
+        interval, shift_hours = get_interval_for_equipment(equipment_id or '', 'boiler')
         slot_start, slot_end = get_slot_range(timestamp, interval, shift_hours)
         if BoilerLog.objects.filter(
             equipment_id=equipment_id,
@@ -446,9 +443,7 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
 
         # Duplicate check: allow only if the only entry in this slot is the one being corrected
         check_ts = payload.get('timestamp') or timezone.now()
-        setting = SessionSetting.get_solo()
-        interval = getattr(setting, 'log_entry_interval', None) or 'hourly'
-        shift_hours = getattr(setting, 'shift_duration_hours', None) or 8
+        interval, shift_hours = get_interval_for_equipment(original.equipment_id or '', 'boiler')
         slot_start, slot_end = get_slot_range(check_ts, interval, shift_hours)
         if BoilerLog.objects.filter(
             equipment_id=original.equipment_id,

@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import ChillerLog, ChillerEquipmentLimit, CoolingTowerChemicalLog
+from .models import ChillerLog, ChillerEquipmentLimit
 
 
 class ChillerLogSerializer(serializers.ModelSerializer):
@@ -70,16 +70,3 @@ class ChillerEquipmentLimitSerializer(serializers.ModelSerializer):
             'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
-
-
-class CoolingTowerChemicalLogSerializer(serializers.ModelSerializer):
-    operator_id = serializers.UUIDField(source='operator.id', read_only=True, allow_null=True)
-
-    class Meta:
-        model = CoolingTowerChemicalLog
-        fields = [
-            'id', 'date', 'equipment_id', 'tower_slot', 'chemical_name', 'quantity_kg', 'batch',
-            'operator_id', 'status', 'created_at', 'updated_at',
-        ]
-        read_only_fields = ['id', 'created_at', 'updated_at']
-

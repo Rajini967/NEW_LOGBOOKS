@@ -383,47 +383,6 @@ class ChillerEquipmentLimit(models.Model):
         return f"Limits for {self.equipment_id}"
 
 
-class CoolingTowerChemicalLog(models.Model):
-    """
-    Separate log book for cooling tower chemical details (date, equipment, tower slot, chemical, quantity).
-    """
-    TOWER_SLOT_CHOICES = [
-        ('CT-1', 'Cooling Tower 1'),
-        ('CT-2', 'Cooling Tower 2'),
-        ('CT-3', 'Cooling Tower 3'),
-    ]
-    STATUS_CHOICES = [
-        ('draft', 'Draft'),
-        ('approved', 'Approved'),
-    ]
-
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    date = models.DateField(db_index=True)
-    equipment_id = models.CharField(max_length=100, db_index=True, help_text="Chiller equipment identifier")
-    tower_slot = models.CharField(max_length=10, choices=TOWER_SLOT_CHOICES, db_index=True)
-    chemical_name = models.CharField(max_length=200)
-    quantity_kg = models.FloatField(validators=[MinValueValidator(0)], help_text="Quantity (kg)")
-    batch = models.CharField(max_length=100, blank=True, null=True)
-    operator = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.SET_NULL,
-        null=True,
-        related_name='ct_chemical_logs',
-    )
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        db_table = 'cooling_tower_chemical_logs'
-        ordering = ['-date', '-created_at']
-        verbose_name = 'Cooling Tower Chemical Log'
-        verbose_name_plural = 'Cooling Tower Chemical Logs'
-
-    def __str__(self):
-        return f"{self.date} {self.equipment_id} {self.tower_slot} {self.chemical_name}"
-
-
 class ChillerDashboardConfig(models.Model):
     """
     Optional singleton config for chiller dashboard: projected power and electricity rate.
