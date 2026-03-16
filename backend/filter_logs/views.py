@@ -6,8 +6,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from accounts.permissions import CanApproveReports, CanLogEntries
-from core.log_slot_utils import get_interval_for_equipment, get_slot_range
-from reports.utils import log_limit_change
+from core.log_slot_utils import get_interval_for_equipment, get_slot_range, compute_slot_status
+from reports.utils import log_limit_change, log_audit_event, create_report_entry, delete_report_entry
 
 from .models import FilterLog
 from .serializers import FilterLogSerializer
@@ -27,6 +27,9 @@ class FilterLogViewSet(viewsets.ModelViewSet):
         equipment_id = self.request.query_params.get('equipment_id')
         if equipment_id:
             qs = qs.filter(equipment_id=equipment_id)
+        status_param = self.request.query_params.get('status')
+        if status_param and status_param.lower() == 'approved':
+            qs = qs.filter(status='approved')
         if date_from:
             try:
                 from datetime import datetime
@@ -58,20 +61,51 @@ class FilterLogViewSet(viewsets.ModelViewSet):
         validated = serializer.validated_data
         equipment_id = validated.get('equipment_id')
         timestamp = validated.get('timestamp') or timezone.now()
-        interval, shift_hours = get_interval_for_equipment(equipment_id or '', 'filter')
-        slot_start, slot_end = get_slot_range(timestamp, interval, shift_hours)
-        if FilterLog.objects.filter(
-            equipment_id=equipment_id,
-            timestamp__gte=slot_start,
-            timestamp__lt=slot_end,
-        ).exists():
-            raise ValidationError(
-                {'detail': ['An entry for this equipment already exists for this time slot.']}
-            )
-        serializer.save(
+        base_qs = FilterLog.objects.filter(equipment_id=equipment_id)
+        last_log = base_qs.order_by('-timestamp').first()
+        last_time = last_log.timestamp if last_log is not None else None
+
+        slot_info = compute_slot_status(equipment_id or '', 'filter', timestamp, last_time=last_time)
+        slot_start = slot_info["slot_start"]
+        slot_end = slot_info["slot_end"]
+        tolerance_end = slot_info["tolerance_end"]
+        status = slot_info["status"]
+
+        if status == "interval":
+            if base_qs.filter(timestamp__gte=slot_start, timestamp__lt=slot_end).exists():
+                raise ValidationError(
+                    {'detail': ['An entry for this equipment already exists for this time slot.']}
+                )
+        elif status == "tolerance" and tolerance_end is not None:
+            if base_qs.filter(timestamp__gte=slot_end, timestamp__lte=tolerance_end).exists():
+                raise ValidationError(
+                    {'detail': ['An entry for this equipment already exists for this time slot.']}
+                )
+        log = serializer.save(
             operator=self.request.user,
             operator_name=self.request.user.name or self.request.user.email,
         )
+        log_audit_event(
+            user=self.request.user,
+            event_type="log_created",
+            object_type="filter_log",
+            object_id=str(log.id),
+            field_name="created",
+            new_value=timezone.localtime(log.timestamp).isoformat() if log.timestamp else None,
+        )
+
+    def perform_destroy(self, instance):
+        """Record log_deleted in audit trail and remove report entry before deleting."""
+        log_audit_event(
+            user=self.request.user,
+            event_type="log_deleted",
+            object_type="filter_log",
+            object_id=str(instance.id),
+            field_name="deleted",
+            new_value=timezone.localtime(timezone.now()).isoformat(),
+        )
+        delete_report_entry(source_id=str(instance.id), source_table='filter_logs')
+        super().perform_destroy(instance)
 
     def update(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -259,6 +293,20 @@ class FilterLogViewSet(viewsets.ModelViewSet):
             'remarks',
             'updated_at',
         ])
+
+        if action_type == 'approve' and log.status == 'approved':
+            title = f"Filter Monitoring - {log.equipment_id or 'N/A'}"
+            create_report_entry(
+                report_type='utility',
+                source_id=str(log.id),
+                source_table='filter_logs',
+                title=title,
+                site=log.equipment_id or 'N/A',
+                created_by=log.operator_name or 'Unknown',
+                created_at=log.created_at,
+                approved_by=request.user,
+                remarks=remarks or None,
+            )
 
         serializer = self.get_serializer(log)
         return Response(serializer.data)

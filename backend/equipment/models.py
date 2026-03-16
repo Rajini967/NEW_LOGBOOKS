@@ -129,6 +129,16 @@ class Equipment(models.Model):
         blank=True,
         help_text="Shift length in hours; used when this equipment's log_entry_interval is 'shift'.",
     )
+    tolerance_minutes = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Per-equipment tolerance window in minutes (±). Null/0 = no tolerance highlighting.",
+    )
+    tolerance_enabled_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Timestamp when tolerance_minutes was first configured; used to avoid coloring old logs.",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

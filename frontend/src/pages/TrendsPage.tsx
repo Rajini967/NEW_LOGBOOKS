@@ -10,9 +10,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useAuth } from '@/contexts/AuthContext';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
+import { Printer } from 'lucide-react';
 import { chillerLogAPI, boilerLogAPI, compressorLogAPI } from '@/lib/api';
 import {
   LineChart,
@@ -153,7 +155,17 @@ export default function TrendsPage() {
   const [rawLogs, setRawLogs] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
 
+  const [chartTab, setChartTab] = useState<'all' | 'individual'>('all');
+  const [selectedParamKey, setSelectedParamKey] = useState<string>('');
+  const [yAxisMin, setYAxisMin] = useState<string>('');
+  const [yAxisMax, setYAxisMax] = useState<string>('');
+
   const params = PARAMS_BY_TYPE[logType];
+  const selectedParam = params.find((p) => p.key === selectedParamKey) ?? params[0];
+  useEffect(() => {
+    const keys = params.map((p) => p.key);
+    if (!keys.includes(selectedParamKey)) setSelectedParamKey(keys[0] ?? '');
+  }, [logType, params, selectedParamKey]);
 
   const fetchLogs = async () => {
     const seq = ++fetchSeqRef.current;
@@ -239,8 +251,32 @@ export default function TrendsPage() {
     }).filter((s) => s.stats !== null);
   }, [rawLogs, params]);
 
+  const yDomain = useMemo(() => {
+    const min = yAxisMin.trim() === '' ? null : Number(yAxisMin);
+    const max = yAxisMax.trim() === '' ? null : Number(yAxisMax);
+    if (min != null && max != null && Number.isFinite(min) && Number.isFinite(max)) return [min, max] as [number, number];
+    return undefined;
+  }, [yAxisMin, yAxisMax]);
+
+  const handlePrint = () => {
+    try {
+      window.print();
+      toast.success('Opening print dialog...');
+    } catch (e) {
+      console.error('Print failed', e);
+      toast.error('Print failed');
+    }
+  };
+
+  const formatTooltipLabel = (label: string) => {
+    const point = chartData.find((d) => d.time === label);
+    const ts = point?.timestamp;
+    if (ts) return format(new Date(ts), 'dd-MMM-yyyy HH:mm');
+    return label;
+  };
+
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background trends-page">
       <Header user={user} />
       <main className="p-6 max-w-7xl mx-auto">
         <h1 className="text-2xl font-semibold text-foreground mb-6">Trends</h1>
@@ -347,46 +383,151 @@ export default function TrendsPage() {
           </div>
         )}
 
-        <div className="bg-card rounded-lg border border-border p-4">
-          <h2 className="text-sm font-medium text-foreground mb-3">Trend chart</h2>
-          {chartData.length === 0 ? (
-            <p className="text-muted-foreground py-8 text-center">No data for selected filters.</p>
-          ) : (
-            <div className="h-[400px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={chartData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
-                  <CartesianGrid strokeDasharray="3 3" className="stroke-border/50" />
-                  <XAxis
-                    dataKey="time"
-                    tick={{ fontSize: 11 }}
-                    className="fill-muted-foreground"
-                  />
-                  <YAxis tick={{ fontSize: 11 }} className="fill-muted-foreground" />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: 'hsl(var(--card))',
-                      border: '1px solid hsl(var(--border))',
-                      borderRadius: '8px',
-                    }}
-                    labelStyle={{ color: 'hsl(var(--foreground))' }}
-                  />
-                  <Legend />
-                  {params.map(({ key, label }, i) => (
-                    <Line
-                      key={key}
-                      type="monotone"
-                      dataKey={key}
-                      name={label}
-                      stroke={COLORS[i % COLORS.length]}
-                      strokeWidth={2}
-                      dot={false}
-                      connectNulls
-                    />
-                  ))}
-                </LineChart>
-              </ResponsiveContainer>
+        <div className="bg-card rounded-lg border border-border p-4 trends-print-content">
+          <div className="hidden print:block text-sm font-medium text-foreground mb-2">
+            Trends – {logType} – {dateFrom} to {dateTo}
+          </div>
+          <h2 className="hidden print:block text-sm font-medium text-foreground mb-2">Trend chart</h2>
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-3 trends-no-print">
+            <h2 className="text-sm font-medium text-foreground">Trend chart</h2>
+            <div className="flex items-center gap-2">
+              <Label htmlFor="y-min" className="text-xs text-muted-foreground whitespace-nowrap">Y-axis min</Label>
+              <Input
+                id="y-min"
+                type="number"
+                placeholder="Auto"
+                className="w-20 h-8 text-sm"
+                value={yAxisMin}
+                onChange={(e) => setYAxisMin(e.target.value)}
+              />
+              <Label htmlFor="y-max" className="text-xs text-muted-foreground whitespace-nowrap">Y-axis max</Label>
+              <Input
+                id="y-max"
+                type="number"
+                placeholder="Auto"
+                className="w-20 h-8 text-sm"
+                value={yAxisMax}
+                onChange={(e) => setYAxisMax(e.target.value)}
+              />
+              <Button variant="outline" size="sm" onClick={handlePrint} className="gap-1.5">
+                <Printer className="h-4 w-4" />
+                Print
+              </Button>
             </div>
-          )}
+          </div>
+          <Tabs value={chartTab} onValueChange={(v) => setChartTab(v as 'all' | 'individual')}>
+            <TabsList className="mb-3 trends-no-print">
+              <TabsTrigger value="all">All Parameters</TabsTrigger>
+              <TabsTrigger value="individual">Individual Parameter</TabsTrigger>
+            </TabsList>
+            <TabsContent value="all" className="mt-0">
+              {chartData.length === 0 ? (
+                <p className="text-muted-foreground py-8 text-center">No data for selected filters.</p>
+              ) : (
+                <div className="h-[400px] trends-chart-container">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={chartData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                      <CartesianGrid strokeDasharray="3 3" className="stroke-border/50" />
+                      <XAxis
+                        dataKey="time"
+                        tick={{ fontSize: 11 }}
+                        className="fill-muted-foreground"
+                        label={{ value: 'Date & time', position: 'insideBottom', offset: -5 }}
+                      />
+                      <YAxis
+                        tick={{ fontSize: 11 }}
+                        className="fill-muted-foreground"
+                        domain={yDomain}
+                      />
+                      <Tooltip
+                        contentStyle={{
+                          backgroundColor: 'hsl(var(--card))',
+                          border: '1px solid hsl(var(--border))',
+                          borderRadius: '8px',
+                        }}
+                        labelStyle={{ color: 'hsl(var(--foreground))' }}
+                        labelFormatter={formatTooltipLabel}
+                      />
+                      <Legend />
+                      {params.map(({ key, label }, i) => (
+                        <Line
+                          key={key}
+                          type="monotone"
+                          dataKey={key}
+                          name={label}
+                          stroke={COLORS[i % COLORS.length]}
+                          strokeWidth={2}
+                          dot={false}
+                          connectNulls
+                        />
+                      ))}
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+            </TabsContent>
+            <TabsContent value="individual" className="mt-0">
+              <div className="flex items-center gap-2 mb-3 trends-no-print">
+                <Label className="text-sm text-muted-foreground">Parameter</Label>
+                <Select
+                  value={selectedParamKey || params[0]?.key}
+                  onValueChange={setSelectedParamKey}
+                >
+                  <SelectTrigger className="w-[280px]">
+                    <SelectValue placeholder="Select parameter" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {params.map(({ key, label }) => (
+                      <SelectItem key={key} value={key}>
+                        {label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              {chartData.length === 0 ? (
+                <p className="text-muted-foreground py-8 text-center">No data for selected filters.</p>
+              ) : selectedParam ? (
+                <div className="h-[400px] trends-chart-container">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={chartData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                      <CartesianGrid strokeDasharray="3 3" className="stroke-border/50" />
+                      <XAxis
+                        dataKey="time"
+                        tick={{ fontSize: 11 }}
+                        className="fill-muted-foreground"
+                        label={{ value: 'Date & time', position: 'insideBottom', offset: -5 }}
+                      />
+                      <YAxis
+                        tick={{ fontSize: 11 }}
+                        className="fill-muted-foreground"
+                        domain={yDomain}
+                      />
+                      <Tooltip
+                        contentStyle={{
+                          backgroundColor: 'hsl(var(--card))',
+                          border: '1px solid hsl(var(--border))',
+                          borderRadius: '8px',
+                        }}
+                        labelStyle={{ color: 'hsl(var(--foreground))' }}
+                        labelFormatter={formatTooltipLabel}
+                      />
+                      <Legend />
+                      <Line
+                        type="monotone"
+                        dataKey={selectedParam.key}
+                        name={selectedParam.label}
+                        stroke={COLORS[0]}
+                        strokeWidth={2}
+                        dot={false}
+                        connectNulls
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              ) : null}
+            </TabsContent>
+          </Tabs>
         </div>
       </main>
     </div>

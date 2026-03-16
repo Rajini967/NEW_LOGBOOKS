@@ -2,6 +2,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from reports.utils import log_audit_event
 from .models import HVACValidation
 from .serializers import HVACValidationSerializer
 from accounts.permissions import CanLogEntries, CanApproveReports
@@ -23,11 +24,18 @@ class HVACValidationViewSet(viewsets.ModelViewSet):
     
     def perform_create(self, serializer):
         """Set operator when creating a validation."""
-        serializer.save(
+        instance = serializer.save(
             operator=self.request.user,
             operator_name=self.request.user.name or self.request.user.email
         )
-    
+        log_audit_event(
+            user=self.request.user,
+            event_type="entity_created",
+            object_type="hvac_validation",
+            object_id=str(instance.id),
+            field_name="created",
+        )
+
     @action(detail=True, methods=['post'])
     def approve(self, request, pk=None):
         """Approve or reject an HVAC validation."""

@@ -18,6 +18,7 @@ import { format } from "date-fns";
 import { toast } from "sonner";
 import { chemicalPrepAPI, chemicalMasterAPI, chemicalAssignmentAPI, chemicalStockAPI, equipmentAPI, equipmentCategoryAPI } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { firstRequiredFieldError } from "@/lib/requiredFields";
 import { Link } from "react-router-dom";
 import { Clock, Save, Filter, X, Plus, Trash2, CheckCircle, XCircle, Edit, History, Eye, Package } from "lucide-react";
 import {
@@ -68,6 +69,7 @@ interface ChemicalPrepLog {
   approved_by_id?: string;
   corrects_id?: string;
   has_corrections?: boolean;
+  tolerance_status?: "none" | "within" | "outside";
 }
 
 const ChemicalLogBookPage: React.FC = () => {
@@ -166,7 +168,7 @@ const ChemicalLogBookPage: React.FC = () => {
           chemicalConcentration: prep.chemical_concentration ?? null,
           solutionConcentration: prep.solution_concentration,
           waterQty: prep.water_qty,
-          chemicalQty: prep.chemical_qty,
+          chemicalQty: prep.chemical_qty != null ? prep.chemical_qty / 1000 : 0,
           batchNo: prep.batch_no || "",
           doneBy: prep.done_by || prep.checked_by || prep.operator_name,
           date: format(timestamp, "yyyy-MM-dd"),
@@ -179,7 +181,8 @@ const ChemicalLogBookPage: React.FC = () => {
           operator_id: prep.operator_id,
           approved_by_id: prep.approved_by_id,
           corrects_id: prep.corrects_id,
-          has_corrections: prep.has_corrections,
+      has_corrections: prep.has_corrections,
+      tolerance_status: prep.tolerance_status as ChemicalPrepLog["tolerance_status"],
         });
       });
 
@@ -221,7 +224,7 @@ const ChemicalLogBookPage: React.FC = () => {
             chemicalConcentration: prep.chemical_concentration,
             solutionConcentration: prep.solution_concentration,
             waterQty: prep.water_qty,
-            chemicalQty: prep.chemical_qty,
+            chemicalQty: prep.chemical_qty != null ? prep.chemical_qty / 1000 : 0,
             batchNo: prep.batch_no,
             doneBy: prep.done_by || prep.checked_by || prep.operator_name,
             date: format(timestamp, "yyyy-MM-dd"),
@@ -362,23 +365,26 @@ const ChemicalLogBookPage: React.FC = () => {
     })();
   }, []);
 
-  // Load equipment options and assignments so Equipment dropdown auto-fills category + chemical
+  // Load equipment options and assignments so Equipment dropdown shows only approved equipment
   useEffect(() => {
     (async () => {
       try {
         const data = await chemicalAssignmentAPI.list();
-        const rows = (data as any[]).map((row) => ({
+        const allRows = (data as any[]).map((row) => ({
           equipment_name: String((row as any).equipment_name ?? ""),
           category: ((row as any).category || "major") as "major" | "minor",
           chemical_name: String((row as any).chemical_name ?? ""),
           chemical_formula: String((row as any).chemical_formula ?? ""),
           chemical_id: (row as any).chemical ?? null,
           location: (row as any).location != null ? String((row as any).location) : null,
+          status: (row as any).status as string | undefined,
         }));
-        setAssignments(rows);
+        setAssignments(allRows);
+        // Only show equipment that have at least one approved assignment
+        const approvedRows = allRows.filter((r) => r.status === "approved");
         const seen = new Set<string>();
         const eqOpts: { id: string; name: string }[] = [];
-        rows.forEach((r) => {
+        approvedRows.forEach((r) => {
           if (r.equipment_name && !seen.has(r.equipment_name)) {
             seen.add(r.equipment_name);
             eqOpts.push({ id: r.equipment_name, name: r.equipment_name });
@@ -450,18 +456,13 @@ const ChemicalLogBookPage: React.FC = () => {
     if (chemicalIdForStock) {
       (async () => {
         try {
-          const stock = await chemicalStockAPI.list({ chemical: chemicalIdForStock });
-          if (Array.isArray(stock) && stock.length > 0) {
-            const first = stock[0] as any;
-            setSelectedStockInfo({
-              availableQtyKg: first.available_qty_kg ?? null,
-              unit: first.unit ?? null,
-              pricePerUnit: first.price_per_unit ?? null,
-              site: first.site ?? null,
-            });
-          } else {
-            setSelectedStockInfo(null);
-          }
+          const data = await chemicalStockAPI.getAvailable(chemicalIdForStock);
+          setSelectedStockInfo({
+            availableQtyKg: data?.available_qty_kg ?? null,
+            unit: data?.unit ?? null,
+            pricePerUnit: data?.price_per_unit ?? null,
+            site: null,
+          });
         } catch (error: any) {
           toast.error(error?.message ?? "Failed to load stock details for selected chemical.");
           setSelectedStockInfo(null);
@@ -494,12 +495,32 @@ const ChemicalLogBookPage: React.FC = () => {
           return rName === name && rFormula === formula;
         });
         if (match) {
-          setSelectedStockInfo({
-            availableQtyKg: match.available_qty_kg ?? null,
-            unit: match.unit ?? null,
-            pricePerUnit: match.price_per_unit ?? null,
-            site: match.site ?? null,
-          });
+          const chemId = match.chemical ?? match.chemical_id;
+          if (chemId) {
+            try {
+              const data = await chemicalStockAPI.getAvailable(chemId);
+              setSelectedStockInfo({
+                availableQtyKg: data?.available_qty_kg ?? null,
+                unit: data?.unit ?? null,
+                pricePerUnit: data?.price_per_unit ?? null,
+                site: match.site ?? null,
+              });
+            } catch {
+              setSelectedStockInfo({
+                availableQtyKg: match.available_qty_kg ?? null,
+                unit: match.unit ?? null,
+                pricePerUnit: match.price_per_unit ?? null,
+                site: match.site ?? null,
+              });
+            }
+          } else {
+            setSelectedStockInfo({
+              availableQtyKg: match.available_qty_kg ?? null,
+              unit: match.unit ?? null,
+              pricePerUnit: match.price_per_unit ?? null,
+              site: match.site ?? null,
+            });
+          }
         } else {
           setSelectedStockInfo(null);
         }
@@ -526,10 +547,10 @@ const ChemicalLogBookPage: React.FC = () => {
       result = result.filter((log) => log.status === filters.status);
     }
     if (filters.equipmentName) {
-      result = result.filter((log) =>
-        log.equipmentName
-          .toLowerCase()
-          .includes(filters.equipmentName.toLowerCase()),
+      result = result.filter(
+        (log) =>
+          log.equipmentName &&
+          log.equipmentName.toString().toLowerCase() === filters.equipmentName.toLowerCase(),
       );
     }
     if (filters.checkedBy) {
@@ -687,44 +708,26 @@ const ChemicalLogBookPage: React.FC = () => {
         await refreshLogs();
         return;
       }
-      const numericFields: { key: keyof typeof formData; label: string }[] = [
-        { key: "chemicalQty", label: "Chemical quantity" },
-      ];
-      if (formData.chemicalCategory === "major") {
-        numericFields.unshift(
-          { key: "waterQty", label: "Water quantity" },
-          { key: "solutionConcentration", label: "Solution concentration" },
-        );
-      }
-      for (const field of numericFields) {
-        const raw = formData[field.key];
-        if (!raw) {
-          toast.error(`Please enter ${field.label}.`);
-          return;
-        }
-        const value = parseFloat(raw);
-        if (Number.isNaN(value)) {
-          toast.error(`${field.label} must be numeric.`);
-          return;
-        }
-      }
+      const required = [
+        { key: "equipmentName", label: "Equipment Name" },
+        { key: "chemicalName", label: "Chemical Name" },
+        { key: "batchNo", label: "Batch No" },
+        { key: "chemicalConcentration", label: "Chemical Concentration", numeric: true },
+        ...(formData.chemicalCategory === "major"
+          ? ([
+              { key: "solutionConcentration", label: "Solution Concentration", numeric: true },
+              { key: "waterQty", label: "Water Quantity", numeric: true },
+            ] as const)
+          : []),
+        { key: "chemicalQty", label: "Chemical Quantity", numeric: true },
+        { key: "remarks", label: "Remarks" },
+      ] as const;
 
-      // For Minor category, Solution concentration and Water Qty are optional but must be numeric if provided
-      if (formData.chemicalCategory === "minor") {
-        if (formData.solutionConcentration) {
-          const value = parseFloat(formData.solutionConcentration);
-          if (Number.isNaN(value)) {
-            toast.error("Solution concentration must be numeric.");
-            return;
-          }
-        }
-        if (formData.waterQty) {
-          const value = parseFloat(formData.waterQty);
-          if (Number.isNaN(value)) {
-            toast.error("Water quantity must be numeric.");
-            return;
-          }
-        }
+      // Done By is auto-filled from current user when empty; no need to require it
+      const err = firstRequiredFieldError(formData, required as any);
+      if (err) {
+        toast.error(err);
+        return;
       }
 
       // Stock check: when chemical is known (or resolved by location), block if no stock or qty > available
@@ -750,14 +753,14 @@ const ChemicalLogBookPage: React.FC = () => {
       }
 
       const solutionConcentrationValue =
-        formData.solutionConcentration !== "" ? parseFloat(formData.solutionConcentration) : undefined;
+        formData.chemicalCategory === "major" ? parseFloat(formData.solutionConcentration) : undefined;
       const waterQtyValue =
-        formData.waterQty !== "" ? parseFloat(formData.waterQty) : undefined;
-      const chemicalConcentrationValue =
-        formData.chemicalConcentration !== "" ? parseFloat(formData.chemicalConcentration) : undefined;
+        formData.chemicalCategory === "major" ? parseFloat(formData.waterQty) : undefined;
+      const chemicalConcentrationValue = parseFloat(formData.chemicalConcentration);
 
       const prepData: Record<string, unknown> = {
         equipment_name: formData.equipmentName,
+        chemical: chemicalIdForStock || undefined,
         chemical_name: formData.chemicalName,
         activity_type: maintenanceTimings.activityType,
         activity_from_date: maintenanceTimings.fromDate || undefined,
@@ -769,8 +772,8 @@ const ChemicalLogBookPage: React.FC = () => {
         chemical_category: formData.chemicalCategory,
         solution_concentration: solutionConcentrationValue,
         water_qty: waterQtyValue,
-        chemical_qty: parseFloat(formData.chemicalQty),
-        batch_no: formData.batchNo || undefined,
+        chemical_qty: (parseFloat(formData.chemicalQty) || 0) * 1000,
+        batch_no: formData.batchNo,
         done_by: formData.doneBy || user?.name || user?.email || "Unknown",
         remarks: formData.remarks || undefined,
         checked_by: user?.name || user?.email || "Unknown",
@@ -1024,12 +1027,22 @@ const ChemicalLogBookPage: React.FC = () => {
                   </div>
                   <div className="space-y-3">
                     <Label className="text-base font-semibold">Equipment Name</Label>
-                    <Input
-                      type="text"
-                      value={filters.equipmentName}
-                      onChange={(e) => setFilters({ ...filters, equipmentName: e.target.value })}
-                      placeholder="e.g., Equipment name"
-                    />
+                    <Select
+                      value={filters.equipmentName || "all"}
+                      onValueChange={(v) => setFilters({ ...filters, equipmentName: v === "all" ? "" : v })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="All" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All</SelectItem>
+                        {equipmentOptions.map((eq) => (
+                          <SelectItem key={eq.id} value={eq.name}>
+                            {eq.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
                   <div className="space-y-3">
                     <Label className="text-base font-semibold">Checked By</Label>
@@ -1211,7 +1224,7 @@ const ChemicalLogBookPage: React.FC = () => {
                                 {log.chemicalName}
                                 {log.solutionConcentration != null ? ` · Solution ${log.solutionConcentration}%` : ""}
                                 {log.waterQty != null ? ` · Water ${log.waterQty} L` : ""}
-                                {log.chemicalQty != null ? ` · Chemical ${log.chemicalQty} g` : ""}
+                                {log.chemicalQty != null ? ` · Chemical ${log.chemicalQty} Kg` : ""}
                               </div>
                             </div>
                           ))}
@@ -1529,8 +1542,15 @@ const ChemicalLogBookPage: React.FC = () => {
                     </td>
                   </tr>
                 )}
-                {filteredLogs.map((log) => (
-                  <tr key={log.id} className="hover:bg-muted/30 transition-colors">
+                {filteredLogs.map((log) => {
+                  const tolClass =
+                    log.tolerance_status === "within"
+                      ? "bg-yellow-50/70"
+                      : log.tolerance_status === "outside"
+                      ? "bg-red-50/80"
+                      : "";
+                  return (
+                  <tr key={log.id} className={cn(tolClass, "hover:bg-muted/30 transition-colors")}>
                     <td className="px-4 py-3 align-middle">
                       {(log.status === "pending" || log.status === "draft" || log.status === "pending_secondary_approval") &&
                       user?.role !== "operator" &&
@@ -1754,7 +1774,7 @@ const ChemicalLogBookPage: React.FC = () => {
                       </div>
                     </td>
                   </tr>
-                ))}
+                );})}
               </tbody>
             </table>
           </div>

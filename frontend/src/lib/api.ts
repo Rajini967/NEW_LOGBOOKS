@@ -384,7 +384,7 @@ export const equipmentCategoryAPI = {
 
 // Equipment API functions
 export const equipmentAPI = {
-  list: async (params?: { department?: string; category?: string }) => {
+  list: async (params?: { department?: string; category?: string; status?: string }) => {
     const response = await api.get('/equipment/', { params });
     if ((response.data as any).results) {
       return (response.data as any).results;
@@ -706,10 +706,23 @@ export const chemicalStockAPI = {
     return Array.isArray(data) ? data : [];
   },
 
+  /** Computed available stock (initial stock minus all logged consumption) for a chemical. */
+  getAvailable: async (chemicalId: string): Promise<{
+    available_qty_kg: number;
+    unit: string;
+    price_per_unit: number | null;
+  }> => {
+    const response = await api.get('/chemical-stock/available/', {
+      params: { chemical: chemicalId },
+    });
+    return response.data;
+  },
+
   createEntry: async (data: {
-    location: string;
+    category_id?: string;
+    location?: string;
     chemical_name: string;
-    chemical_formula: string;
+    chemical_formula?: string;
     stock: number;
     price?: number | null;
     site?: string | null;
@@ -753,6 +766,10 @@ export const chemicalAssignmentAPI = {
   },
   delete: async (id: string) => {
     await api.delete(`/chemical-assignments/${id}/`);
+  },
+  approve: async (id: string, action: 'approve' | 'reject', remarks?: string) => {
+    const response = await api.post(`/chemical-assignments/${id}/approve/`, { action, remarks });
+    return response.data;
   },
 };
 
@@ -828,6 +845,7 @@ export const chillerLimitsAPI = {
   create: async (data: {
     equipment_id: string;
     client_id?: string;
+    effective_from?: string | null;
     daily_power_limit_kw?: number | null;
     electricity_rate_rs_per_kwh?: number | null;
     daily_water_ct1_liters?: number | null;
@@ -842,6 +860,7 @@ export const chillerLimitsAPI = {
   },
   update: async (equipmentId: string, data: Partial<{
     client_id: string | null;
+    effective_from: string | null;
     daily_power_limit_kw: number | null;
     electricity_rate_rs_per_kwh: number | null;
     daily_water_ct1_liters: number | null;
@@ -872,6 +891,20 @@ export type ChillerDashboardSummary = {
   projected_cost_rs?: number;
 };
 
+export type ChillerDashboardSeriesPoint = {
+  date: string;
+  label: string;
+  limit_power_kwh: number;
+  actual_power_kwh: number;
+  projected_power_kwh?: number | null;
+  actual_cost_rs?: number | null;
+  projected_cost_rs?: number | null;
+};
+
+export type ChillerDashboardSeries = {
+  series: ChillerDashboardSeriesPoint[];
+};
+
 export const chillerDashboardAPI = {
   getSummary: async (params: {
     periodType: 'day' | 'month' | 'year';
@@ -887,10 +920,26 @@ export const chillerDashboardAPI = {
     });
     return response.data;
   },
+  getSeries: async (params: {
+    periodType: 'day' | 'month' | 'year';
+    date: string;
+    equipmentId?: string | null;
+    days?: number;
+  }) => {
+    const response = await api.get<ChillerDashboardSeries>('/chiller-logs/dashboard_series/', {
+      params: {
+        period_type: params.periodType,
+        date: params.date,
+        ...(params.equipmentId ? { equipment_id: params.equipmentId } : {}),
+        ...(params.days != null ? { days: params.days } : {}),
+      },
+    });
+    return response.data;
+  },
 };
 
 export type ChemicalDashboardSummary = {
-  period_type: 'week' | 'month';
+  period_type: 'day' | 'month' | 'year';
   period_start: string;
   period_end: string;
   days_in_period: number;
@@ -906,14 +955,51 @@ export type ChemicalDashboardSummary = {
   projected_cost_rs?: number;
 };
 
+export type ChemicalDashboardSeriesPoint = {
+  date: string;
+  label: string;
+  actual_consumption_kg: number;
+  projected_consumption_kg: number;
+  actual_cost_rs: number;
+  projected_cost_rs: number;
+};
+
 export const chemicalDashboardAPI = {
-  getSummary: async (params: { periodType: 'week' | 'month'; date: string }) => {
+  getEquipmentNames: async (): Promise<{ equipment_names: string[] }> => {
+    const response = await api.get<{ equipment_names: string[] }>('/chemical-preps/equipment_names/');
+    return response.data;
+  },
+  getSummary: async (params: {
+    periodType: 'day' | 'month' | 'year';
+    date: string;
+    equipmentName?: string | null;
+  }) => {
     const response = await api.get<ChemicalDashboardSummary>('/chemical-preps/dashboard_summary/', {
       params: {
         period_type: params.periodType,
         date: params.date,
+        ...(params.equipmentName ? { equipment_name: params.equipmentName } : {}),
       },
     });
+    return response.data;
+  },
+  getSeries: async (params: {
+    periodType: 'day' | 'month' | 'year';
+    date: string;
+    equipmentName?: string | null;
+    days?: number;
+  }) => {
+    const response = await api.get<{ series: ChemicalDashboardSeriesPoint[] }>(
+      '/chemical-preps/dashboard_series/',
+      {
+        params: {
+          period_type: params.periodType,
+          date: params.date,
+          ...(params.equipmentName ? { equipment_name: params.equipmentName } : {}),
+          ...(params.days != null ? { days: params.days } : {}),
+        },
+      }
+    );
     return response.data;
   },
 };
@@ -935,11 +1021,12 @@ export type FiltersDashboardSummary = {
 };
 
 export const filtersDashboardAPI = {
-  getSummary: async (params: { periodType: 'week' | 'month'; date: string }) => {
+  getSummary: async (params: { periodType: 'week' | 'month'; date: string; equipmentId?: string }) => {
     const response = await api.get<FiltersDashboardSummary>('/filter-schedules/dashboard_summary/', {
       params: {
         period_type: params.periodType,
         date: params.date,
+        ...(params.equipmentId ? { equipment_id: params.equipmentId } : {}),
       },
     });
     return response.data;
@@ -1042,6 +1129,7 @@ export const boilerLimitsAPI = {
   create: async (data: {
     equipment_id: string;
     client_id?: string | null;
+    effective_from?: string | null;
     daily_power_limit_kw?: number | null;
     daily_water_limit_liters?: number | null;
     daily_chemical_limit_kg?: number | null;
@@ -1059,6 +1147,7 @@ export const boilerLimitsAPI = {
   },
   update: async (equipmentId: string, data: Partial<{
     client_id: string | null;
+    effective_from: string | null;
     daily_power_limit_kw: number | null;
     daily_water_limit_liters: number | null;
     daily_chemical_limit_kg: number | null;
@@ -1076,16 +1165,23 @@ export const boilerLimitsAPI = {
   },
 };
 
-// Boiler dashboard summary (power, limit, projected, cost, efficiency)
+// Boiler dashboard summary (power, limit, projected, cost, efficiency, per-fuel for dropdown)
 export type BoilerDashboardSummary = {
   period_type: 'day' | 'month' | 'year';
   period_start: string;
   period_end: string;
   days_in_period: number;
+  has_boiler_equipment?: boolean;
   actual_power_kwh: number;
   limit_power_kwh: number;
   actual_oil_liters?: number;
   limit_oil_liters?: number;
+  actual_diesel_liters?: number;
+  limit_diesel_liters?: number;
+  actual_furnace_oil_liters?: number;
+  limit_furnace_oil_liters?: number;
+  actual_brigade_kg?: number;
+  limit_brigade_kg?: number;
   actual_steam_kg_hr?: number;
   limit_steam_kg_hr?: number;
   efficiency_ratio?: number | null;
@@ -1095,6 +1191,23 @@ export type BoilerDashboardSummary = {
   projected_power_kwh?: number;
   actual_cost_rs?: number;
   projected_cost_rs?: number;
+};
+
+export type BoilerDashboardSeriesPoint = {
+  date: string;
+  label: string;
+  actual_power_kwh?: number;
+  projected_power_kwh?: number;
+  actual_cost_rs?: number;
+  projected_cost_rs?: number;
+  actual_diesel_liters?: number;
+  projected_diesel_liters?: number;
+  actual_furnace_oil_liters?: number;
+  projected_furnace_oil_liters?: number;
+  actual_brigade_kg?: number;
+  projected_brigade_kg?: number;
+  actual_steam_kg_hr?: number;
+  projected_steam_kg_hr?: number;
 };
 
 export const boilerDashboardAPI = {
@@ -1112,11 +1225,27 @@ export const boilerDashboardAPI = {
     });
     return response.data;
   },
+  getSeries: async (params: {
+    periodType: 'day' | 'month' | 'year';
+    date: string;
+    equipmentId?: string | null;
+    days?: number;
+  }) => {
+    const response = await api.get<{ series: BoilerDashboardSeriesPoint[] }>('/boiler-logs/dashboard_series/', {
+      params: {
+        period_type: params.periodType,
+        date: params.date,
+        ...(params.equipmentId ? { equipment_id: params.equipmentId } : {}),
+        ...(params.days != null ? { days: params.days } : {}),
+      },
+    });
+    return response.data;
+  },
 };
 
 // Filter Log API functions
 export const filterLogAPI = {
-  list: async (params?: { date_from?: string; date_to?: string; equipment_id?: string }) => {
+  list: async (params?: { date_from?: string; date_to?: string; equipment_id?: string; status?: string }) => {
     const response = await api.get('/filter-logs/', { params });
     if (response.data.results) {
       return response.data.results;
@@ -1444,6 +1573,43 @@ export type WeeklyConsumptionDay = {
   fuel_liters: number;
 };
 
+export type DailyConsumptionChillerRow = {
+  date: string | null;
+  equipment_id: string;
+  equipment_number: string;
+  power_kwh: number;
+  water_ct1_l: number;
+  water_ct2_l: number;
+  water_ct3_l: number;
+  chemical_ct1_kg: number;
+  chemical_ct2_kg: number;
+  chemical_ct3_kg: number;
+};
+
+export type DailyConsumptionBoilerRow = {
+  date: string | null;
+  equipment_id: string;
+  equipment_number: string;
+  power_kwh: number;
+  water_l: number;
+  chemical_kg: number;
+  diesel_l: number;
+  furnace_oil_l: number;
+  brigade_kg: number;
+  steam_kg_hr: number;
+};
+
+export type DailyConsumptionChemicalRow = {
+  date: string | null;
+  chemical_kg: number;
+};
+
+export type DailyConsumptionResponse = {
+  chiller?: DailyConsumptionChillerRow[];
+  boiler?: DailyConsumptionBoilerRow[];
+  chemical?: DailyConsumptionChemicalRow[];
+};
+
 export type RecentActivityItem = {
   id: string;
   type: 'utility' | 'chemical' | 'validation';
@@ -1485,6 +1651,38 @@ export const dashboardSummaryAPI = {
   getEquipmentStatus: async () => {
     const response = await api.get<EquipmentStatusItem[]>('/reports/equipment_status/');
     return Array.isArray(response.data) ? response.data : [];
+  },
+  getDailyConsumption: async (params?: {
+    date_from?: string;
+    date_to?: string;
+    equipment_id?: string;
+    type?: 'chiller' | 'boiler' | 'chemical';
+  }) => {
+    const response = await api.get<DailyConsumptionResponse>('/reports/daily_consumption/', {
+      params: params ?? {},
+    });
+    return response.data;
+  },
+  saveDailyConsumption: async (payload: {
+    type: 'chiller' | 'boiler' | 'chemical';
+    date: string;
+    equipment_id?: string;
+    power_kwh?: number;
+    water_ct1_l?: number;
+    water_ct2_l?: number;
+    water_ct3_l?: number;
+    chemical_ct1_kg?: number;
+    chemical_ct2_kg?: number;
+    chemical_ct3_kg?: number;
+    water_l?: number;
+    chemical_kg?: number;
+    diesel_l?: number;
+    furnace_oil_l?: number;
+    brigade_kg?: number;
+    steam_kg_hr?: number;
+  }) => {
+    const response = await api.post('/reports/daily_consumption/', payload);
+    return response.data;
   },
 };
 

@@ -9,10 +9,17 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from 'recharts';
-import { filtersDashboardAPI, type FiltersDashboardSummary } from '@/lib/api';
+import { filtersDashboardAPI, filterScheduleAPI, type FiltersDashboardSummary } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { Loader2, Filter, TrendingUp, IndianRupee, BarChart3 } from 'lucide-react';
 
 type PeriodType = 'week' | 'month';
@@ -41,9 +48,39 @@ const CHART_COLOR = 'hsl(262,60%,45%)';
 export function FiltersDashboardSection() {
   const [periodType, setPeriodType] = useState<PeriodType>('month');
   const [date, setDate] = useState<string>(getDefaultDate());
+  const [selectedEquipmentId, setSelectedEquipmentId] = useState<string>('');
+  const [equipmentOptions, setEquipmentOptions] = useState<{ value: string; label: string }[]>([]);
   const [summary, setSummary] = useState<FiltersDashboardSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const schedules = await filterScheduleAPI.list({ approval: 'approved' });
+        const list = Array.isArray(schedules) ? schedules : (schedules as any)?.results ?? [];
+        type Item = { assignment_info?: { equipment_id?: string; equipment_number?: string; equipment_name?: string } };
+        const seen = new Set<string>();
+        const opts = (list as Item[])
+          .map((s) => s?.assignment_info)
+          .filter((info): info is NonNullable<Item['assignment_info']> => Boolean(info?.equipment_id))
+          .filter((info) => {
+            if (seen.has(info.equipment_id!)) return false;
+            seen.add(info.equipment_id!);
+            return true;
+          })
+          .map((info) => ({
+            value: info.equipment_id!,
+            label: `${info.equipment_number ?? info.equipment_id}${info.equipment_name ? ` – ${info.equipment_name}` : ''}`,
+          }));
+        if (!cancelled) setEquipmentOptions(opts);
+      } catch {
+        if (!cancelled) setEquipmentOptions([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   const fetchSummary = useCallback(async (background = false) => {
     if (!background) {
@@ -51,7 +88,11 @@ export function FiltersDashboardSection() {
       setError(null);
     }
     try {
-      const data = await filtersDashboardAPI.getSummary({ periodType, date });
+      const data = await filtersDashboardAPI.getSummary({
+        periodType,
+        date,
+        equipmentId: selectedEquipmentId || undefined,
+      });
       setSummary(data);
     } catch (e: unknown) {
       if (!background) {
@@ -62,7 +103,7 @@ export function FiltersDashboardSection() {
     } finally {
       if (!background) setLoading(false);
     }
-  }, [periodType, date]);
+  }, [periodType, date, selectedEquipmentId]);
 
   useEffect(() => {
     fetchSummary();
@@ -104,6 +145,25 @@ export function FiltersDashboardSection() {
               {p === 'week' ? 'W' : 'M'}
             </Button>
           ))}
+        </div>
+        <div className="flex items-center gap-2">
+          <Label className="text-sm text-muted-foreground whitespace-nowrap">Equipment</Label>
+          <Select
+            value={selectedEquipmentId || 'all'}
+            onValueChange={(v) => setSelectedEquipmentId(v === 'all' ? '' : v)}
+          >
+            <SelectTrigger className="w-[200px]">
+              <SelectValue placeholder="All" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All</SelectItem>
+              {equipmentOptions.map((opt) => (
+                <SelectItem key={opt.value} value={opt.value}>
+                  {opt.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
       </div>
 

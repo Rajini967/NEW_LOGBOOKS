@@ -33,6 +33,7 @@ import {
   filterScheduleAPI,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { firstRequiredFieldError } from "@/lib/requiredFields";
 import { Link, useNavigate } from "react-router-dom";
 import { Clock, Save, Filter, X, Plus, Trash2, CheckCircle, XCircle, Edit, History, ArrowLeft } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -115,6 +116,7 @@ interface FilterLog {
   approved_by_id?: string;
   corrects_id?: string;
   has_corrections?: boolean;
+  tolerance_status?: "none" | "within" | "outside";
 }
 
 const FilterLogBookPage: React.FC = () => {
@@ -155,6 +157,8 @@ const FilterLogBookPage: React.FC = () => {
     toTime: "",
   });
 
+  const getTodayDateString = () => format(new Date(), "yyyy-MM-dd");
+
   const [formData, setFormData] = useState({
     equipmentId: "",
     category: "hvac" as FilterCategory,
@@ -162,7 +166,7 @@ const FilterLogBookPage: React.FC = () => {
     filterMicron: "",
     filterSize: "",
     tagInfo: "",
-    installedDate: "",
+    installedDate: getTodayDateString(),
     integrityDoneDate: "",
     cleaningDoneDate: "",
     integrityDueDate: "",
@@ -291,39 +295,26 @@ const FilterLogBookPage: React.FC = () => {
 
   const loadEquipment = async () => {
     try {
-      // Only show Chemical-related equipments that are active and approved,
-      // matching the Filter Register assignment behaviour.
-      const categories = (await equipmentCategoryAPI.list()) as {
-        id: string;
-        name: string;
-      }[];
-      const chemicalCategory = (categories || []).find((c) => {
-        const n = (c.name || "").toLowerCase().trim();
-        return n === "chemical" || n === "chemicals";
-      });
-
-      if (!chemicalCategory) {
-        setEquipmentOptions([]);
-        return;
+      // Show only equipment that have a filter assignment (from Filter Register → Assign Filter to Equipment).
+      const assignments = (await filterAssignmentAPI.list()) as any[];
+      const seen = new Set<string>();
+      const options: EquipmentOption[] = [];
+      for (const a of assignments || []) {
+        const id = a?.equipment;
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        options.push({
+          id,
+          equipment_number: a.equipment_number ?? "",
+          name: a.equipment_name ?? "",
+        });
       }
-
-      const list = (await equipmentAPI.list({
-        category: chemicalCategory.id,
-      })) as any[];
-
-      const options: EquipmentOption[] = (list || [])
-        .filter(
-          (e: any) => e?.is_active !== false && e?.status === "approved",
-        )
-        .map((e: any) => ({
-          id: e.id,
-          equipment_number: e.equipment_number,
-          name: e.name,
-        }));
-
+      options.sort((a, b) =>
+        `${a.equipment_number} ${a.name}`.localeCompare(`${b.equipment_number} ${b.name}`)
+      );
       setEquipmentOptions(options);
     } catch (error) {
-      console.error("Error loading equipment:", error);
+      console.error("Error loading equipment from assignments:", error);
       setEquipmentOptions([]);
     }
   };
@@ -492,7 +483,8 @@ const FilterLogBookPage: React.FC = () => {
           operator_id: log.operator_id,
           approved_by_id: log.approved_by_id,
           corrects_id: log.corrects_id,
-          has_corrections: log.has_corrections,
+      has_corrections: log.has_corrections,
+      tolerance_status: log.tolerance_status as FilterLog["tolerance_status"],
         });
       });
 
@@ -605,8 +597,10 @@ const FilterLogBookPage: React.FC = () => {
       result = result.filter((log) => log.status === filters.status);
     }
     if (filters.equipmentId) {
-      result = result.filter((log) =>
-        log.equipmentId.toLowerCase().includes(filters.equipmentId.toLowerCase()),
+      result = result.filter(
+        (log) =>
+          log.equipmentId &&
+          log.equipmentId.toString().toLowerCase() === filters.equipmentId.toLowerCase(),
       );
     }
     if (filters.category !== "all") {
@@ -723,6 +717,31 @@ const FilterLogBookPage: React.FC = () => {
 
   const resetForm = () => {
     setSelectedEquipmentUuid("");
+    const today = getTodayDateString();
+    const base = new Date(today);
+    const addDays = (d: Date, days: number) => {
+      const copy = new Date(d.getTime());
+      copy.setDate(copy.getDate() + days);
+      return copy;
+    };
+    const addMonths = (d: Date, months: number) => {
+      const copy = new Date(d.getTime());
+      const day = copy.getDate();
+      copy.setMonth(copy.getMonth() + months);
+      if (copy.getDate() !== day) copy.setDate(0);
+      return copy;
+    };
+    const addYears = (d: Date, years: number) => {
+      const copy = new Date(d.getTime());
+      const day = copy.getDate();
+      copy.setFullYear(copy.getFullYear() + years);
+      if (copy.getDate() !== day) copy.setDate(0);
+      return copy;
+    };
+    const fmt = (d: Date) => format(d, "yyyy-MM-dd");
+    const integrityDue = addDays(addMonths(base, 6), 15);
+    const cleaningDue = addDays(addMonths(base, 6), 15);
+    const replacementDue = addDays(addYears(base, 1), 30);
     setFormData({
       equipmentId: "",
       category: "hvac",
@@ -730,12 +749,12 @@ const FilterLogBookPage: React.FC = () => {
       filterMicron: "",
       filterSize: "",
       tagInfo: "",
-      installedDate: "",
+      installedDate: today,
       integrityDoneDate: "",
       cleaningDoneDate: "",
-      integrityDueDate: "",
-      cleaningDueDate: "",
-      replacementDueDate: "",
+      integrityDueDate: fmt(integrityDue),
+      cleaningDueDate: fmt(cleaningDue),
+      replacementDueDate: fmt(replacementDue),
       remarks: "",
       date: "",
       time: "",
@@ -781,9 +800,40 @@ const FilterLogBookPage: React.FC = () => {
       toast.error("You must be logged in to submit entries");
       return;
     }
+    // For non-operation activities, do not block submit on all readings fields.
+    if (!formData.equipmentId) {
+      toast.error("Please select Filter (from Register).");
+      return;
+    }
     if (!formData.remarks.trim()) {
       toast.error("Remarks are required.");
       return;
+    }
+    if (maintenanceTimings.activityType === "operation") {
+      const required = [
+        { key: "equipmentId", label: "Filter (from Register)" },
+        { key: "filterNo", label: "Filter No" },
+        { key: "tagInfo", label: "Tag Information" },
+        { key: "filterMicron", label: "Filter Micron" },
+        { key: "filterSize", label: "Filter Size" },
+        { key: "installedDate", label: "Filter Installed Date" },
+        { key: "integrityDoneDate", label: "Integrity Done Date" },
+        { key: "cleaningDoneDate", label: "Cleaning Done Date" },
+        { key: "integrityDueDate", label: "Integrity Due Date" },
+        { key: "cleaningDueDate", label: "Cleaning Due Date" },
+        { key: "replacementDueDate", label: "Replacement Due Date" },
+        { key: "remarks", label: "Remarks" },
+      ] as const;
+
+      const err = firstRequiredFieldError(formData, required as any);
+      if (err) {
+        toast.error(err);
+        return;
+      }
+      if (!selectedEquipmentUuid) {
+        toast.error("Please select Equipment Name (for tag info).");
+        return;
+      }
     }
 
     try {
@@ -804,7 +854,7 @@ const FilterLogBookPage: React.FC = () => {
         filter_micron: formData.filterMicron || null,
         filter_size: formData.filterSize || null,
         tag_info: formData.tagInfo || null,
-        installed_date: formData.installedDate || format(timestampStr, "yyyy-MM-dd"),
+        installed_date: formData.installedDate,
         integrity_done_date: formData.integrityDoneDate || null,
         cleaning_done_date: formData.cleaningDoneDate || null,
         integrity_due_date: formData.integrityDueDate || null,
@@ -1221,7 +1271,7 @@ const FilterLogBookPage: React.FC = () => {
                       <SelectContent className="!z-[9999] max-h-60 overflow-y-auto" position="popper">
                         {equipmentOptions.length === 0 ? (
                           <SelectItem value="__none__" disabled className="text-muted-foreground">
-                            No equipment found. Add and approve Chemical equipments first in Equipment Master.
+                            No equipment found. Assign filters to equipment in Filter Register first.
                           </SelectItem>
                         ) : (
                           equipmentOptions.map((eq) => (
@@ -1487,15 +1537,26 @@ const FilterLogBookPage: React.FC = () => {
               </div>
 
               <div className="space-y-3">
-                <Label className="text-base font-semibold">Equipment Name</Label>
-                <Input
-                  type="text"
-                  value={filters.equipmentId}
-                  onChange={(e) =>
-                    setFilters((prev) => ({ ...prev, equipmentId: e.target.value }))
+                <Label className="text-base font-semibold">Equipment ID (Filter)</Label>
+                <Select
+                  value={filters.equipmentId || "all"}
+                  onValueChange={(v) =>
+                    setFilters((prev) => ({ ...prev, equipmentId: v === "all" ? "" : v }))
                   }
-                  placeholder="e.g., Equipment name"
-                />
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="All" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All</SelectItem>
+                    {filterRegisterOptions.map((f) => (
+                      <SelectItem key={f.id} value={f.filter_id}>
+                        {f.filter_id}
+                        {f.category_name ? ` – ${f.category_name}` : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
 
               <div className="space-y-3">
@@ -1887,9 +1948,15 @@ const FilterLogBookPage: React.FC = () => {
                   const dateStr = format(log.timestamp, "yyyy-MM-dd");
                   const timeStr = format(log.timestamp, "HH:mm:ss");
                   const isSelected = selectedLogIds.includes(log.id);
+                  const tolClass =
+                    log.tolerance_status === "within"
+                      ? "bg-yellow-50/70"
+                      : log.tolerance_status === "outside"
+                      ? "bg-red-50/80"
+                      : "";
 
                   return (
-                    <tr key={log.id} className="border-b hover:bg-muted/40">
+                    <tr key={log.id} className={cn(tolClass, "border-b hover:bg-muted/40")}>
                       <td className="px-3 py-2 align-top">
                         {(log.status === "pending" ||
                           log.status === "draft" ||

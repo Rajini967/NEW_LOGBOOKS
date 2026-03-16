@@ -7,6 +7,7 @@ from rest_framework.response import Response
 from rest_framework.exceptions import ValidationError
 
 from accounts.permissions import IsManagerOrSuperAdmin
+from reports.utils import log_audit_event, log_entity_update_changes
 
 from .models import Department, EquipmentCategory, Equipment
 from .serializers import (
@@ -27,6 +28,29 @@ class DepartmentViewSet(viewsets.ModelViewSet):
         if self.action in ["create", "update", "partial_update", "destroy"]:
             return [IsAuthenticated(), IsManagerOrSuperAdmin()]
         return [IsAuthenticated()]
+
+    def perform_create(self, serializer):
+        instance = serializer.save()
+        log_audit_event(
+            user=self.request.user,
+            event_type="entity_created",
+            object_type="department",
+            object_id=str(instance.id),
+            field_name="created",
+        )
+
+    def perform_update(self, serializer):
+        log_entity_update_changes(serializer, self.request, "department")
+
+    def perform_destroy(self, instance):
+        log_audit_event(
+            user=self.request.user,
+            event_type="entity_deleted",
+            object_type="department",
+            object_id=str(instance.id),
+            field_name="deleted",
+        )
+        instance.delete()
 
 
 class EquipmentCategoryViewSet(viewsets.ModelViewSet):
@@ -60,6 +84,29 @@ class EquipmentCategoryViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+    def perform_create(self, serializer):
+        instance = serializer.save()
+        log_audit_event(
+            user=self.request.user,
+            event_type="entity_created",
+            object_type="equipment_category",
+            object_id=str(instance.id),
+            field_name="created",
+        )
+
+    def perform_update(self, serializer):
+        log_entity_update_changes(serializer, self.request, "equipment_category")
+
+    def perform_destroy(self, instance):
+        log_audit_event(
+            user=self.request.user,
+            event_type="entity_deleted",
+            object_type="equipment_category",
+            object_id=str(instance.id),
+            field_name="deleted",
+        )
+        instance.delete()
+
 
 class EquipmentViewSet(viewsets.ModelViewSet):
     """CRUD for Equipment master."""
@@ -72,11 +119,14 @@ class EquipmentViewSet(viewsets.ModelViewSet):
         qs = super().get_queryset()
         department_id = self.request.query_params.get("department")
         category_id = self.request.query_params.get("category")
+        status_param = self.request.query_params.get("status")
 
         if department_id:
             qs = qs.filter(department_id=department_id)
         if category_id:
             qs = qs.filter(category_id=category_id)
+        if status_param and status_param.lower() == "approved":
+            qs = qs.filter(status="approved")
 
         return qs
 
@@ -111,6 +161,29 @@ class EquipmentViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+    def perform_create(self, serializer):
+        instance = serializer.save()
+        log_audit_event(
+            user=self.request.user,
+            event_type="entity_created",
+            object_type="equipment",
+            object_id=str(instance.id),
+            field_name="created",
+        )
+
+    def perform_update(self, serializer):
+        log_entity_update_changes(serializer, self.request, "equipment")
+
+    def perform_destroy(self, instance):
+        log_audit_event(
+            user=self.request.user,
+            event_type="entity_deleted",
+            object_type="equipment",
+            object_id=str(instance.id),
+            field_name="deleted",
+        )
+        instance.delete()
+
     @action(detail=True, methods=["post"])
     def approve(self, request, pk=None):
         """
@@ -144,6 +217,15 @@ class EquipmentViewSet(viewsets.ModelViewSet):
         equipment.approved_by = request.user
         equipment.approved_at = timezone.now()
         equipment.save(update_fields=["status", "approved_by", "approved_at", "updated_at"])
+
+        log_audit_event(
+            user=request.user,
+            event_type="entity_approved" if action_type == "approve" else "entity_rejected",
+            object_type="equipment",
+            object_id=str(equipment.id),
+            field_name="status",
+            new_value=equipment.status,
+        )
 
         serializer = self.get_serializer(equipment)
         return Response(serializer.data)

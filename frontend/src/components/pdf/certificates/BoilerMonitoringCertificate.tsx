@@ -69,6 +69,8 @@ const styles = StyleSheet.create({
 });
 
 interface BoilerMonitoringData {
+  approvedBy?: string;
+  printedBy?: string;
   logs: Array<{
     date: string;
     time: string;
@@ -138,6 +140,10 @@ export function BoilerMonitoringCertificate({ data }: BoilerMonitoringCertificat
     return false;
   };
 
+  const footerRemarks =
+    data.logs.find((log) => (log.remarks || '').toString().trim().length > 0)?.remarks || '';
+  const doneBy = data.logs[0]?.checkedBy ?? '';
+
   return (
     <Document>
       <Page size="A4" style={styles.page}>
@@ -156,7 +162,7 @@ export function BoilerMonitoringCertificate({ data }: BoilerMonitoringCertificat
             <Text style={[styles.tableCell, { width: '12%' }]}>Steam Pressure</Text>
             <Text style={[styles.tableCell, { width: '12%' }]}>Steam Flow LPH</Text>
             <Text style={[styles.tableCell, { width: '10%' }]}>Remarks</Text>
-            <Text style={[styles.tableCell, { width: '10%' }, styles.tableCellLast]}>Checked By</Text>
+            <Text style={[styles.tableCell, { width: '10%' }, styles.tableCellLast]}>Done By</Text>
           </View>
 
           {/* Limits Row */}
@@ -233,10 +239,11 @@ export function BoilerMonitoringCertificate({ data }: BoilerMonitoringCertificat
           ))}
         </View>
 
-        {/* Footer */}
         <View style={styles.footer}>
-          <Text style={styles.footerLine}>Remarks:</Text>
-          <Text style={styles.footerLine}>Digital sign</Text>
+          <Text style={styles.footerLine}>Remarks: {footerRemarks ? String(footerRemarks) : '-'}</Text>
+          <Text style={styles.footerLine}>Done By: {doneBy || '-'}</Text>
+          <Text style={styles.footerLine}>Approved By: {data.approvedBy || '-'}</Text>
+          <Text style={styles.footerLine}>Printed By: {data.printedBy || '-'}</Text>
         </View>
       </Page>
 

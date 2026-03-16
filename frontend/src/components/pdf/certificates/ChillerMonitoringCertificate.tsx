@@ -76,6 +76,8 @@ type LimitConfig =
   | { type: 'NLT'; min: number; unit: string };
 
 interface ChillerMonitoringData {
+  approvedBy?: string;
+  printedBy?: string;
   logs: Array<{
     date: string;
     time: string;
@@ -165,9 +167,9 @@ export function ChillerMonitoringCertificate({ data }: ChillerMonitoringCertific
     return false;
   };
 
-  // Use first non-empty remarks value from logs for footer
   const footerRemarks =
     data.logs.find((log) => (log.remarks || '').toString().trim().length > 0)?.remarks || '';
+  const doneBy = data.logs[0]?.checkedBy ?? '';
 
   return (
     <Document>
@@ -189,7 +191,7 @@ export function ChillerMonitoringCertificate({ data }: ChillerMonitoringCertific
             <Text style={[styles.tableCell, { width: '9%' }]}>Chiller water inlet pressure</Text>
             <Text style={[styles.tableCell, { width: '7%' }]}>Chiller make up water Flow</Text>
             <Text style={[styles.tableCell, { width: '9%' }]}>Remarks</Text>
-            <Text style={[styles.tableCell, { width: '9%' }, styles.tableCellLast]}>Checked By</Text>
+            <Text style={[styles.tableCell, { width: '9%' }, styles.tableCellLast]}>Done By</Text>
           </View>
 
           {/* Limits Row */}
@@ -284,6 +286,12 @@ export function ChillerMonitoringCertificate({ data }: ChillerMonitoringCertific
           ))}
         </View>
 
+        <View style={styles.footer}>
+          <Text style={styles.footerLine}>Remarks: {footerRemarks ? String(footerRemarks) : '-'}</Text>
+          <Text style={styles.footerLine}>Done By: {doneBy || '-'}</Text>
+          <Text style={styles.footerLine}>Approved By: {data.approvedBy || '-'}</Text>
+          <Text style={styles.footerLine}>Printed By: {data.printedBy || '-'}</Text>
+        </View>
       </Page>
 
       {/* DETAILS – All parameters on one page */}

@@ -1,7 +1,7 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Header } from '@/components/layout/Header';
-import { Thermometer, Gauge, Droplets, Filter as FilterIcon } from 'lucide-react';
+import { Thermometer, Gauge, Droplets, Filter as FilterIcon, BarChart3 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
 
@@ -46,6 +46,14 @@ const equipmentModules: EquipmentModule[] = [
     path: '/e-log-book/filter',
     icon: FilterIcon,
     color: 'bg-teal-500',
+  },
+  {
+    id: 'consumption',
+    name: 'Consumption',
+    description: 'View weekly consumption across chemical, steam, and fuel',
+    path: '/e-log-book/consumption',
+    icon: BarChart3,
+    color: 'bg-violet-500',
   },
 ];
 

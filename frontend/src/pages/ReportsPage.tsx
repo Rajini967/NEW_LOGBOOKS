@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/select';
 import {
   Dialog,
+  DialogTrigger,
   DialogContent,
   DialogHeader,
   DialogTitle,
@@ -32,6 +33,7 @@ import {
   Search,
   Eye,
   Printer,
+  X,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
@@ -45,8 +47,10 @@ import {
   generateChillerMonitoringPDF,
   generateBoilerMonitoringPDF,
   generateChemicalMonitoringPDF,
+  generateFilterMonitoringPDF,
   downloadPDF,
   printPDF,
+  type MonitoringPDFData,
 } from '@/lib/pdf-generator';
 import {
   reportsAPI,
@@ -57,6 +61,8 @@ import {
   hvacValidationAPI,
   testCertificateAPI,
   filterMasterAPI,
+  filterLogAPI,
+  equipmentAPI,
 } from '@/lib/api';
 
 type ApprovedReportType =
@@ -151,6 +157,14 @@ const auditEventLabels: Record<string, string> = {
   config_update: 'Config Update',
   log_update: 'Log Update',
   log_correction: 'Log Correction',
+  log_created: 'Log Created',
+  log_deleted: 'Log Deleted',
+  entity_created: 'Entity Created',
+  entity_updated: 'Entity Updated',
+  entity_deleted: 'Entity Deleted',
+  entity_approved: 'Entity Approved',
+  entity_rejected: 'Entity Rejected',
+  consumption_updated: 'Consumption Updated',
   user_created: 'User created',
   password_changed: 'Password changed',
   user_locked: 'User locked',
@@ -238,6 +252,18 @@ export default function ReportsPage() {
   const [auditEventType, setAuditEventType] = useState<string>('all');
   const [auditObjectType, setAuditObjectType] = useState<string>('all');
   const [auditObjectId, setAuditObjectId] = useState<string>('');
+  const [auditViewRow, setAuditViewRow] = useState<AuditEventRow | null>(null);
+
+  const [reportFilterOpen, setReportFilterOpen] = useState(false);
+  const [reportFilters, setReportFilters] = useState<{
+    fromDate: string;
+    toDate: string;
+    fromTime: string;
+    toTime: string;
+    equipmentId: string;
+    createdBy: string;
+  }>({ fromDate: '', toDate: '', fromTime: '', toTime: '', equipmentId: '', createdBy: '' });
+  const [equipmentOptions, setEquipmentOptions] = useState<{ value: string; label: string }[]>([]);
 
   const isSupervisor = user?.role === 'supervisor' || user?.role === 'super_admin';
   const isManager = user?.role === 'manager';
@@ -246,15 +272,53 @@ export default function ReportsPage() {
   const canSeeActivity = !isCustomer && (isSupervisor || isManager || user?.role === 'super_admin');
   const canSeeAudit = !isCustomer && (isSupervisor || isManager || user?.role === 'super_admin');
 
+  const reportCreatedByOptions = useMemo(() => {
+    const unique = Array.from(new Set(reports.map((r) => r.createdBy).filter(Boolean))) as string[];
+    return unique.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  }, [reports]);
+
+  const activeReportFilterCount = useMemo(
+    () =>
+      [
+        reportFilters.fromDate,
+        reportFilters.toDate,
+        reportFilters.fromTime,
+        reportFilters.toTime,
+        reportFilters.equipmentId,
+        reportFilters.createdBy,
+      ].filter(Boolean).length,
+    [reportFilters]
+  );
+
   const filteredReports = reports.filter(report => {
     // Only show approved reports
     if (report.status !== 'approved') return false;
-    
+
     const matchesType = filterType === 'all' || report.type === filterType;
-    const matchesSearch = report.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         report.id.toLowerCase().includes(searchQuery.toLowerCase());
-    
-    return matchesType && matchesSearch;
+    const matchesSearch =
+      report.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      report.id.toLowerCase().includes(searchQuery.toLowerCase());
+
+    if (!matchesType || !matchesSearch) return false;
+
+    if (reportFilters.fromDate) {
+      const fromStart = new Date(reportFilters.fromDate);
+      fromStart.setHours(0, 0, 0, 0);
+      if (report.createdAt < fromStart) return false;
+    }
+    if (reportFilters.toDate) {
+      const toEnd = new Date(reportFilters.toDate);
+      toEnd.setHours(23, 59, 59, 999);
+      if (report.createdAt > toEnd) return false;
+    }
+    if (reportFilters.equipmentId && report.site !== reportFilters.equipmentId) return false;
+    if (reportFilters.createdBy && report.createdBy !== reportFilters.createdBy) return false;
+
+    const reportTime = format(report.createdAt, 'HH:mm');
+    if (reportFilters.fromTime && reportTime < reportFilters.fromTime) return false;
+    if (reportFilters.toTime && reportTime > reportFilters.toTime) return false;
+
+    return true;
   });
 
   // Check if all visible reports are selected
@@ -307,6 +371,37 @@ export default function ReportsPage() {
       clearInterval(intervalId);
     };
   }, [loadReportsFromAPI]);
+
+  useEffect(() => {
+    const loadEquipmentOptions = async () => {
+      try {
+        const [equipmentList, filterList] = await Promise.all([
+          equipmentAPI.list(),
+          filterMasterAPI.list({ status: 'approved' }),
+        ]);
+        const eqItems = (Array.isArray(equipmentList) ? equipmentList : [])
+          .filter((e: any) => e?.is_active !== false && e?.status === 'approved')
+          .map((e: any) => ({
+            value: e.equipment_number,
+            label: `${e.equipment_number} - ${e.name || ''}`.trim(),
+          }));
+        const filterItems = (Array.isArray(filterList) ? filterList : [])
+          .filter((f: any) => f?.filter_id)
+          .map((f: any) => ({
+            value: f.filter_id,
+            label: `${f.filter_id} - ${f.category_name ?? f.category?.name ?? ''}`.trim(),
+          }));
+        const combined = [...eqItems, ...filterItems].sort((a, b) =>
+          a.value.localeCompare(b.value, undefined, { sensitivity: 'base' })
+        );
+        setEquipmentOptions(combined);
+      } catch (err) {
+        console.error('Failed to load equipment options for report filter', err);
+        setEquipmentOptions([]);
+      }
+    };
+    loadEquipmentOptions();
+  }, []);
 
   const loadUserReports = useCallback(
     async (params?: { role?: string; is_active?: string; activity_date?: string }) => {
@@ -392,6 +487,108 @@ export default function ReportsPage() {
     },
     [],
   );
+
+  const handleAuditView = (row: AuditEventRow) => setAuditViewRow(row);
+  const handleAuditDownload = (row: AuditEventRow) => {
+    const blob = new Blob([JSON.stringify(row, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `audit-event-${row.id}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success('Audit event downloaded');
+  };
+  const handleAuditPrint = (row: AuditEventRow) => {
+    const rowHtml = `
+      <tr>
+        <td>${row.timestamp ? format(new Date(row.timestamp), 'dd/MM/yy HH:mm') : ''}</td>
+        <td>${row.user_email ?? row.target_user_email ?? ''}</td>
+        <td>${auditEventLabels[row.event_type] ?? row.event_type}</td>
+        <td>${row.object_type}</td>
+        <td>${row.object_id ?? ''}</td>
+        <td>${row.field_name}</td>
+        <td>${row.old_value ?? ''}</td>
+        <td>${row.new_value ?? ''}</td>
+      </tr>`;
+    const html = `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Audit Event</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; }
+            h1 { margin-bottom: 16px; }
+            table { width: 100%; border-collapse: collapse; }
+            th, td { border: 1px solid #ccc; padding: 6px 8px; font-size: 12px; }
+            th { background: #f5f5f5; }
+          </style>
+        </head>
+        <body>
+          <h1>Audit Event</h1>
+          <table>
+            <thead>
+              <tr>
+                <th>Date/Time</th>
+                <th>User Email</th>
+                <th>Event</th>
+                <th>Object Type</th>
+                <th>Object ID</th>
+                <th>Field</th>
+                <th>Old Value</th>
+                <th>New Value</th>
+              </tr>
+            </thead>
+            <tbody>${rowHtml}</tbody>
+          </table>
+        </body>
+      </html>`;
+
+    const iframe = document.createElement('iframe');
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = 'none';
+    iframe.style.opacity = '0';
+    iframe.style.pointerEvents = 'none';
+    iframe.style.visibility = 'hidden';
+    iframe.style.zIndex = '-1';
+    document.body.appendChild(iframe);
+
+    const doc = iframe.contentDocument;
+    if (!doc) {
+      document.body.removeChild(iframe);
+      toast.error('Print failed');
+      return;
+    }
+    doc.open();
+    doc.write(html);
+    doc.close();
+
+    const triggerPrint = () => {
+      try {
+        if (iframe.contentWindow) {
+          iframe.contentWindow.focus();
+          iframe.contentWindow.print();
+          toast.success('Opening print dialog...');
+        }
+      } catch (e) {
+        console.error('Error triggering print:', e);
+        toast.error('Print failed');
+      }
+      setTimeout(() => {
+        if (iframe.parentNode) document.body.removeChild(iframe);
+      }, 500);
+    };
+
+    if (iframe.contentWindow?.document.readyState === 'complete') {
+      triggerPrint();
+    } else {
+      iframe.onload = triggerPrint;
+    }
+  };
 
   // Read URL params on mount (e.g. from "View history" link on log pages)
   useEffect(() => {
@@ -587,10 +784,9 @@ export default function ReportsPage() {
     const { sourceId, sourceTable } = report.originalData || {};
     if (!sourceTable) return null;
 
-    // For utility (E Log Book) reports we only need equipmentType.
-    // Derive it from the sourceTable so export/print still works even
-    // if the original log record has been deleted.
-    if (report.type === 'utility') {
+    // For utility (E Log Book) reports without sourceId, return minimal equipmentType
+    // so export/print can still show type when the original log was deleted.
+    if (report.type === 'utility' && !sourceId) {
       if (sourceTable === 'chiller_logs') {
         return { equipmentType: 'chiller' };
       }
@@ -603,6 +799,9 @@ export default function ReportsPage() {
       if (sourceTable === 'chemical_preparations') {
         return { equipmentType: 'chemical' };
       }
+      if (sourceTable === 'filter_logs') {
+        return { equipmentType: 'filter' };
+      }
     }
 
     if (!sourceId) return null;
@@ -614,6 +813,7 @@ export default function ReportsPage() {
         'boiler_logs': (id) => boilerLogAPI.get(id),
         'compressor_logs': (id) => compressorLogAPI.get(id),
         'chemical_preparations': (id) => chemicalPrepAPI.get(id),
+        'filter_logs': (id) => filterLogAPI.get(id),
         'hvac_validations': (id) => hvacValidationAPI.get(id),
         'filter_master': (id) => filterMasterAPI.get(id),
         'air_velocity_tests': (id) => testCertificateAPI.airVelocity.get(id),
@@ -640,6 +840,8 @@ export default function ReportsPage() {
         return { ...data, equipmentType: 'compressor' };
       } else if (sourceTable === 'chemical_preparations') {
         return { ...data, equipmentType: 'chemical' };
+      } else if (sourceTable === 'filter_logs') {
+        return { ...data, equipmentType: 'filter' };
       } else if (sourceTable === 'filter_master') {
         return { ...data, reportType: 'filter_register' };
       } else if (sourceTable === 'air_velocity_tests') {
@@ -1015,7 +1217,8 @@ export default function ReportsPage() {
             status: l.status,
             raw: l,
           }));
-          const blob = await generateChillerMonitoringPDF({ logs: allLogs });
+          const chillerPdfData: MonitoringPDFData = { logs: allLogs, approvedBy: report.approvedBy, printedBy: user?.name || user?.email || '' };
+          const blob = await generateChillerMonitoringPDF(chillerPdfData);
           downloadPDF(blob, 'Chiller Monitoring.pdf');
           toast.success('PDF generated successfully');
           return;
@@ -1065,7 +1268,8 @@ export default function ReportsPage() {
             status: l.status,
             raw: l,
           }));
-          const blob = await generateBoilerMonitoringPDF({ logs: allLogs });
+          const boilerPdfData: MonitoringPDFData = { logs: allLogs, approvedBy: report.approvedBy, printedBy: user?.name || user?.email || '' };
+          const blob = await generateBoilerMonitoringPDF(boilerPdfData);
           downloadPDF(blob, 'Boiler Monitoring.pdf');
           toast.success('PDF generated successfully');
           return;
@@ -1094,8 +1298,33 @@ export default function ReportsPage() {
             status: l.status,
             raw: l,
           }));
-          const blob = await generateChemicalMonitoringPDF({ logs: allLogs });
+          const chemicalPdfData: MonitoringPDFData = { logs: allLogs, approvedBy: report.approvedBy, printedBy: user?.name || user?.email || '' };
+          const blob = await generateChemicalMonitoringPDF(chemicalPdfData);
           downloadPDF(blob, 'Chemical Monitoring.pdf');
+          toast.success('PDF generated successfully');
+          return;
+        } else if (log.equipmentType === 'filter') {
+          const fd = (val: string | null | undefined) => (val ? format(new Date(val), 'dd/MM/yyyy') : '');
+          const filterPdfLog = {
+            date: log.timestamp ? format(new Date(log.timestamp), 'dd/MM/yy') : '',
+            time: log.timestamp ? format(new Date(log.timestamp), 'HH:mm') : '',
+            equipmentId: log.equipment_id ?? '',
+            category: log.category ?? '',
+            filterNo: log.filter_no ?? '',
+            filterMicron: log.filter_micron ?? '',
+            filterSize: log.filter_size ?? '',
+            installedDate: fd(log.installed_date),
+            integrityDoneDate: fd(log.integrity_done_date),
+            integrityDueDate: fd(log.integrity_due_date),
+            cleaningDoneDate: fd(log.cleaning_done_date),
+            cleaningDueDate: fd(log.cleaning_due_date),
+            replacementDueDate: fd(log.replacement_due_date),
+            remarks: log.remarks ?? '',
+            checkedBy: log.operator_name ?? '',
+          };
+          const filterPdfData: MonitoringPDFData = { logs: [filterPdfLog], approvedBy: report.approvedBy, printedBy: user?.name || user?.email || '' };
+          const blob = await generateFilterMonitoringPDF(filterPdfData);
+          downloadPDF(blob, 'Filter Monitoring.pdf');
           toast.success('PDF generated successfully');
           return;
         }
@@ -1300,6 +1529,32 @@ export default function ReportsPage() {
         <div class="info"><span class="label">Water Qty:</span><span class="value">${log.waterQty !== undefined ? log.waterQty + ' L' : 'N/A'}</span></div>
         <div class="info"><span class="label">Chemical Qty:</span><span class="value">${log.chemicalQty !== undefined ? log.chemicalQty + ' G' : 'N/A'}</span></div>
       `;
+    } else if (log.equipmentType === 'filter') {
+      const fd = (val: string | null | undefined) => (val ? format(new Date(val), 'dd/MM/yyyy') : 'N/A');
+      const ft = (val: string | null | undefined) => (val ? format(new Date('1970-01-01T' + val), 'HH:mm') : 'N/A');
+      const v = (val: string | null | undefined) => (val != null && val !== '' ? String(val) : 'N/A');
+      detailsHTML += `
+        <div class="info"><span class="label">Equipment ID:</span><span class="value">${v(log.equipment_id ?? log.equipmentId)}</span></div>
+        <div class="info"><span class="label">Category:</span><span class="value">${v(log.category)}</span></div>
+        <div class="info"><span class="label">Filter No:</span><span class="value">${v(log.filter_no ?? log.filterNo)}</span></div>
+        <div class="info"><span class="label">Filter Micron:</span><span class="value">${v(log.filter_micron ?? log.filterMicron)}</span></div>
+        <div class="info"><span class="label">Filter Size:</span><span class="value">${v(log.filter_size ?? log.filterSize)}</span></div>
+        <div class="info"><span class="label">Tag Info:</span><span class="value">${v(log.tag_info ?? log.tagInfo)}</span></div>
+        <div class="info"><span class="label">Activity Type:</span><span class="value">${v(log.activity_type ?? log.activityType)}</span></div>
+        <div class="info"><span class="label">Activity From Date:</span><span class="value">${fd(log.activity_from_date ?? log.activityFromDate)}</span></div>
+        <div class="info"><span class="label">Activity To Date:</span><span class="value">${fd(log.activity_to_date ?? log.activityToDate)}</span></div>
+        <div class="info"><span class="label">Activity From Time:</span><span class="value">${ft(log.activity_from_time ?? log.activityFromTime)}</span></div>
+        <div class="info"><span class="label">Activity To Time:</span><span class="value">${ft(log.activity_to_time ?? log.activityToTime)}</span></div>
+        <div class="info"><span class="label">Installed Date:</span><span class="value">${fd(log.installed_date ?? log.installedDate)}</span></div>
+        <div class="info"><span class="label">Integrity Done Date:</span><span class="value">${fd(log.integrity_done_date ?? log.integrityDoneDate)}</span></div>
+        <div class="info"><span class="label">Integrity Due Date:</span><span class="value">${fd(log.integrity_due_date ?? log.integrityDueDate)}</span></div>
+        <div class="info"><span class="label">Cleaning Done Date:</span><span class="value">${fd(log.cleaning_done_date ?? log.cleaningDoneDate)}</span></div>
+        <div class="info"><span class="label">Cleaning Due Date:</span><span class="value">${fd(log.cleaning_due_date ?? log.cleaningDueDate)}</span></div>
+        <div class="info"><span class="label">Replacement Due Date:</span><span class="value">${fd(log.replacement_due_date ?? log.replacementDueDate)}</span></div>
+        <div class="info"><span class="label">Remarks:</span><span class="value">${v(log.remarks)}</span></div>
+        <div class="info"><span class="label">Operator Name:</span><span class="value">${v(log.operator_name ?? log.operatorName)}</span></div>
+        <div class="info"><span class="label">Timestamp:</span><span class="value">${log.timestamp ? format(new Date(log.timestamp), 'dd/MM/yyyy HH:mm') : 'N/A'}</span></div>
+      `;
     }
     
     return detailsHTML;
@@ -1462,7 +1717,8 @@ export default function ReportsPage() {
             status: l.status,
             raw: l,
           }));
-          const blob = await generateChillerMonitoringPDF({ logs: allLogs });
+          const chillerPdfData: MonitoringPDFData = { logs: allLogs, approvedBy: report.approvedBy, printedBy: user?.name || user?.email || '' };
+          const blob = await generateChillerMonitoringPDF(chillerPdfData);
           const success = printPDF(blob);
           if (success) {
             toast.success('Opening print dialog...');
@@ -1516,7 +1772,8 @@ export default function ReportsPage() {
             status: l.status,
             raw: l,
           }));
-          const blob = await generateBoilerMonitoringPDF({ logs: allLogs });
+          const boilerPdfData: MonitoringPDFData = { logs: allLogs, approvedBy: report.approvedBy, printedBy: user?.name || user?.email || '' };
+          const blob = await generateBoilerMonitoringPDF(boilerPdfData);
           const success = printPDF(blob);
           if (success) {
             toast.success('Opening print dialog...');
@@ -1549,7 +1806,36 @@ export default function ReportsPage() {
             status: l.status,
             raw: l,
           }));
-          const blob = await generateChemicalMonitoringPDF({ logs: allLogs });
+          const chemicalPdfData: MonitoringPDFData = { logs: allLogs, approvedBy: report.approvedBy, printedBy: user?.name || user?.email || '' };
+          const blob = await generateChemicalMonitoringPDF(chemicalPdfData);
+          const success = printPDF(blob);
+          if (success) {
+            toast.success('Opening print dialog...');
+          } else {
+            toast.error('Please allow popups to print PDFs');
+          }
+          return;
+        } else if (log.equipmentType === 'filter') {
+          const fd = (val: string | null | undefined) => (val ? format(new Date(val), 'dd/MM/yyyy') : '');
+          const filterPdfLog = {
+            date: log.timestamp ? format(new Date(log.timestamp), 'dd/MM/yy') : '',
+            time: log.timestamp ? format(new Date(log.timestamp), 'HH:mm') : '',
+            equipmentId: log.equipment_id ?? '',
+            category: log.category ?? '',
+            filterNo: log.filter_no ?? '',
+            filterMicron: log.filter_micron ?? '',
+            filterSize: log.filter_size ?? '',
+            installedDate: fd(log.installed_date),
+            integrityDoneDate: fd(log.integrity_done_date),
+            integrityDueDate: fd(log.integrity_due_date),
+            cleaningDoneDate: fd(log.cleaning_done_date),
+            cleaningDueDate: fd(log.cleaning_due_date),
+            replacementDueDate: fd(log.replacement_due_date),
+            remarks: log.remarks ?? '',
+            checkedBy: log.operator_name ?? '',
+          };
+          const filterPdfData: MonitoringPDFData = { logs: [filterPdfLog], approvedBy: report.approvedBy, printedBy: user?.name || user?.email || '' };
+          const blob = await generateFilterMonitoringPDF(filterPdfData);
           const success = printPDF(blob);
           if (success) {
             toast.success('Opening print dialog...');
@@ -1681,7 +1967,7 @@ export default function ReportsPage() {
         ) : (
           <>
             {/* Stats */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
               <div className="metric-card">
                 <p className="data-label">Total Approved Reports</p>
                 <p className="reading-display text-2xl text-success">
@@ -1689,21 +1975,27 @@ export default function ReportsPage() {
                 </p>
               </div>
               <div className="metric-card">
-                <p className="data-label">E Log Book</p>
+                <p className="data-label">Chiller</p>
                 <p className="reading-display text-2xl">
-                  {reports.filter(r => r.status === 'approved' && r.type === 'utility').length}
+                  {reports.filter(r => r.status === 'approved' && r.type === 'utility' && r.originalData?.sourceTable === 'chiller_logs').length}
                 </p>
               </div>
               <div className="metric-card">
-                <p className="data-label">Test Certificates</p>
+                <p className="data-label">Boiler</p>
                 <p className="reading-display text-2xl">
-                  {reports.filter(r => r.status === 'approved' && ['air_velocity', 'filter_integrity', 'recovery', 'differential_pressure', 'nvpc'].includes(r.type)).length}
+                  {reports.filter(r => r.status === 'approved' && r.type === 'utility' && r.originalData?.sourceTable === 'boiler_logs').length}
                 </p>
               </div>
               <div className="metric-card">
-                <p className="data-label">HVAC Validations</p>
+                <p className="data-label">Chemical</p>
                 <p className="reading-display text-2xl">
-                  {reports.filter(r => r.status === 'approved' && r.type === 'validation').length}
+                  {reports.filter(r => r.status === 'approved' && (r.type === 'chemical' || (r.type === 'utility' && r.originalData?.sourceTable === 'chemical_preparations'))).length}
+                </p>
+              </div>
+              <div className="metric-card">
+                <p className="data-label">Filter</p>
+                <p className="reading-display text-2xl">
+                  {reports.filter(r => r.status === 'approved' && r.type === 'utility' && r.originalData?.sourceTable === 'filter_logs').length}
                 </p>
               </div>
             </div>
@@ -1719,6 +2011,171 @@ export default function ReportsPage() {
               className="pl-9"
             />
           </div>
+
+          <Dialog open={reportFilterOpen} onOpenChange={setReportFilterOpen}>
+            <DialogTrigger asChild>
+              <Button variant="outline" className="relative">
+                <Filter className="w-4 h-4 mr-2" />
+                Filter
+                {activeReportFilterCount > 0 && (
+                  <span className="ml-2 px-1.5 py-0.5 text-xs font-semibold bg-primary text-primary-foreground rounded-full">
+                    {activeReportFilterCount}
+                  </span>
+                )}
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="sm:max-w-[500px] max-h-[90vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  <Filter className="w-5 h-5" />
+                  Filter Reports
+                </DialogTitle>
+                <DialogDescription>
+                  Filter by date range, time range, equipment ID, and created by.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-6 py-4">
+                <div className="space-y-3">
+                  <Label className="text-base font-semibold">Date Range</Label>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>From Date</Label>
+                      <Input
+                        type="date"
+                        value={reportFilters.fromDate}
+                        onChange={(e) =>
+                          setReportFilters((prev) => ({ ...prev, fromDate: e.target.value }))
+                        }
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>To Date</Label>
+                      <Input
+                        type="date"
+                        value={reportFilters.toDate}
+                        onChange={(e) =>
+                          setReportFilters((prev) => ({ ...prev, toDate: e.target.value }))
+                        }
+                        min={reportFilters.fromDate}
+                      />
+                    </div>
+                  </div>
+                </div>
+                <div className="space-y-3">
+                  <Label className="text-base font-semibold">Time Range (Optional)</Label>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>From Time</Label>
+                      <Input
+                        type="time"
+                        value={reportFilters.fromTime}
+                        onChange={(e) =>
+                          setReportFilters((prev) => ({ ...prev, fromTime: e.target.value }))
+                        }
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>To Time</Label>
+                      <Input
+                        type="time"
+                        value={reportFilters.toTime}
+                        onChange={(e) =>
+                          setReportFilters((prev) => ({ ...prev, toTime: e.target.value }))
+                        }
+                        min={reportFilters.fromTime}
+                      />
+                    </div>
+                  </div>
+                </div>
+                <div className="space-y-3">
+                  <Label className="text-base font-semibold">Equipment ID</Label>
+                  <Select
+                    value={reportFilters.equipmentId || 'all'}
+                    onValueChange={(v) =>
+                      setReportFilters((prev) => ({
+                        ...prev,
+                        equipmentId: v === 'all' ? '' : v,
+                      }))
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="All" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All</SelectItem>
+                      {equipmentOptions.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-3">
+                  <Label className="text-base font-semibold">Created By</Label>
+                  <Select
+                    value={reportFilters.createdBy || 'all'}
+                    onValueChange={(v) =>
+                      setReportFilters((prev) => ({
+                        ...prev,
+                        createdBy: v === 'all' ? '' : v,
+                      }))
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="All" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All</SelectItem>
+                      {reportCreatedByOptions.map((email) => (
+                        <SelectItem key={email} value={email}>
+                          {email}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="flex justify-end gap-2 pt-4 border-t">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    setReportFilters({
+                      fromDate: '',
+                      toDate: '',
+                      fromTime: '',
+                      toTime: '',
+                      equipmentId: '',
+                      createdBy: '',
+                    });
+                    setReportFilterOpen(false);
+                    toast.success('Filters cleared');
+                  }}
+                >
+                  <X className="w-4 h-4 mr-2" />
+                  Clear Filters
+                </Button>
+                <Button type="button" variant="outline" onClick={() => setReportFilterOpen(false)}>
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  variant="accent"
+                  onClick={() => {
+                    setReportFilterOpen(false);
+                    toast.success(
+                      activeReportFilterCount > 0
+                        ? `Showing ${filteredReports.length} report(s)`
+                        : 'Filters applied'
+                    );
+                  }}
+                >
+                  Apply Filters
+                </Button>
+              </div>
+            </DialogContent>
+          </Dialog>
 
           <div className="flex items-center gap-2">
             <Filter className="w-4 h-4 text-muted-foreground" />
@@ -2526,6 +2983,14 @@ export default function ReportsPage() {
                     <SelectItem value="config_update">Config Update</SelectItem>
                     <SelectItem value="log_update">Log Update</SelectItem>
                     <SelectItem value="log_correction">Log Correction</SelectItem>
+                    <SelectItem value="log_created">Log Created</SelectItem>
+                    <SelectItem value="log_deleted">Log Deleted</SelectItem>
+                    <SelectItem value="entity_created">Entity Created</SelectItem>
+                    <SelectItem value="entity_updated">Entity Updated</SelectItem>
+                    <SelectItem value="entity_deleted">Entity Deleted</SelectItem>
+                    <SelectItem value="entity_approved">Entity Approved</SelectItem>
+                    <SelectItem value="entity_rejected">Entity Rejected</SelectItem>
+                    <SelectItem value="consumption_updated">Consumption Updated</SelectItem>
                     <SelectItem value="user_created">User created</SelectItem>
                     <SelectItem value="password_changed">Password changed</SelectItem>
                     <SelectItem value="user_locked">User locked</SelectItem>
@@ -2575,19 +3040,13 @@ export default function ReportsPage() {
                 variant="outline"
                 size="sm"
                 onClick={() => {
-                  const printWindow = window.open('', '_blank');
-                  if (!printWindow) {
-                    toast.error('Please allow popups to export PDF');
-                    return;
-                  }
-
                   const rowsHtml = auditRows
                     .map(
                       (row) => `
                         <tr>
                           <td>${row.timestamp ? format(new Date(row.timestamp), 'dd/MM/yy HH:mm') : ''}</td>
                           <td>${row.user_email || row.target_user_email || ''}</td>
-                          <td>${row.event_type}</td>
+                          <td>${auditEventLabels[row.event_type] ?? row.event_type}</td>
                           <td>${row.object_type}</td>
                           <td>${row.object_id || ''}</td>
                           <td>${row.field_name}</td>
@@ -2598,7 +3057,7 @@ export default function ReportsPage() {
                     )
                     .join('');
 
-                  printWindow.document.write(`
+                  const html = `
                     <!DOCTYPE html>
                     <html>
                       <head>
@@ -2630,13 +3089,53 @@ export default function ReportsPage() {
                             ${rowsHtml}
                           </tbody>
                         </table>
-                        <script>
-                          window.onload = function() { window.print(); };
-                        </script>
                       </body>
-                    </html>
-                  `);
-                  printWindow.document.close();
+                    </html>`;
+
+                  const iframe = document.createElement('iframe');
+                  iframe.style.position = 'fixed';
+                  iframe.style.right = '0';
+                  iframe.style.bottom = '0';
+                  iframe.style.width = '0';
+                  iframe.style.height = '0';
+                  iframe.style.border = 'none';
+                  iframe.style.opacity = '0';
+                  iframe.style.pointerEvents = 'none';
+                  iframe.style.visibility = 'hidden';
+                  iframe.style.zIndex = '-1';
+                  document.body.appendChild(iframe);
+
+                  const doc = iframe.contentDocument;
+                  if (!doc) {
+                    document.body.removeChild(iframe);
+                    toast.error('Print failed');
+                    return;
+                  }
+                  doc.open();
+                  doc.write(html);
+                  doc.close();
+
+                  const triggerPrint = () => {
+                    try {
+                      if (iframe.contentWindow) {
+                        iframe.contentWindow.focus();
+                        iframe.contentWindow.print();
+                        toast.success('Opening print dialog...');
+                      }
+                    } catch (e) {
+                      console.error('Error triggering print:', e);
+                      toast.error('Print failed');
+                    }
+                    setTimeout(() => {
+                      if (iframe.parentNode) document.body.removeChild(iframe);
+                    }, 500);
+                  };
+
+                  if (iframe.contentWindow?.document.readyState === 'complete') {
+                    triggerPrint();
+                  } else {
+                    iframe.onload = triggerPrint;
+                  }
                 }}
               >
                 <Printer className="w-4 h-4 mr-2" />
@@ -2678,6 +3177,9 @@ export default function ReportsPage() {
                         <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
                           New Value
                         </th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                          Actions
+                        </th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
@@ -2695,12 +3197,40 @@ export default function ReportsPage() {
                           <td className="px-4 py-3 text-sm">{row.field_name}</td>
                           <td className="px-4 py-3 text-sm">{row.old_value}</td>
                           <td className="px-4 py-3 text-sm">{row.new_value}</td>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-1">
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => handleAuditView(row)}
+                                title="View"
+                              >
+                                <Eye className="w-4 h-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => handleAuditDownload(row)}
+                                title="Download"
+                              >
+                                <Download className="w-4 h-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => handleAuditPrint(row)}
+                                title="Print"
+                              >
+                                <Printer className="w-4 h-4" />
+                              </Button>
+                            </div>
+                          </td>
                         </tr>
                       ))}
                       {auditRows.length === 0 && (
                         <tr>
                           <td
-                            colSpan={8}
+                            colSpan={9}
                             className="px-4 py-6 text-center text-sm text-muted-foreground"
                           >
                             No audit events found for selected filters.
@@ -2712,6 +3242,58 @@ export default function ReportsPage() {
                 </div>
               )}
             </div>
+
+            {/* Audit Event View Dialog */}
+            <Dialog open={!!auditViewRow} onOpenChange={(open) => !open && setAuditViewRow(null)}>
+              <DialogContent className="sm:max-w-[500px]">
+                <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2">
+                    <Eye className="w-5 h-5" />
+                    Audit Event Details
+                  </DialogTitle>
+                </DialogHeader>
+                {auditViewRow && (
+                  <div className="space-y-3 text-sm">
+                    <div>
+                      <Label className="text-xs text-muted-foreground">Date/Time</Label>
+                      <p className="font-medium">
+                        {auditViewRow.timestamp
+                          ? format(new Date(auditViewRow.timestamp), 'PPpp')
+                          : '—'}
+                      </p>
+                    </div>
+                    <div>
+                      <Label className="text-xs text-muted-foreground">User Email</Label>
+                      <p className="font-medium">{auditViewRow.user_email ?? auditViewRow.target_user_email ?? '—'}</p>
+                    </div>
+                    <div>
+                      <Label className="text-xs text-muted-foreground">Event</Label>
+                      <p className="font-medium">{auditEventLabels[auditViewRow.event_type] ?? auditViewRow.event_type}</p>
+                    </div>
+                    <div>
+                      <Label className="text-xs text-muted-foreground">Object Type</Label>
+                      <p className="font-medium">{auditViewRow.object_type}</p>
+                    </div>
+                    <div>
+                      <Label className="text-xs text-muted-foreground">Object ID</Label>
+                      <p className="font-medium break-all">{auditViewRow.object_id ?? '—'}</p>
+                    </div>
+                    <div>
+                      <Label className="text-xs text-muted-foreground">Field</Label>
+                      <p className="font-medium">{auditViewRow.field_name}</p>
+                    </div>
+                    <div>
+                      <Label className="text-xs text-muted-foreground">Old Value</Label>
+                      <p className="font-medium break-all">{auditViewRow.old_value ?? '—'}</p>
+                    </div>
+                    <div>
+                      <Label className="text-xs text-muted-foreground">New Value</Label>
+                      <p className="font-medium break-all">{auditViewRow.new_value ?? '—'}</p>
+                    </div>
+                  </div>
+                )}
+              </DialogContent>
+            </Dialog>
           </div>
         )}
       </div>

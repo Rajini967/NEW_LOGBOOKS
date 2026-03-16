@@ -55,11 +55,28 @@ class ChemicalAssignmentSerializer(serializers.ModelSerializer):
     chemical_formula = serializers.SerializerMethodField()
     location = serializers.SerializerMethodField()
     created_by_name = serializers.SerializerMethodField()
+    created_by_id = serializers.UUIDField(source="created_by.id", read_only=True, allow_null=True)
+    approved_by_id = serializers.UUIDField(source="approved_by.id", read_only=True, allow_null=True)
+    rejected_by_id = serializers.UUIDField(source="rejected_by.id", read_only=True, allow_null=True)
+    approved_by_name = serializers.SerializerMethodField()
+    rejected_by_name = serializers.SerializerMethodField()
 
     def get_created_by_name(self, obj):
         if not obj.created_by_id:
             return ""
         u = obj.created_by
+        return (u.name and u.name.strip()) or u.email or ""
+
+    def get_approved_by_name(self, obj):
+        if not obj.approved_by_id:
+            return ""
+        u = obj.approved_by
+        return (u.name and u.name.strip()) or u.email or ""
+
+    def get_rejected_by_name(self, obj):
+        if not obj.rejected_by_id:
+            return ""
+        u = obj.rejected_by
         return (u.name and u.name.strip()) or u.email or ""
 
     class Meta:
@@ -73,12 +90,26 @@ class ChemicalAssignmentSerializer(serializers.ModelSerializer):
             "equipment_name",
             "category",
             "is_active",
+            "status",
             "created_by",
+            "created_by_id",
             "created_by_name",
+            "approved_by_id",
+            "approved_by_name",
+            "approved_at",
+            "rejected_by_id",
+            "rejected_by_name",
+            "rejected_at",
+            "rejection_comment",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "created_by", "created_by_name", "created_at", "updated_at"]
+        read_only_fields = [
+            "id", "created_by", "created_by_id", "created_by_name",
+            "approved_by_id", "approved_by_name", "approved_at",
+            "rejected_by_id", "rejected_by_name", "rejected_at", "rejection_comment",
+            "created_at", "updated_at",
+        ]
         extra_kwargs = {
             "chemical": {"required": False, "allow_null": True},
             "chemical_name": {"required": False, "allow_blank": True},
@@ -156,6 +187,7 @@ class ChemicalPreparationSerializer(serializers.ModelSerializer):
     secondary_approved_by_id = serializers.UUIDField(source='secondary_approved_by.id', read_only=True, allow_null=True)
     corrects_id = serializers.UUIDField(source='corrects.id', read_only=True, allow_null=True)
     has_corrections = serializers.SerializerMethodField()
+    tolerance_status = serializers.SerializerMethodField()
 
     class Meta:
         model = ChemicalPreparation
@@ -166,12 +198,12 @@ class ChemicalPreparationSerializer(serializers.ModelSerializer):
             'activity_type', 'activity_from_date', 'activity_to_date', 'activity_from_time', 'activity_to_time',
             'remarks', 'comment', 'checked_by', 'operator_id', 'operator_name', 'status',
             'approved_by_id', 'approved_at', 'secondary_approved_by_id', 'secondary_approved_at',
-            'corrects_id', 'has_corrections', 'timestamp', 'created_at', 'updated_at'
+            'corrects_id', 'has_corrections', 'tolerance_status', 'timestamp', 'created_at', 'updated_at'
         ]
         read_only_fields = [
             'id', 'operator_id', 'operator_name', 'approved_by_id', 'approved_at',
             'secondary_approved_by_id', 'secondary_approved_at',
-            'corrects_id', 'has_corrections',
+            'corrects_id', 'has_corrections', 'tolerance_status',
             'created_at', 'updated_at'
         ]
 
@@ -191,4 +223,11 @@ class ChemicalPreparationSerializer(serializers.ModelSerializer):
 
     def get_has_corrections(self, obj: ChemicalPreparation) -> bool:
         return obj.corrections.exists()
+
+    def get_tolerance_status(self, obj: ChemicalPreparation) -> str:
+        try:
+            from core.log_slot_utils import get_tolerance_status
+            return get_tolerance_status(obj.timestamp, obj.equipment_name or "", "chemical")
+        except Exception:
+            return "none"
 

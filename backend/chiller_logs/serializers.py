@@ -9,6 +9,7 @@ class ChillerLogSerializer(serializers.ModelSerializer):
     secondary_approved_by_id = serializers.UUIDField(source='secondary_approved_by.id', read_only=True, allow_null=True)
     corrects_id = serializers.UUIDField(source='corrects.id', read_only=True, allow_null=True)
     has_corrections = serializers.SerializerMethodField()
+    tolerance_status = serializers.SerializerMethodField()
 
     class Meta:
         model = ChillerLog
@@ -32,19 +33,16 @@ class ChillerLogSerializer(serializers.ModelSerializer):
             'cooling_tower_blowdown_time_min',
             'daily_water_consumption_ct1_liters', 'daily_water_consumption_ct2_liters',
             'daily_water_consumption_ct3_liters',
-            'cooling_tower_chemical_name', 'cooling_tower_chemical_qty_per_day',
-            'chilled_water_pump_chemical_name', 'chilled_water_pump_chemical_qty_kg',
-            'cooling_tower_fan_chemical_name', 'cooling_tower_fan_chemical_qty_kg',
             'recording_frequency', 'operator_sign', 'verified_by',
             'remarks', 'comment', 'operator_id', 'operator_name', 'status',
             'approved_by_id', 'approved_at', 'secondary_approved_by_id', 'secondary_approved_at',
-            'corrects_id', 'has_corrections',
+            'corrects_id', 'has_corrections', 'tolerance_status',
             'timestamp', 'created_at', 'updated_at'
         ]
         read_only_fields = [
             'id', 'operator_id', 'operator_name', 'approved_by_id', 'approved_at',
             'secondary_approved_by_id', 'secondary_approved_at',
-            'corrects_id', 'has_corrections',
+            'corrects_id', 'has_corrections', 'tolerance_status',
             'created_at', 'updated_at'
         ]
 
@@ -59,6 +57,13 @@ class ChillerLogSerializer(serializers.ModelSerializer):
 
     def get_has_corrections(self, obj: ChillerLog) -> bool:
         return obj.corrections.exists()
+
+    def get_tolerance_status(self, obj: ChillerLog) -> str:
+        try:
+            from core.log_slot_utils import get_tolerance_status
+            return get_tolerance_status(obj.timestamp, obj.equipment_id or "", "chiller")
+        except Exception:
+            return "none"
 
     def validate(self, attrs):
         remarks = (attrs.get("remarks") if "remarks" in attrs else getattr(self.instance, "remarks", None)) or ""
@@ -93,7 +98,7 @@ class ChillerEquipmentLimitSerializer(serializers.ModelSerializer):
     class Meta:
         model = ChillerEquipmentLimit
         fields = [
-            'id', 'equipment_id', 'client_id',
+            'id', 'equipment_id', 'client_id', 'effective_from',
             'daily_power_limit_kw',
             'electricity_rate_rs_per_kwh',
             'daily_water_ct1_liters', 'daily_water_ct2_liters', 'daily_water_ct3_liters',

@@ -150,30 +150,27 @@ const FilterRegisterPage: React.FC = () => {
 
   const loadEquipment = async () => {
     try {
-      // Only load Chemical-related equipments (Chemical / Chemicals),
-      // and only those that are active and approved.
+      // Fetch equipment from equipment list, excluding chillers (Chiller / Chillers category).
       const categories = (await equipmentCategoryAPI.list()) as {
         id: string;
         name: string;
       }[];
-      const chemicalCategory = categories.find((c) => {
-        const name = (c.name || "").toLowerCase().trim();
-        return name === "chemical" || name === "chemicals";
-      });
-
-      if (!chemicalCategory) {
-        setEquipmentOptions([]);
-        return;
-      }
+      const chillerCategoryIds = new Set(
+        categories
+          .filter((c) => /^chiller(s)?$/i.test((c.name || "").trim()))
+          .map((c) => c.id)
+      );
 
       const list = (await equipmentAPI.list({
-        category: chemicalCategory.id,
+        status: "approved",
       })) as any[];
 
       const options = (list || [])
         .filter(
           (item: any) =>
-            item?.is_active !== false && item?.status === "approved",
+            item?.is_active !== false &&
+            item?.status === "approved" &&
+            !chillerCategoryIds.has(item?.category)
         )
         .map((item: any) => ({
           id: item.id,

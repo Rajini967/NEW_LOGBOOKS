@@ -9,6 +9,7 @@ import { NVPCCertificate } from '@/components/pdf/certificates/NVPCCertificate';
 import { ChillerMonitoringCertificate } from '@/components/pdf/certificates/ChillerMonitoringCertificate';
 import { BoilerMonitoringCertificate } from '@/components/pdf/certificates/BoilerMonitoringCertificate';
 import { ChemicalMonitoringCertificate } from '@/components/pdf/certificates/ChemicalMonitoringCertificate';
+import { FilterMonitoringCertificate } from '@/components/pdf/certificates/FilterMonitoringCertificate';
 import {
   AirVelocityTestData,
   FilterIntegrityTestData,
@@ -16,6 +17,13 @@ import {
   DifferentialPressureTestData,
   NVPCTestData,
 } from '@/types/test-certificates';
+
+/** Data passed to monitoring PDF generators (chiller, boiler, chemical, filter). */
+export type MonitoringPDFData = {
+  logs: any[];
+  approvedBy?: string;
+  printedBy?: string;
+};
 
 /**
  * Generate Air Velocity Test PDF
@@ -70,7 +78,7 @@ export async function generateNVPCPDF(data: NVPCTestData): Promise<Blob> {
 /**
  * Generate Chiller Monitoring PDF
  */
-export async function generateChillerMonitoringPDF(data: { logs: any[] }): Promise<Blob> {
+export async function generateChillerMonitoringPDF(data: MonitoringPDFData): Promise<Blob> {
   const doc = <ChillerMonitoringCertificate data={data} />;
   const asPdf = pdf(doc);
   const blob = await asPdf.toBlob();
@@ -80,7 +88,7 @@ export async function generateChillerMonitoringPDF(data: { logs: any[] }): Promi
 /**
  * Generate Boiler Monitoring PDF
  */
-export async function generateBoilerMonitoringPDF(data: { logs: any[] }): Promise<Blob> {
+export async function generateBoilerMonitoringPDF(data: MonitoringPDFData): Promise<Blob> {
   const doc = <BoilerMonitoringCertificate data={data} />;
   const asPdf = pdf(doc);
   const blob = await asPdf.toBlob();
@@ -90,8 +98,18 @@ export async function generateBoilerMonitoringPDF(data: { logs: any[] }): Promis
 /**
  * Generate Chemical Monitoring PDF
  */
-export async function generateChemicalMonitoringPDF(data: { logs: any[] }): Promise<Blob> {
+export async function generateChemicalMonitoringPDF(data: MonitoringPDFData): Promise<Blob> {
   const doc = <ChemicalMonitoringCertificate data={data} />;
+  const asPdf = pdf(doc);
+  const blob = await asPdf.toBlob();
+  return blob;
+}
+
+/**
+ * Generate Filter Monitoring PDF
+ */
+export async function generateFilterMonitoringPDF(data: MonitoringPDFData): Promise<Blob> {
+  const doc = <FilterMonitoringCertificate data={data} />;
   const asPdf = pdf(doc);
   const blob = await asPdf.toBlob();
   return blob;

@@ -59,14 +59,6 @@ class BoilerLog(models.Model):
     mobrey_functioning = models.CharField(max_length=10, blank=True, null=True, help_text="Mobrey functioning Yes/No")
     manual_blowdown_time = models.CharField(max_length=20, blank=True, null=True, help_text="Manual blow down time e.g. 14:30")
 
-    # Fuel stock entries (quantity + cost in Rupees)
-    diesel_stock_liters = models.FloatField(validators=[MinValueValidator(0)], blank=True, null=True, help_text="Diesel stock (L)")
-    diesel_cost_rupees = models.FloatField(validators=[MinValueValidator(0)], blank=True, null=True, help_text="Diesel cost (Rs)")
-    furnace_oil_stock_liters = models.FloatField(validators=[MinValueValidator(0)], blank=True, null=True, help_text="Furnace oil stock (L)")
-    furnace_oil_cost_rupees = models.FloatField(validators=[MinValueValidator(0)], blank=True, null=True, help_text="Furnace oil cost (Rs)")
-    brigade_stock_kg = models.FloatField(validators=[MinValueValidator(0)], blank=True, null=True, help_text="Brigade stock (kg)")
-    brigade_cost_rupees = models.FloatField(validators=[MinValueValidator(0)], blank=True, null=True, help_text="Brigade cost (Rs)")
-
     # Daily consumption for limit validation
     daily_power_consumption_kwh = models.FloatField(validators=[MinValueValidator(0)], blank=True, null=True, help_text="Daily power consumption (kWh)")
     daily_water_consumption_liters = models.FloatField(validators=[MinValueValidator(0)], blank=True, null=True, help_text="Daily water consumption (L)")
@@ -135,6 +127,11 @@ class BoilerEquipmentLimit(models.Model):
         help_text="Boiler equipment identifier",
     )
     client_id = models.CharField(max_length=100, db_index=True, blank=True, null=True)
+    effective_from = models.DateField(
+        blank=True,
+        null=True,
+        help_text="Date from which this limit applies. Leave blank to apply to all dates.",
+    )
     daily_power_limit_kw = models.FloatField(
         validators=[MinValueValidator(0)],
         blank=True,

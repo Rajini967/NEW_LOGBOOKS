@@ -23,7 +23,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { chemicalStockAPI } from "@/lib/api";
+import { chemicalStockAPI, equipmentCategoryAPI } from "@/lib/api";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -38,6 +38,15 @@ interface ChemicalStockRow {
   site: string | null;
 }
 
+/** Map equipment category name to API location filter (same as backend). */
+function locationFromCategoryName(name: string): "water_system" | "cooling_towers" | "boiler" {
+  const v = (name || "").trim().toLowerCase();
+  if (v === "boiler" || v === "boilers") return "boiler";
+  if (v === "cooling_towers" || v === "cooling towers" || v === "cooling") return "cooling_towers";
+  if (v === "water_system" || v === "water system" || v === "water") return "water_system";
+  return "water_system";
+}
+
 const ChemicalStockPage: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -45,11 +54,12 @@ const ChemicalStockPage: React.FC = () => {
 
   const [rows, setRows] = useState<ChemicalStockRow[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [locationFilter, setLocationFilter] = useState<"all" | "water_system" | "cooling_towers" | "boiler">("all");
+  const [categoryFilter, setCategoryFilter] = useState<string>("all");
   const [createOpen, setCreateOpen] = useState(false);
   const [createSubmitting, setCreateSubmitting] = useState(false);
+  const [categoryOptions, setCategoryOptions] = useState<{ id: string; name: string }[]>([]);
   const [createForm, setCreateForm] = useState({
-    location: "",
+    categoryId: "",
     chemicalName: "",
     chemicalFormula: "",
     stock: "",
@@ -84,20 +94,43 @@ const ChemicalStockPage: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (locationFilter === "all") {
+    if (categoryFilter === "all" || !categoryFilter) {
       void load();
     } else {
-      void load(locationFilter);
+      const cat = categoryOptions.find((c) => c.id === categoryFilter);
+      const location = cat ? locationFromCategoryName(cat.name) : undefined;
+      void load(location);
     }
-  }, [locationFilter]);
+  }, [categoryFilter]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const list = (await equipmentCategoryAPI.list()) as { id: string; name: string }[];
+        if (!cancelled) {
+          setCategoryOptions(
+            list.filter(
+              (c) => !/chiller/i.test(c.name || "")
+            )
+          );
+        }
+      } catch {
+        if (!cancelled) setCategoryOptions([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const location = createForm.location.trim();
+    const categoryId = createForm.categoryId.trim();
     const chemicalName = createForm.chemicalName.trim();
     const chemicalFormula = createForm.chemicalFormula.trim();
-    if (!location) {
-      toast.error("Location is required.");
+    if (!categoryId) {
+      toast.error("Category is required.");
       return;
     }
     if (!chemicalName) {
@@ -117,7 +150,7 @@ const ChemicalStockPage: React.FC = () => {
     setCreateSubmitting(true);
     try {
       await chemicalStockAPI.createEntry({
-        location,
+        category_id: categoryId,
         chemical_name: chemicalName,
         chemical_formula: chemicalFormula || undefined,
         stock,
@@ -126,7 +159,7 @@ const ChemicalStockPage: React.FC = () => {
       });
       toast.success("New stock entry created.");
       setCreateForm({
-        location: "",
+        categoryId: "",
         chemicalName: "",
         chemicalFormula: "",
         stock: "",
@@ -134,7 +167,11 @@ const ChemicalStockPage: React.FC = () => {
         site: "",
       });
       setCreateOpen(false);
-      void load(locationFilter === "all" ? undefined : locationFilter);
+      if (categoryFilter === "all" || !categoryFilter) void load();
+      else {
+        const cat = categoryOptions.find((c) => c.id === categoryFilter);
+        void load(cat ? locationFromCategoryName(cat.name) : undefined);
+      }
     } catch (error: any) {
       console.error("Failed to create stock entry:", error);
       toast.error(error?.message || "Failed to create stock entry");
@@ -176,7 +213,11 @@ const ChemicalStockPage: React.FC = () => {
       toast.success("Stock entry updated.");
       setEditOpen(false);
       setEditingRow(null);
-      void load(locationFilter === "all" ? undefined : locationFilter);
+      if (categoryFilter === "all" || !categoryFilter) void load();
+      else {
+        const cat = categoryOptions.find((c) => c.id === categoryFilter);
+        void load(cat ? locationFromCategoryName(cat.name) : undefined);
+      }
     } catch (error: any) {
       toast.error(error?.message || "Failed to update stock entry");
     } finally {
@@ -191,7 +232,11 @@ const ChemicalStockPage: React.FC = () => {
       await chemicalStockAPI.delete(deleteConfirmId);
       toast.success("Stock entry deleted.");
       setDeleteConfirmId(null);
-      void load(locationFilter === "all" ? undefined : locationFilter);
+      if (categoryFilter === "all" || !categoryFilter) void load();
+      else {
+        const cat = categoryOptions.find((c) => c.id === categoryFilter);
+        void load(cat ? locationFromCategoryName(cat.name) : undefined);
+      }
     } catch (error: any) {
       toast.error(error?.message || "Failed to delete stock entry");
     } finally {
@@ -231,15 +276,25 @@ const ChemicalStockPage: React.FC = () => {
                 </DialogHeader>
                 <form onSubmit={handleCreateSubmit} className="space-y-3 mt-2 overflow-y-auto flex-1 min-h-0">
                   <div className="space-y-2">
-                    <Label htmlFor="new-location">Location</Label>
-                    <Input
-                      id="new-location"
-                      value={createForm.location}
-                      onChange={(e) =>
-                        setCreateForm((prev) => ({ ...prev, location: e.target.value }))
+                    <Label htmlFor="new-category">Category</Label>
+                    <Select
+                      value={createForm.categoryId}
+                      onValueChange={(v) =>
+                        setCreateForm((prev) => ({ ...prev, categoryId: v }))
                       }
-                      placeholder="e.g. Water system, Cooling towers, Boiler"
-                    />
+                      required
+                    >
+                      <SelectTrigger id="new-category">
+                        <SelectValue placeholder="Select equipment category" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {categoryOptions.map((cat) => (
+                          <SelectItem key={cat.id} value={cat.id}>
+                            {cat.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="new-chemical-name">Chemical Name</Label>
@@ -319,21 +374,21 @@ const ChemicalStockPage: React.FC = () => {
             </Dialog>
           )}
           <div className="flex items-center gap-2">
-            <span className="text-sm text-muted-foreground">Location</span>
+            <span className="text-sm text-muted-foreground">Category</span>
             <Select
-              value={locationFilter}
-              onValueChange={(v) =>
-                setLocationFilter(v as "all" | "water_system" | "cooling_towers" | "boiler")
-              }
+              value={categoryFilter}
+              onValueChange={setCategoryFilter}
             >
               <SelectTrigger className="w-40">
-                <SelectValue placeholder="All locations" />
+                <SelectValue placeholder="All categories" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All locations</SelectItem>
-                <SelectItem value="water_system">Water system</SelectItem>
-                <SelectItem value="cooling_towers">Cooling towers</SelectItem>
-                <SelectItem value="boiler">Boiler</SelectItem>
+                <SelectItem value="all">All categories</SelectItem>
+                {categoryOptions.map((cat) => (
+                  <SelectItem key={cat.id} value={cat.id}>
+                    {cat.name}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>
@@ -348,7 +403,7 @@ const ChemicalStockPage: React.FC = () => {
                 <thead className="bg-muted/50">
                   <tr>
                     <th className="px-4 py-2 text-left font-medium text-muted-foreground">
-                      Location
+                      Category
                     </th>
                     <th className="px-4 py-2 text-left font-medium text-muted-foreground">
                       Chemical

@@ -25,6 +25,7 @@ import { format } from "date-fns";
 import { toast } from "sonner";
 import { boilerLogAPI, equipmentAPI, equipmentCategoryAPI } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { firstRequiredFieldError } from "@/lib/requiredFields";
 import { Link } from "react-router-dom";
 import { Clock, Thermometer, Gauge, Droplets, Package, Save, Filter, X, Plus, Trash2, CheckCircle, XCircle, Edit, History, Eye } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -128,6 +129,7 @@ interface BoilerLog {
   approved_by_id?: string;
   corrects_id?: string;
   has_corrections?: boolean;
+  tolerance_status?: "none" | "within" | "outside";
 }
 
 const BoilerLogBookPage: React.FC = () => {
@@ -151,7 +153,15 @@ const BoilerLogBookPage: React.FC = () => {
   const [editingCommentValue, setEditingCommentValue] = useState("");
   const [readingsModalLogId, setReadingsModalLogId] = useState<string | null>(null);
   const [editingLogId, setEditingLogId] = useState<string | null>(null);
-  const [equipmentOptions, setEquipmentOptions] = useState<{ id: string; equipment_number: string; name: string }[]>([]);
+  const [equipmentOptions, setEquipmentOptions] = useState<
+    {
+      id: string;
+      equipment_number: string;
+      name: string;
+      log_entry_interval?: string | null;
+      shift_duration_hours?: number | null;
+    }[]
+  >([]);
   const [previousReadingsForEquipment, setPreviousReadingsForEquipment] = useState<BoilerLog[]>([]);
   const [previousReadingsLoading, setPreviousReadingsLoading] = useState(false);
 
@@ -336,6 +346,7 @@ const BoilerLogBookPage: React.FC = () => {
           approved_by_id: log.approved_by_id,
           corrects_id: log.corrects_id,
           has_corrections: log.has_corrections,
+      tolerance_status: log.tolerance_status as BoilerLog["tolerance_status"],
         });
       });
 
@@ -440,8 +451,10 @@ const BoilerLogBookPage: React.FC = () => {
       result = result.filter((log) => log.status === filters.status);
     }
     if (filters.equipmentId) {
-      result = result.filter((log) =>
-        log.equipmentId.toLowerCase().includes(filters.equipmentId.toLowerCase()),
+      result = result.filter(
+        (log) =>
+          log.equipmentId &&
+          log.equipmentId.toString().toLowerCase() === filters.equipmentId.toLowerCase(),
       );
     }
     if (filters.checkedBy) {
@@ -615,23 +628,33 @@ const BoilerLogBookPage: React.FC = () => {
         return;
       }
 
-      const numericFields: { key: keyof typeof formData; label: string }[] = [
-        { key: "feedWaterTemp", label: "Feed water temp" },
-        { key: "oilTemp", label: "Oil temp" },
-        { key: "steamTemp", label: "Steam temp" },
-        { key: "steamPressure", label: "Steam pressure" },
-      ];
-      for (const field of numericFields) {
-        const raw = formData[field.key];
-        if (!raw) {
-          toast.error(`Please enter ${field.label}.`);
-          return;
-        }
-        const value = parseFloat(raw);
-        if (Number.isNaN(value)) {
-          toast.error(`${field.label} must be numeric.`);
-          return;
-        }
+      const operationRequired = [
+        { key: "equipmentId", label: "Equipment ID" },
+        { key: "foHsdNgDayTankLevel", label: "FO/HSD/NG Day Tank Level", numeric: true },
+        { key: "feedWaterTankLevel", label: "Feed Water Tank Level", numeric: true },
+        { key: "foPreHeaterTemp", label: "FO Pre Heater Temp", numeric: true },
+        { key: "burnerOilPressure", label: "Burner Oil Pressure", numeric: true },
+        { key: "burnerHeaterTemp", label: "Burner Heater Temp", numeric: true },
+        { key: "boilerSteamPressure", label: "Boiler Steam Pressure", numeric: true },
+        { key: "stackTemperature", label: "Stack Temperature", numeric: true },
+        { key: "steamPressureAfterPrv", label: "Steam Pressure after PRV", numeric: true },
+        { key: "feedWaterTemp", label: "Feed Water Temp", numeric: true },
+        { key: "oilTemp", label: "Oil Temp", numeric: true },
+        { key: "steamTemp", label: "Steam Temp", numeric: true },
+        { key: "steamPressure", label: "Steam Pressure", numeric: true },
+        { key: "steamFlowLPH", label: "Steam Flow LPH", numeric: true },
+        { key: "feedWaterHardnessPpm", label: "Feed Water Hardness", numeric: true },
+        { key: "feedWaterTdsPpm", label: "Feed Water TDS", numeric: true },
+        { key: "foHsdNgConsumption", label: "FO/HSD/NG Consumption", numeric: true },
+        { key: "mobreyFunctioning", label: "Mobrey Functioning" },
+        { key: "manualBlowdownTime", label: "Manual Blow Down Time" },
+        { key: "remarks", label: "Remarks" },
+      ] as const;
+
+      const err = firstRequiredFieldError(formData, operationRequired as any);
+      if (err) {
+        toast.error(err);
+        return;
       }
 
       const logData: Record<string, unknown> = {
@@ -645,33 +668,20 @@ const BoilerLogBookPage: React.FC = () => {
         oil_temp: parseFloat(formData.oilTemp),
         steam_temp: parseFloat(formData.steamTemp),
         steam_pressure: parseFloat(formData.steamPressure),
-        steam_flow_lph: formData.steamFlowLPH ? parseFloat(formData.steamFlowLPH) : undefined,
-        fo_hsd_ng_day_tank_level: formData.foHsdNgDayTankLevel ? parseFloat(formData.foHsdNgDayTankLevel) : undefined,
-        feed_water_tank_level: formData.feedWaterTankLevel ? parseFloat(formData.feedWaterTankLevel) : undefined,
-        fo_pre_heater_temp: formData.foPreHeaterTemp ? parseFloat(formData.foPreHeaterTemp) : undefined,
-        burner_oil_pressure: formData.burnerOilPressure ? parseFloat(formData.burnerOilPressure) : undefined,
-        burner_heater_temp: formData.burnerHeaterTemp ? parseFloat(formData.burnerHeaterTemp) : undefined,
-        boiler_steam_pressure: formData.boilerSteamPressure ? parseFloat(formData.boilerSteamPressure) : undefined,
-        stack_temperature: formData.stackTemperature ? parseFloat(formData.stackTemperature) : undefined,
-        steam_pressure_after_prv: formData.steamPressureAfterPrv ? parseFloat(formData.steamPressureAfterPrv) : undefined,
-        feed_water_hardness_ppm: formData.feedWaterHardnessPpm ? parseFloat(formData.feedWaterHardnessPpm) : undefined,
-        feed_water_tds_ppm: formData.feedWaterTdsPpm ? parseFloat(formData.feedWaterTdsPpm) : undefined,
-        fo_hsd_ng_consumption: formData.foHsdNgConsumption ? parseFloat(formData.foHsdNgConsumption) : undefined,
-        mobrey_functioning: formData.mobreyFunctioning || undefined,
-        manual_blowdown_time: formData.manualBlowdownTime || undefined,
-        diesel_stock_liters: formData.dieselStockLiters ? parseFloat(formData.dieselStockLiters) : undefined,
-        diesel_cost_rupees: formData.dieselCostRupees ? parseFloat(formData.dieselCostRupees) : undefined,
-        furnace_oil_stock_liters: formData.furnaceOilStockLiters ? parseFloat(formData.furnaceOilStockLiters) : undefined,
-        furnace_oil_cost_rupees: formData.furnaceOilCostRupees ? parseFloat(formData.furnaceOilCostRupees) : undefined,
-        brigade_stock_kg: formData.brigadeStockKg ? parseFloat(formData.brigadeStockKg) : undefined,
-        brigade_cost_rupees: formData.brigadeCostRupees ? parseFloat(formData.brigadeCostRupees) : undefined,
-        daily_power_consumption_kwh: formData.dailyPowerConsumptionKwh ? parseFloat(formData.dailyPowerConsumptionKwh) : undefined,
-        daily_water_consumption_liters: formData.dailyWaterConsumptionLiters ? parseFloat(formData.dailyWaterConsumptionLiters) : undefined,
-        daily_chemical_consumption_kg: formData.dailyChemicalConsumptionKg ? parseFloat(formData.dailyChemicalConsumptionKg) : undefined,
-        daily_diesel_consumption_liters: formData.dailyDieselConsumptionLiters ? parseFloat(formData.dailyDieselConsumptionLiters) : undefined,
-        daily_furnace_oil_consumption_liters: formData.dailyFurnaceOilConsumptionLiters ? parseFloat(formData.dailyFurnaceOilConsumptionLiters) : undefined,
-        daily_brigade_consumption_kg: formData.dailyBrigadeConsumptionKg ? parseFloat(formData.dailyBrigadeConsumptionKg) : undefined,
-        steam_consumption_kg_hr: formData.steamConsumptionKgHr ? parseFloat(formData.steamConsumptionKgHr) : undefined,
+        steam_flow_lph: parseFloat(formData.steamFlowLPH),
+        fo_hsd_ng_day_tank_level: parseFloat(formData.foHsdNgDayTankLevel),
+        feed_water_tank_level: parseFloat(formData.feedWaterTankLevel),
+        fo_pre_heater_temp: parseFloat(formData.foPreHeaterTemp),
+        burner_oil_pressure: parseFloat(formData.burnerOilPressure),
+        burner_heater_temp: parseFloat(formData.burnerHeaterTemp),
+        boiler_steam_pressure: parseFloat(formData.boilerSteamPressure),
+        stack_temperature: parseFloat(formData.stackTemperature),
+        steam_pressure_after_prv: parseFloat(formData.steamPressureAfterPrv),
+        feed_water_hardness_ppm: parseFloat(formData.feedWaterHardnessPpm),
+        feed_water_tds_ppm: parseFloat(formData.feedWaterTdsPpm),
+        fo_hsd_ng_consumption: parseFloat(formData.foHsdNgConsumption),
+        mobrey_functioning: formData.mobreyFunctioning,
+        manual_blowdown_time: formData.manualBlowdownTime,
         remarks: formData.remarks || undefined,
       };
       const editingBoilerLog = editingLogId ? logs.find((l) => l.id === editingLogId) : null;
@@ -992,12 +1002,23 @@ const BoilerLogBookPage: React.FC = () => {
                   </div>
                   <div className="space-y-3">
                     <Label className="text-base font-semibold">Equipment ID</Label>
-                    <Input
-                      type="text"
-                      value={filters.equipmentId}
-                      onChange={(e) => setFilters({ ...filters, equipmentId: e.target.value })}
-                      placeholder="e.g., BL-001"
-                    />
+                    <Select
+                      value={filters.equipmentId || "all"}
+                      onValueChange={(v) => setFilters({ ...filters, equipmentId: v === "all" ? "" : v })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="All" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All</SelectItem>
+                        {equipmentOptions.map((eq) => (
+                          <SelectItem key={eq.id} value={eq.equipment_number}>
+                            {eq.equipment_number}
+                            {eq.name ? ` – ${eq.name}` : ""}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
                   <div className="space-y-3">
                     <Label className="text-base font-semibold">Checked By</Label>
@@ -1350,72 +1371,6 @@ const BoilerLogBookPage: React.FC = () => {
                       </div>
                     </div>
                   </div>
-
-                  {/* Fuel stock */}
-                  <div className="space-y-3 pt-4 mt-2 border-t">
-                    <h3 className="text-sm font-semibold border-b pb-2">Fuel stock</h3>
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <Label>Diesel <span className="text-muted-foreground text-xs">(L)</span></Label>
-                        <Input type="number" step="0.1" min={0} value={formData.dieselStockLiters} onChange={(e) => setFormData({ ...formData, dieselStockLiters: e.target.value })} placeholder="Liters" />
-                      </div>
-                      <div className="space-y-2">
-                        <Label>Diesel cost <span className="text-muted-foreground text-xs">(Rs)</span></Label>
-                        <Input type="number" step="0.01" min={0} value={formData.dieselCostRupees} onChange={(e) => setFormData({ ...formData, dieselCostRupees: e.target.value })} placeholder="Rupees" />
-                      </div>
-                      <div className="space-y-2">
-                        <Label>Furnace oil <span className="text-muted-foreground text-xs">(L)</span></Label>
-                        <Input type="number" step="0.1" min={0} value={formData.furnaceOilStockLiters} onChange={(e) => setFormData({ ...formData, furnaceOilStockLiters: e.target.value })} placeholder="Liters" />
-                      </div>
-                      <div className="space-y-2">
-                        <Label>Furnace oil cost <span className="text-muted-foreground text-xs">(Rs)</span></Label>
-                        <Input type="number" step="0.01" min={0} value={formData.furnaceOilCostRupees} onChange={(e) => setFormData({ ...formData, furnaceOilCostRupees: e.target.value })} placeholder="Rupees" />
-                      </div>
-                      <div className="space-y-2">
-                        <Label>Brigade <span className="text-muted-foreground text-xs">(kg)</span></Label>
-                        <Input type="number" step="0.1" min={0} value={formData.brigadeStockKg} onChange={(e) => setFormData({ ...formData, brigadeStockKg: e.target.value })} placeholder="kg" />
-                      </div>
-                      <div className="space-y-2">
-                        <Label>Brigade cost <span className="text-muted-foreground text-xs">(Rs)</span></Label>
-                        <Input type="number" step="0.01" min={0} value={formData.brigadeCostRupees} onChange={(e) => setFormData({ ...formData, brigadeCostRupees: e.target.value })} placeholder="Rupees" />
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Daily consumption (for limit validation) */}
-                  <div className="space-y-3 pt-4 mt-2 border-t">
-                    <h3 className="text-sm font-semibold border-b pb-2">Daily consumption</h3>
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <Label>Daily power consumption <span className="text-muted-foreground text-xs">(kWh)</span></Label>
-                        <Input type="number" step="0.1" min={0} value={formData.dailyPowerConsumptionKwh} onChange={(e) => setFormData({ ...formData, dailyPowerConsumptionKwh: e.target.value })} placeholder="kWh" />
-                      </div>
-                      <div className="space-y-2">
-                        <Label>Daily water consumption <span className="text-muted-foreground text-xs">(L)</span></Label>
-                        <Input type="number" step="0.1" min={0} value={formData.dailyWaterConsumptionLiters} onChange={(e) => setFormData({ ...formData, dailyWaterConsumptionLiters: e.target.value })} placeholder="Liters" />
-                      </div>
-                      <div className="space-y-2">
-                        <Label>Daily chemical consumption <span className="text-muted-foreground text-xs">(kg)</span></Label>
-                        <Input type="number" step="0.1" min={0} value={formData.dailyChemicalConsumptionKg} onChange={(e) => setFormData({ ...formData, dailyChemicalConsumptionKg: e.target.value })} placeholder="kg" />
-                      </div>
-                      <div className="space-y-2">
-                        <Label>Daily diesel consumption <span className="text-muted-foreground text-xs">(L)</span></Label>
-                        <Input type="number" step="0.1" min={0} value={formData.dailyDieselConsumptionLiters} onChange={(e) => setFormData({ ...formData, dailyDieselConsumptionLiters: e.target.value })} placeholder="L" />
-                      </div>
-                      <div className="space-y-2">
-                        <Label>Daily furnace oil consumption <span className="text-muted-foreground text-xs">(L)</span></Label>
-                        <Input type="number" step="0.1" min={0} value={formData.dailyFurnaceOilConsumptionLiters} onChange={(e) => setFormData({ ...formData, dailyFurnaceOilConsumptionLiters: e.target.value })} placeholder="L" />
-                      </div>
-                      <div className="space-y-2">
-                        <Label>Daily brigade consumption <span className="text-muted-foreground text-xs">(kg)</span></Label>
-                        <Input type="number" step="0.1" min={0} value={formData.dailyBrigadeConsumptionKg} onChange={(e) => setFormData({ ...formData, dailyBrigadeConsumptionKg: e.target.value })} placeholder="kg" />
-                      </div>
-                      <div className="space-y-2">
-                        <Label>Steam consumption <span className="text-muted-foreground text-xs">(kg/hr)</span></Label>
-                        <Input type="number" step="0.1" min={0} value={formData.steamConsumptionKgHr} onChange={(e) => setFormData({ ...formData, steamConsumptionKgHr: e.target.value })} placeholder="kg/hr" />
-                      </div>
-                    </div>
-                  </div>
                   </fieldset>
 
                   {/* Remarks */}
@@ -1500,8 +1455,15 @@ const BoilerLogBookPage: React.FC = () => {
                     </td>
                   </tr>
                 )}
-                {filteredLogs.map((log) => (
-                  <tr key={log.id} className="hover:bg-muted/30 transition-colors">
+                {filteredLogs.map((log) => {
+                  const tolClass =
+                    log.tolerance_status === "within"
+                      ? "bg-yellow-50/70"
+                      : log.tolerance_status === "outside"
+                      ? "bg-red-50/80"
+                      : "";
+                  return (
+                  <tr key={log.id} className={cn(tolClass, "hover:bg-muted/30 transition-colors")}>
                     <td className="px-4 py-3 align-middle">
                       {(log.status === "pending" || log.status === "draft" || log.status === "pending_secondary_approval") &&
                       user?.role !== "operator" &&
@@ -1715,7 +1677,7 @@ const BoilerLogBookPage: React.FC = () => {
                       </div>
                     </td>
                   </tr>
-                ))}
+                );})}
               </tbody>
             </table>
           </div>
@@ -1742,7 +1704,7 @@ const BoilerLogBookPage: React.FC = () => {
             {readingsModalLogId && (() => {
               const log = filteredLogs.find((l) => l.id === readingsModalLogId);
               if (!log) return null;
-              const logRecord = log as Record<string, unknown>;
+              const logRecord = log as unknown as Record<string, unknown>;
               const renderItem = (label: string, value: string | number, isOut?: boolean) => (
                 <div
                   key={label}

@@ -25,6 +25,7 @@ import {
   Thermometer,
   Droplets,
   TrendingUp,
+  BarChart3,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -105,6 +106,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
     { id: 'boiler', path: '/e-log-book/boiler', icon: Gauge, label: 'Boiler', roles: ['operator', 'supervisor', 'super_admin', 'manager'] },
     { id: 'chemical', path: '/e-log-book/chemical', icon: Droplets, label: 'Chemical', roles: ['operator', 'supervisor', 'super_admin', 'manager'] },
     { id: 'filter', path: '/e-log-book/filter', icon: Filter, label: 'Filter', roles: ['operator', 'supervisor', 'super_admin', 'manager'] },
+    { id: 'consumption', path: '/e-log-book/consumption', icon: BarChart3, label: 'Consumption', roles: ['operator', 'supervisor', 'super_admin', 'manager'] },
   ];
 
   const filteredItems = navItems.filter(
@@ -350,7 +352,9 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
                     const isActive = isFilterItem
                       ? location.pathname.startsWith('/e-log-book/filter')
-                      : location.pathname === targetPath;
+                      : item.id === 'consumption'
+                        ? location.pathname.startsWith('/e-log-book/consumption')
+                        : location.pathname === targetPath;
 
                     return (
                       <Link

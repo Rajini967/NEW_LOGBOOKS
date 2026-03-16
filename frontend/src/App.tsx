@@ -39,6 +39,7 @@ import UsersPage from "./pages/UsersPage";
 import SettingsPage from "./pages/SettingsPage";
 import ChangePasswordPage from "./pages/ChangePasswordPage";
 import LogbookBuilderPage from "./pages/LogbookBuilderPage";
+import ConsumptionPage from "./pages/ConsumptionPage";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -98,6 +99,7 @@ const App = () => (
               <Route path="/e-log-book" element={<ELogBookLandingPage />} />
               <Route path="/e-log-book/chiller" element={<ELogBookPage equipmentType="chiller" />} />
               <Route path="/e-log-book/boiler" element={<BoilerLogBookPage />} />
+              <Route path="/e-log-book/consumption" element={<ConsumptionPage />} />
               <Route path="/e-log-book/chemical" element={<ChemicalLandingRoute />} />
               <Route path="/e-log-book/chemical/entry" element={<ChemicalLogBookPage />} />
               <Route path="/e-log-book/chemical/stock" element={<ChemicalStockPage />} />

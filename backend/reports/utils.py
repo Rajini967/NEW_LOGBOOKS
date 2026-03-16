@@ -107,3 +107,83 @@ def log_limit_change(
         logger = logging.getLogger(__name__)
         logger.error(f"Error logging limit change: {e}")
 
+
+def log_audit_event(
+    user,
+    event_type: str,
+    object_type: str,
+    object_id: str = "",
+    field_name: str = "",
+    old_value=None,
+    new_value=None,
+    extra=None,
+):
+    """
+    Record a generic audit event (log create/delete, entity create/update/delete/approve/reject).
+
+    Args:
+        user: User performing the action (request.user); can be None.
+        event_type: e.g. 'log_created', 'log_deleted', 'entity_created', 'entity_updated',
+                    'entity_deleted', 'entity_approved', 'entity_rejected', 'consumption_updated'.
+        object_type: e.g. 'chiller_log', 'boiler_log', 'equipment', 'filter_master'.
+        object_id: ID of the affected object (string).
+        field_name: Optional field name (e.g. 'created', 'status').
+        old_value: Optional previous value.
+        new_value: Optional new value.
+        extra: Optional dict for additional context.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    try:
+        AuditEvent.objects.create(
+            user=user if user and getattr(user, "is_authenticated", False) else None,
+            event_type=event_type,
+            object_type=object_type,
+            object_id=str(object_id) if object_id else "",
+            field_name=field_name or "",
+            old_value=str(old_value) if old_value is not None else None,
+            new_value=str(new_value) if new_value is not None else None,
+            extra=extra or {},
+        )
+    except Exception as e:
+        logger.error("Error logging audit event: %s", e)
+
+
+def _format_audit_value(value):
+    """Format a field value for audit old_value/new_value display."""
+    if value is None:
+        return None
+    if hasattr(value, "pk"):
+        return str(value.pk)
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
+def log_entity_update_changes(serializer, request, object_type, object_id_attr="id"):
+    """
+    Call from perform_update: snapshot old values, save, then log one entity_updated
+    audit event per changed field with old_value and new_value populated.
+    """
+    instance = serializer.instance
+    validated = serializer.validated_data
+    if not validated:
+        serializer.save()
+        return
+    old = {k: _format_audit_value(getattr(instance, k, None)) for k in validated}
+    serializer.save()
+    updated = serializer.instance
+    obj_id = str(getattr(updated, object_id_attr, getattr(updated, "pk", "")))
+    for k in validated:
+        new_val = _format_audit_value(getattr(updated, k, None))
+        if old.get(k) != new_val:
+            log_audit_event(
+                user=request.user,
+                event_type="entity_updated",
+                object_type=object_type,
+                object_id=obj_id,
+                field_name=k,
+                old_value=old.get(k),
+                new_value=new_val,
+            )
+

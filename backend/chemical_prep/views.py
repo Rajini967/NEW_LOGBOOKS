@@ -3,11 +3,12 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import ValidationError
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import calendar
 from django.db import models
 from django.utils import timezone
-from core.log_slot_utils import get_interval_for_equipment, get_slot_range
+from core.log_slot_utils import get_interval_for_equipment, get_slot_range, compute_slot_status
+from equipment.models import EquipmentCategory
 from .models import Chemical, ChemicalStock, ChemicalPreparation, ChemicalAssignment, ChemicalDashboardConfig
 from .serializers import (
     ChemicalSerializer,
@@ -16,7 +17,146 @@ from .serializers import (
     ChemicalPreparationSerializer,
 )
 from accounts.permissions import CanLogEntries, CanApproveReports, IsSuperAdminOrManager
-from reports.utils import log_limit_change
+from reports.utils import log_limit_change, log_audit_event
+from collections import defaultdict
+
+
+def _resolve_chemical_for_cost(chemical_name):
+    """
+    Resolve Chemical from display name (e.g. 'NaOH - Sodium Hydroxide') for cost lookup.
+    Tries exact name match, then 'formula - name' split to match formula and name.
+    """
+    if not chemical_name or not str(chemical_name).strip():
+        return None
+    name = str(chemical_name).strip()
+    chem = Chemical.objects.filter(name=name, is_active=True).first()
+    if chem:
+        return chem
+    if " – " in name or " - " in name:
+        sep = " – " if " – " in name else " - "
+        parts = name.split(sep, 1)
+        if len(parts) == 2:
+            formula, rest = parts[0].strip(), parts[1].strip()
+            chem = Chemical.objects.filter(
+                formula__iexact=formula, name__icontains=rest, is_active=True
+            ).first()
+            if chem:
+                return chem
+            chem = Chemical.objects.filter(name__icontains=rest, is_active=True).first()
+            if chem:
+                return chem
+    return None
+
+
+def _chemical_totals_for_queryset(qs):
+    """Given a queryset of ChemicalPreparation, return (total_consumption_kg, total_cost_rs)."""
+    groups = defaultdict(lambda: {"qty_g": 0.0, "chemical_id": None, "chemical_name": ""})
+    for prep in qs.select_related("chemical").only(
+        "chemical_id", "chemical_name", "chemical_qty"
+    ):
+        if prep.chemical_id:
+            key = ("id", str(prep.chemical_id))
+            display_name = prep.chemical.name if prep.chemical else (prep.chemical_name or "—")
+        else:
+            name_key = (prep.chemical_name or "").strip() or "—"
+            key = ("name", name_key)
+            display_name = name_key
+        groups[key]["qty_g"] += float(prep.chemical_qty or 0)
+        groups[key]["chemical_id"] = str(prep.chemical_id) if prep.chemical_id else None
+        groups[key]["chemical_name"] = display_name
+    total_consumption_kg = 0.0
+    total_cost_rs = 0.0
+    for (_kt, _kv), data in groups.items():
+        consumption_kg = round(data["qty_g"] / 1000.0, 4)
+        total_consumption_kg += consumption_kg
+        cid = data["chemical_id"]
+        if cid:
+            stock = (
+                ChemicalStock.objects.filter(chemical_id=cid)
+                .order_by("-updated_at")
+                .first()
+            )
+            if stock and stock.price_per_unit is not None:
+                total_cost_rs += round(consumption_kg * float(stock.price_per_unit), 2)
+        else:
+            chem = _resolve_chemical_for_cost(data["chemical_name"])
+            if chem:
+                stock = (
+                    ChemicalStock.objects.filter(chemical=chem)
+                    .order_by("-updated_at")
+                    .first()
+                )
+                if stock and stock.price_per_unit is not None:
+                    total_cost_rs += round(consumption_kg * float(stock.price_per_unit), 2)
+    return (round(total_consumption_kg, 2), round(total_cost_rs, 2))
+
+
+def _projected_totals_from_stock(equipment_name=None):
+    """
+    Derive projected consumption (kg) and projected cost (Rs)
+    from current chemical stock, optionally filtered by equipment.
+
+    Business rule:
+    - For each ChemicalStock entry, use available_qty_kg as projected quantity.
+    - Projected cost = available_qty_kg * price_per_unit (when price is set).
+    - When equipment_name is provided, restrict to chemicals assigned to that equipment.
+    """
+    stock_qs = ChemicalStock.objects.select_related("chemical")
+    if equipment_name:
+        chem_ids = ChemicalAssignment.objects.filter(
+            equipment_name__iexact=equipment_name
+        ).values_list("chemical_id", flat=True)
+        stock_qs = stock_qs.filter(chemical_id__in=list(chem_ids))
+
+    total_qty_kg = 0.0
+    total_cost_rs = 0.0
+    for stock in stock_qs:
+        qty_kg = float(stock.available_qty_kg or 0.0)
+        total_qty_kg += qty_kg
+        if stock.price_per_unit is not None:
+            total_cost_rs += qty_kg * float(stock.price_per_unit)
+
+    return round(total_qty_kg, 2), round(total_cost_rs, 2)
+
+
+def get_available_stock_for_chemical(chemical_id):
+    """
+    Compute available stock for a chemical: initial stock (from ChemicalStock) minus
+    total consumed from all ChemicalPreparation entries (approved, pending, draft).
+    Returns (available_qty_kg, unit, price_per_unit from latest stock).
+    """
+    try:
+        chemical = Chemical.objects.get(id=chemical_id)
+    except (Chemical.DoesNotExist, ValueError, TypeError):
+        return (0.0, "kg", None)
+
+    initial = (
+        ChemicalStock.objects.filter(chemical_id=chemical_id).aggregate(
+            total=models.Sum("available_qty_kg")
+        )["total"]
+        or 0.0
+    )
+    consumed_g = (
+        ChemicalPreparation.objects.filter(
+            chemical_id=chemical_id,
+            status__in=["approved", "pending", "draft"],
+        )
+        .exclude(chemical_qty__isnull=True)
+        .aggregate(total=models.Sum("chemical_qty"))["total"]
+        or 0.0
+    )
+    consumed_kg = float(consumed_g) / 1000.0
+    available_kg = max(0.0, float(initial) - consumed_kg)
+
+    latest_stock = (
+        ChemicalStock.objects.filter(chemical_id=chemical_id)
+        .order_by("-updated_at")
+        .first()
+    )
+    unit = (latest_stock.unit if latest_stock else "kg") or "kg"
+    price = latest_stock.price_per_unit if latest_stock else None
+
+    return (round(available_kg, 2), unit, price)
 
 
 class ChemicalViewSet(viewsets.ReadOnlyModelViewSet):
@@ -36,9 +176,26 @@ def _normalize_location(value):
         return "water_system"
     if v in ("cooling_towers", "cooling towers", "cooling"):
         return "cooling_towers"
-    if v == "boiler":
+    if v in ("boiler", "boilers"):
         return "boiler"
     return None
+
+
+def _location_from_equipment_category(category_name):
+    """
+    Map EquipmentCategory name to Chemical.LOCATION_CHOICES value.
+    Returns one of water_system, cooling_towers, boiler; defaults to water_system if no match.
+    """
+    if not category_name or not str(category_name).strip():
+        return "water_system"
+    v = str(category_name).strip().lower()
+    if v in ("boiler", "boilers"):
+        return "boiler"
+    if v in ("cooling_towers", "cooling towers", "cooling"):
+        return "cooling_towers"
+    if v in ("water_system", "water system", "water"):
+        return "water_system"
+    return "water_system"
 
 
 class ChemicalStockViewSet(viewsets.ModelViewSet):
@@ -69,13 +226,34 @@ class ChemicalStockViewSet(viewsets.ModelViewSet):
             qs = qs.filter(chemical__location=location)
         return qs
 
+    @action(detail=False, methods=["get"], url_path="available")
+    def available(self, request):
+        """
+        GET ?chemical=<uuid>
+        Returns computed available stock for the chemical: initial stock minus all logged consumption.
+        """
+        chemical_id = (request.query_params.get("chemical") or "").strip() or None
+        if not chemical_id:
+            return Response(
+                {"error": "chemical query parameter (UUID) is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        available_kg, unit, price_per_unit = get_available_stock_for_chemical(chemical_id)
+        return Response({
+            "available_qty_kg": available_kg,
+            "unit": unit,
+            "price_per_unit": price_per_unit,
+        })
+
     @action(detail=False, methods=["post"], permission_classes=[IsAuthenticated, IsSuperAdminOrManager])
     def create_entry(self, request):
         """
         Create a new chemical stock entry from manual fields.
-        Accepts: location, chemical_name, chemical_formula, stock, price, site.
+        Accepts: category_id (equipment category id) or location, chemical_name, chemical_formula, stock, price, site.
+        When category_id is provided, it is resolved to Chemical location via equipment category name.
         Creates or reuses Chemical master, then creates ChemicalStock.
         """
+        category_id = (request.data.get("category_id") or "").strip() or None
         location_raw = (request.data.get("location") or "").strip()
         chemical_name = (request.data.get("chemical_name") or "").strip()
         chemical_formula = (request.data.get("chemical_formula") or "").strip()
@@ -86,11 +264,18 @@ class ChemicalStockViewSet(viewsets.ModelViewSet):
         if not chemical_name:
             raise ValidationError({"chemical_name": "Chemical name is required."})
 
-        location = _normalize_location(location_raw)
-        if not location:
-            raise ValidationError({
-                "location": "Location must be one of: Water system, Cooling towers, Boiler."
-            })
+        if category_id:
+            try:
+                cat = EquipmentCategory.objects.get(id=category_id)
+                location = _location_from_equipment_category(cat.name)
+            except (EquipmentCategory.DoesNotExist, ValueError, TypeError):
+                raise ValidationError({"category_id": "Invalid equipment category."})
+        else:
+            location = _normalize_location(location_raw)
+            if not location:
+                raise ValidationError({
+                    "location": "Category or location is required. Provide category_id or location (Water system, Cooling towers, Boiler)."
+                })
 
         try:
             stock = float(stock_raw) if stock_raw is not None and str(stock_raw).strip() != "" else 0.0
@@ -127,10 +312,14 @@ class ChemicalAssignmentViewSet(viewsets.ModelViewSet):
     """Manage assignments of chemicals to equipment. Create/update/delete only admin/super_admin."""
 
     serializer_class = ChemicalAssignmentSerializer
-    queryset = ChemicalAssignment.objects.select_related("chemical", "created_by").all()
+    queryset = ChemicalAssignment.objects.select_related(
+        "chemical", "created_by", "approved_by", "rejected_by"
+    ).all()
 
     def get_permissions(self):
         if self.action in ("create", "update", "partial_update", "destroy"):
+            return [IsAuthenticated(), IsSuperAdminOrManager()]
+        if self.action == "approve":
             return [IsAuthenticated(), IsSuperAdminOrManager()]
         return [IsAuthenticated()]
 
@@ -146,6 +335,56 @@ class ChemicalAssignmentViewSet(viewsets.ModelViewSet):
         if equipment_name:
             qs = qs.filter(equipment_name__icontains=equipment_name)
         return qs
+
+    @action(detail=True, methods=["post"])
+    def approve(self, request, pk=None):
+        """Approve or reject an assignment. Creator (done by) cannot approve/reject."""
+        assignment = self.get_object()
+        action_type = (request.data.get("action") or "approve").lower()
+        remarks = (request.data.get("remarks") or "").strip()
+
+        if assignment.created_by_id and assignment.created_by_id == request.user.id:
+            return Response(
+                {"error": "The assignment must be approved or rejected by a different user than the creator (Created by)."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if action_type == "reject":
+            if not remarks:
+                raise ValidationError({"remarks": ["Comment is required when rejecting."]})
+            if assignment.status not in ("pending",):
+                return Response(
+                    {"error": "Only pending assignments can be rejected."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            assignment.status = "rejected"
+            assignment.rejected_by = request.user
+            assignment.rejected_at = timezone.now()
+            assignment.rejection_comment = remarks
+            assignment.approved_by = None
+            assignment.approved_at = None
+            assignment.save(update_fields=["status", "rejected_by", "rejected_at", "rejection_comment", "approved_by", "approved_at"])
+        elif action_type == "approve":
+            if assignment.status != "pending":
+                return Response(
+                    {"error": "Only pending assignments can be approved."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            assignment.status = "approved"
+            assignment.approved_by = request.user
+            assignment.approved_at = timezone.now()
+            assignment.rejected_by = None
+            assignment.rejected_at = None
+            assignment.rejection_comment = None
+            assignment.save(update_fields=["status", "approved_by", "approved_at", "rejected_by", "rejected_at", "rejection_comment"])
+        else:
+            return Response(
+                {"error": 'Invalid action. Use "approve" or "reject".'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serializer = self.get_serializer(assignment)
+        return Response(serializer.data)
 
 
 class ChemicalPreparationViewSet(viewsets.ModelViewSet):
@@ -202,16 +441,25 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
         equipment_name = validated.get("equipment_name")
         timestamp = validated.get("timestamp") or timezone.now()
         if equipment_name is not None:
-            interval, shift_hours = get_interval_for_equipment(equipment_name or "", "chemical")
-            slot_start, slot_end = get_slot_range(timestamp, interval, shift_hours)
-            if ChemicalPreparation.objects.filter(
-                equipment_name=equipment_name,
-                timestamp__gte=slot_start,
-                timestamp__lt=slot_end,
-            ).exists():
-                raise ValidationError(
-                    {"detail": ["An entry for this equipment already exists for this time slot."]}
-                )
+            base_qs = ChemicalPreparation.objects.filter(equipment_name=equipment_name)
+            last_log = base_qs.order_by('-timestamp').first()
+            last_time = last_log.timestamp if last_log is not None else None
+            slot_info = compute_slot_status(equipment_name or "", "chemical", timestamp, last_time=last_time)
+            slot_start = slot_info["slot_start"]
+            slot_end = slot_info["slot_end"]
+            tolerance_end = slot_info["tolerance_end"]
+            status = slot_info["status"]
+
+            if status == "interval":
+                if base_qs.filter(timestamp__gte=slot_start, timestamp__lt=slot_end).exists():
+                    raise ValidationError(
+                        {"detail": ["An entry for this equipment already exists for this time slot."]}
+                    )
+            elif status == "tolerance" and tolerance_end is not None:
+                if base_qs.filter(timestamp__gte=slot_end, timestamp__lte=tolerance_end).exists():
+                    raise ValidationError(
+                        {"detail": ["An entry for this equipment already exists for this time slot."]}
+                    )
         chemical = validated.get("chemical")
         chemical_name = validated.get("chemical_name")
         requested_qty_g = validated.get("chemical_qty")
@@ -242,10 +490,30 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
                     }
                 )
 
-        serializer.save(
+        log = serializer.save(
             operator=self.request.user,
             operator_name=self.request.user.name or self.request.user.email,
         )
+        log_audit_event(
+            user=self.request.user,
+            event_type="log_created",
+            object_type="chemical_log",
+            object_id=str(log.id),
+            field_name="created",
+            new_value=timezone.localtime(log.timestamp).isoformat() if log.timestamp else None,
+        )
+
+    def perform_destroy(self, instance):
+        """Record log_deleted in audit trail before deleting."""
+        log_audit_event(
+            user=self.request.user,
+            event_type="log_deleted",
+            object_type="chemical_log",
+            object_id=str(instance.id),
+            field_name="deleted",
+            new_value=timezone.localtime(timezone.now()).isoformat(),
+        )
+        super().perform_destroy(instance)
 
     def update(self, request, *args, **kwargs):
         """
@@ -314,16 +582,41 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
         kwargs["partial"] = True
         return self.update(request, *args, **kwargs)
 
+    @action(detail=False, methods=["get"], url_path="equipment_names")
+    def equipment_names(self, request):
+        """
+        GET Returns distinct equipment names for dashboard dropdown: from approved
+        chemical assignments and from approved preparations. Only approved equipments are shown.
+        """
+        # Equipment from approved chemical assignments only (so dropdown shows only approved equipment)
+        from_assignments = set(
+            ChemicalAssignment.objects.filter(is_active=True, status="approved")
+            .exclude(equipment_name__isnull=True)
+            .exclude(equipment_name="")
+            .values_list("equipment_name", flat=True)
+            .distinct()
+        )
+        # Equipment from approved preparations (in case logs exist without assignment)
+        from_preparations = set(
+            ChemicalPreparation.objects.filter(status="approved")
+            .exclude(equipment_name__isnull=True)
+            .exclude(equipment_name="")
+            .values_list("equipment_name", flat=True)
+            .distinct()
+        )
+        names = sorted(from_assignments | from_preparations)
+        return Response({"equipment_names": names})
+
     @action(detail=False, methods=["get"], url_path="dashboard_summary")
     def dashboard_summary(self, request):
         """
-        GET ?period_type=week|month&date=YYYY-MM-DD
+        GET ?period_type=day|month|year&date=YYYY-MM-DD&equipment_name=...
         Returns by_chemical (consumption kg, cost Rs), totals, optional projected.
         """
         period_type = (request.query_params.get("period_type") or "month").lower()
-        if period_type not in ("week", "month"):
+        if period_type not in ("day", "month", "year"):
             return Response(
-                {"error": "period_type must be week or month"},
+                {"error": "period_type must be day, month, or year"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         date_str = request.query_params.get("date")
@@ -339,25 +632,20 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
                 {"error": "date must be YYYY-MM-DD"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        equipment_name = (request.query_params.get("equipment_name") or "").strip() or None
 
-        if period_type == "week":
-            year, week_no, _ = ref_date.isocalendar()
-            # Monday of ISO week (1 = Monday in isocalendar)
-            period_start_date = datetime.strptime(
-                f"{year}-W{week_no:02d}-1", "%G-W%V-%u"
-            ).date()
-            period_end_date = period_start_date + timedelta(days=6)
+        if period_type == "day":
             period_start = timezone.make_aware(
-                datetime.combine(period_start_date, datetime.min.time())
+                datetime.combine(ref_date, datetime.min.time())
             )
             period_end = timezone.make_aware(
                 datetime.combine(
-                    period_end_date,
+                    ref_date,
                     datetime.max.time().replace(microsecond=999999),
                 )
             )
-            days_in_period = 7
-        else:
+            days_in_period = 1
+        elif period_type == "month":
             _, last_day = calendar.monthrange(ref_date.year, ref_date.month)
             period_start = timezone.make_aware(
                 datetime(ref_date.year, ref_date.month, 1)
@@ -374,15 +662,29 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
                 )
             )
             days_in_period = last_day
+        else:
+            period_start = timezone.make_aware(datetime(ref_date.year, 1, 1))
+            period_end = timezone.make_aware(
+                datetime(
+                    ref_date.year,
+                    12,
+                    31,
+                    23,
+                    59,
+                    59,
+                    999999,
+                )
+            )
+            days_in_period = 366 if calendar.isleap(ref_date.year) else 365
 
         qs = ChemicalPreparation.objects.filter(
             timestamp__gte=period_start,
             timestamp__lte=period_end,
-            status="approved",
+            status__in=["approved", "pending", "draft"],
         ).exclude(chemical_qty__isnull=True).exclude(chemical_qty=0)
+        if equipment_name:
+            qs = qs.filter(equipment_name__iexact=equipment_name)
 
-        # Group by chemical_id when set, else by chemical_name (manual entries)
-        from collections import defaultdict
         groups = defaultdict(lambda: {"qty_g": 0.0, "chemical_id": None, "chemical_name": ""})
 
         for prep in qs.select_related("chemical").only(
@@ -418,9 +720,7 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
                     cost_rs = round(consumption_kg * float(stock.price_per_unit), 2)
                     total_cost_rs += cost_rs
             else:
-                chem = Chemical.objects.filter(
-                    name=data["chemical_name"], is_active=True
-                ).first()
+                chem = _resolve_chemical_for_cost(data["chemical_name"])
                 if chem:
                     stock = (
                         ChemicalStock.objects.filter(chemical=chem)
@@ -450,34 +750,139 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
             "total_cost_rs": round(total_cost_rs, 2),
         }
 
-        config = ChemicalDashboardConfig.objects.first()
-        if config:
-            if config.projected_consumption_kg_month is not None:
-                if period_type == "month":
-                    payload["projected_consumption_kg"] = round(
-                        config.projected_consumption_kg_month, 2
-                    )
-                else:
-                    _, month_days = calendar.monthrange(
-                        ref_date.year, ref_date.month
-                    )
-                    payload["projected_consumption_kg"] = round(
-                        config.projected_consumption_kg_month * (7.0 / month_days), 2
-                    )
-            if config.projected_cost_rs_month is not None:
-                if period_type == "month":
-                    payload["projected_cost_rs"] = round(
-                        config.projected_cost_rs_month, 2
-                    )
-                else:
-                    _, month_days = calendar.monthrange(
-                        ref_date.year, ref_date.month
-                    )
-                    payload["projected_cost_rs"] = round(
-                        config.projected_cost_rs_month * (7.0 / month_days), 2
-                    )
+        projected_qty_kg, projected_cost_rs = _projected_totals_from_stock(
+            equipment_name=equipment_name
+        )
+        if projected_qty_kg:
+            payload["projected_consumption_kg"] = projected_qty_kg
+        if projected_cost_rs:
+            payload["projected_cost_rs"] = projected_cost_rs
 
         return Response(payload)
+
+    @action(detail=False, methods=["get"], url_path="dashboard_series")
+    def dashboard_series(self, request):
+        """
+        GET ?period_type=day|month|year&date=YYYY-MM-DD&equipment_name=...&days=1
+        Returns time series for charts: actual vs projected consumption and cost.
+        """
+        period_type = (request.query_params.get("period_type") or "day").lower()
+        if period_type not in ("day", "month", "year"):
+            return Response(
+                {"error": "period_type must be day, month, or year"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        date_str = request.query_params.get("date")
+        if not date_str:
+            return Response(
+                {"error": "date is required (YYYY-MM-DD)"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            ref_date = datetime.strptime(date_str.strip()[:10], "%Y-%m-%d").date()
+        except ValueError:
+            return Response(
+                {"error": "date must be YYYY-MM-DD"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        equipment_name = (request.query_params.get("equipment_name") or "").strip() or None
+        days_param = request.query_params.get("days")
+        series_days = int(days_param) if days_param and str(days_param).isdigit() else 1
+        series_days = max(1, min(31, series_days))
+
+        proj_total_qty_kg, proj_total_cost_rs = _projected_totals_from_stock(
+            equipment_name=equipment_name
+        )
+
+        series = []
+        try:
+            if period_type == "day":
+                for i in range(series_days - 1, -1, -1):
+                    d = ref_date - timedelta(days=i)
+                    day_start = timezone.make_aware(datetime.combine(d, datetime.min.time()))
+                    day_end = timezone.make_aware(
+                        datetime.combine(d, datetime.max.time().replace(microsecond=999999))
+                    )
+                    qs = (
+                        ChemicalPreparation.objects.filter(
+                            timestamp__gte=day_start,
+                            timestamp__lte=day_end,
+                            status__in=["approved", "pending", "draft"],
+                        )
+                        .exclude(chemical_qty__isnull=True)
+                        .exclude(chemical_qty=0)
+                    )
+                    if equipment_name:
+                        qs = qs.filter(equipment_name__iexact=equipment_name)
+                    actual_kg, actual_rs = _chemical_totals_for_queryset(qs)
+                    series.append({
+                        "date": d.isoformat(),
+                        "label": d.strftime("%d %b"),
+                        "actual_consumption_kg": actual_kg,
+                    "projected_consumption_kg": proj_total_qty_kg,
+                        "actual_cost_rs": actual_rs,
+                    "projected_cost_rs": proj_total_cost_rs,
+                    })
+            elif period_type == "month":
+                # Only the selected month (one point)
+                _, last_day = calendar.monthrange(ref_date.year, ref_date.month)
+                start_d = date(ref_date.year, ref_date.month, 1)
+                end_d = date(ref_date.year, ref_date.month, last_day)
+                month_start = timezone.make_aware(datetime.combine(start_d, datetime.min.time()))
+                month_end = timezone.make_aware(
+                    datetime.combine(
+                        end_d,
+                        datetime.max.time().replace(microsecond=999999),
+                    )
+                )
+                qs = (
+                    ChemicalPreparation.objects.filter(
+                        timestamp__gte=month_start,
+                        timestamp__lte=month_end,
+                        status__in=["approved", "pending", "draft"],
+                    )
+                    .exclude(chemical_qty__isnull=True)
+                    .exclude(chemical_qty=0)
+                )
+                if equipment_name:
+                    qs = qs.filter(equipment_name__iexact=equipment_name)
+                actual_kg, actual_rs = _chemical_totals_for_queryset(qs)
+                series.append({
+                    "date": start_d.isoformat(),
+                    "label": start_d.strftime("%b %Y"),
+                    "actual_consumption_kg": actual_kg,
+                    "projected_consumption_kg": proj_total_qty_kg,
+                    "actual_cost_rs": actual_rs,
+                    "projected_cost_rs": proj_total_cost_rs,
+                })
+            else:
+                year_start = timezone.make_aware(datetime(ref_date.year, 1, 1))
+                year_end = timezone.make_aware(
+                    datetime(ref_date.year, 12, 31, 23, 59, 59, 999999)
+                )
+                qs = (
+                    ChemicalPreparation.objects.filter(
+                        timestamp__gte=year_start,
+                        timestamp__lte=year_end,
+                        status__in=["approved", "pending", "draft"],
+                    )
+                    .exclude(chemical_qty__isnull=True)
+                    .exclude(chemical_qty=0)
+                )
+                if equipment_name:
+                    qs = qs.filter(equipment_name__iexact=equipment_name)
+                actual_kg, actual_rs = _chemical_totals_for_queryset(qs)
+                series.append({
+                    "date": date(ref_date.year, 1, 1).isoformat(),
+                    "label": str(ref_date.year),
+                    "actual_consumption_kg": actual_kg,
+                    "projected_consumption_kg": proj_total_qty_kg,
+                    "actual_cost_rs": actual_rs,
+                    "projected_cost_rs": proj_total_cost_rs,
+                })
+        except Exception:
+            series = []
+        return Response({"series": series})
 
     @action(detail=True, methods=['post'])
     def correct(self, request, pk=None):
@@ -625,7 +1030,7 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
             from reports.utils import create_report_entry
             title = f"{prep.chemical_name or 'Chemical Preparation'} - {prep.equipment_name or 'N/A'}"
             create_report_entry(
-                report_type='utility',
+                report_type='chemical',
                 source_id=str(prep.id),
                 source_table='chemical_preparations',
                 title=title,

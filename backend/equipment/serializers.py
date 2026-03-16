@@ -54,6 +54,7 @@ class EquipmentSerializer(serializers.ModelSerializer):
             "status",
             "log_entry_interval",
             "shift_duration_hours",
+            "tolerance_minutes",
             "created_by",
             "created_by_name",
             "approved_by",
@@ -107,6 +108,12 @@ class EquipmentSerializer(serializers.ModelSerializer):
                     {"shift_duration_hours": "Shift duration must be between 1 and 24 hours when interval is 'shift'."}
                 )
 
+        tolerance_minutes = attrs.get("tolerance_minutes")
+        if tolerance_minutes is not None and tolerance_minutes < 0:
+            raise serializers.ValidationError(
+                {"tolerance_minutes": "Tolerance must be zero or a positive number of minutes."}
+            )
+
         return super().validate(attrs)
 
     def create(self, validated_data):
@@ -117,5 +124,19 @@ class EquipmentSerializer(serializers.ModelSerializer):
         user = getattr(request, "user", None)
         if user and user.is_authenticated:
             validated_data.setdefault("created_by", user)
+        # When tolerance is set on create, also set tolerance_enabled_at
+        tol = validated_data.get("tolerance_minutes")
+        if tol is not None and tol > 0:
+            from django.utils import timezone
+            validated_data.setdefault("tolerance_enabled_at", timezone.now())
         return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        # If tolerance_minutes changes from 0/None to >0, set tolerance_enabled_at (once)
+        old_tol = getattr(instance, "tolerance_minutes", None) or 0
+        new_tol = validated_data.get("tolerance_minutes", old_tol)
+        if new_tol is not None and new_tol > 0 and old_tol <= 0 and "tolerance_enabled_at" not in validated_data:
+            from django.utils import timezone
+            validated_data["tolerance_enabled_at"] = timezone.now()
+        return super().update(instance, validated_data)
 

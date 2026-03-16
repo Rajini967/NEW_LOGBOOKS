@@ -75,6 +75,14 @@ class AuditEvent(models.Model):
         ("config_update", "Configuration Update"),
         ("log_update", "Log Update"),
         ("log_correction", "Log Correction"),
+        ("log_created", "Log Created"),
+        ("log_deleted", "Log Deleted"),
+        ("entity_created", "Entity Created"),
+        ("entity_updated", "Entity Updated"),
+        ("entity_deleted", "Entity Deleted"),
+        ("entity_approved", "Entity Approved"),
+        ("entity_rejected", "Entity Rejected"),
+        ("consumption_updated", "Consumption Updated"),
         # User lifecycle (21 CFR Part 11)
         ("user_created", "User Created"),
         ("password_changed", "Password Changed"),
@@ -105,3 +113,61 @@ class AuditEvent(models.Model):
 
     def __str__(self) -> str:  # pragma: no cover - trivial
         return f"{self.event_type} on {self.object_type}:{self.object_id or ''}"
+
+
+class ManualChillerConsumption(models.Model):
+    """Manual daily consumption entry for a chiller (overrides log-aggregated values when present)."""
+    equipment_id = models.CharField(max_length=100, db_index=True)
+    date = models.DateField(db_index=True)
+    power_kwh = models.FloatField(default=0, blank=True)
+    water_ct1_l = models.FloatField(default=0, blank=True)
+    water_ct2_l = models.FloatField(default=0, blank=True)
+    water_ct3_l = models.FloatField(default=0, blank=True)
+    chemical_ct1_kg = models.FloatField(default=0, blank=True)
+    chemical_ct2_kg = models.FloatField(default=0, blank=True)
+    chemical_ct3_kg = models.FloatField(default=0, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "manual_chiller_consumption"
+        unique_together = [("equipment_id", "date")]
+        ordering = ["equipment_id", "-date"]
+
+    def __str__(self):
+        return f"Chiller {self.equipment_id} {self.date}"
+
+
+class ManualBoilerConsumption(models.Model):
+    """Manual daily consumption entry for a boiler."""
+    equipment_id = models.CharField(max_length=100, db_index=True)
+    date = models.DateField(db_index=True)
+    power_kwh = models.FloatField(default=0, blank=True)
+    water_l = models.FloatField(default=0, blank=True)
+    chemical_kg = models.FloatField(default=0, blank=True)
+    diesel_l = models.FloatField(default=0, blank=True)
+    furnace_oil_l = models.FloatField(default=0, blank=True)
+    brigade_kg = models.FloatField(default=0, blank=True)
+    steam_kg_hr = models.FloatField(default=0, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "manual_boiler_consumption"
+        unique_together = [("equipment_id", "date")]
+        ordering = ["equipment_id", "-date"]
+
+    def __str__(self):
+        return f"Boiler {self.equipment_id} {self.date}"
+
+
+class ManualChemicalConsumption(models.Model):
+    """Manual daily chemical consumption (site-wide per date)."""
+    date = models.DateField(unique=True, db_index=True)
+    chemical_kg = models.FloatField(default=0, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "manual_chemical_consumption"
+        ordering = ["-date"]
+
+    def __str__(self):
+        return f"Chemical {self.date}"

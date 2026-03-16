@@ -41,6 +41,7 @@ export default function SettingsPage() {
   const [isSessionLoading, setIsSessionLoading] = useState(false);
   const [chillerEquipment, setChillerEquipment] = useState<{ id: string; equipment_number: string; name: string }[]>([]);
   const [chillerLimits, setChillerLimits] = useState<Record<string, {
+    effective_from?: string | null;
     daily_power_limit_kw?: number | null;
     electricity_rate_rs_per_kwh?: number | null;
     daily_water_ct1_liters?: number | null;
@@ -55,6 +56,7 @@ export default function SettingsPage() {
   const [selectedChillerForLimits, setSelectedChillerForLimits] = useState<string>('');
   const [boilerEquipment, setBoilerEquipment] = useState<{ id: string; equipment_number: string; name: string }[]>([]);
   const [boilerLimits, setBoilerLimits] = useState<Record<string, {
+    effective_from?: string | null;
     daily_power_limit_kw?: number | null;
     daily_water_limit_liters?: number | null;
     daily_chemical_limit_kg?: number | null;
@@ -124,6 +126,7 @@ export default function SettingsPage() {
           try {
             const limit = await chillerLimitsAPI.get(eq.equipment_number);
             limitsByEq[eq.equipment_number] = {
+              effective_from: limit.effective_from ?? null,
               daily_power_limit_kw: limit.daily_power_limit_kw ?? null,
               electricity_rate_rs_per_kwh: limit.electricity_rate_rs_per_kwh ?? null,
               daily_water_ct1_liters: limit.daily_water_ct1_liters ?? null,
@@ -135,6 +138,7 @@ export default function SettingsPage() {
             };
           } catch {
             limitsByEq[eq.equipment_number] = {
+              effective_from: null,
               daily_power_limit_kw: null,
               electricity_rate_rs_per_kwh: null,
               daily_water_ct1_liters: null,
@@ -188,6 +192,7 @@ export default function SettingsPage() {
           .map((e: any) => ({ id: e.id, equipment_number: e.equipment_number || '', name: e.name || '' }));
         setBoilerEquipment(boilers);
         const limitsByEq: Record<string, {
+          effective_from?: string | null;
           daily_power_limit_kw?: number | null;
           daily_water_limit_liters?: number | null;
           daily_chemical_limit_kg?: number | null;
@@ -204,6 +209,7 @@ export default function SettingsPage() {
           try {
             const limit = await boilerLimitsAPI.get(eq.equipment_number);
             limitsByEq[eq.equipment_number] = {
+              effective_from: limit.effective_from ?? null,
               daily_power_limit_kw: limit.daily_power_limit_kw ?? null,
               daily_water_limit_liters: limit.daily_water_limit_liters ?? null,
               daily_chemical_limit_kg: limit.daily_chemical_limit_kg ?? null,
@@ -218,6 +224,7 @@ export default function SettingsPage() {
             };
           } catch {
             limitsByEq[eq.equipment_number] = {
+              effective_from: null,
               daily_power_limit_kw: null,
               daily_water_limit_liters: null,
               daily_chemical_limit_kg: null,
@@ -254,6 +261,7 @@ export default function SettingsPage() {
     try {
       const data = chillerLimits[equipmentNumber] ?? {};
       const payload = {
+        effective_from: data.effective_from ?? null,
         daily_power_limit_kw: data.daily_power_limit_kw ?? null,
         electricity_rate_rs_per_kwh: data.electricity_rate_rs_per_kwh ?? null,
         daily_water_ct1_liters: data.daily_water_ct1_liters ?? null,
@@ -286,6 +294,7 @@ export default function SettingsPage() {
     try {
       const data = boilerLimits[equipmentNumber] ?? {};
       const payload = {
+        effective_from: data.effective_from ?? null,
         daily_power_limit_kw: data.daily_power_limit_kw ?? null,
         daily_water_limit_liters: data.daily_water_limit_liters ?? null,
         daily_chemical_limit_kg: data.daily_chemical_limit_kg ?? null,
@@ -590,6 +599,22 @@ export default function SettingsPage() {
                 return (
                   <div className="border border-border rounded-lg p-4 space-y-4">
                     <h4 className="font-medium text-foreground">{eq.equipment_number} – {eq.name}</h4>
+                    <div className="space-y-2 pb-2 border-b border-border">
+                      <Label className="text-sm font-medium text-foreground">Effective from (date)</Label>
+                      <Input
+                        type="date"
+                        className="max-w-xs"
+                        value={(chillerLimits[eq.equipment_number]?.effective_from ?? '').toString().slice(0, 10)}
+                        onChange={(e) => {
+                          const v = e.target.value || null;
+                          setChillerLimits((prev) => ({
+                            ...prev,
+                            [eq.equipment_number]: { ...(prev[eq.equipment_number] ?? {}), effective_from: v ?? undefined },
+                          }));
+                        }}
+                      />
+                      <p className="text-xs text-muted-foreground">Leave blank to apply to all dates.</p>
+                    </div>
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
                       <div className="space-y-1">
                         <Label className="text-xs">Daily power limit (kWh)</Label>
@@ -785,6 +810,22 @@ export default function SettingsPage() {
                 return (
                   <div className="border border-border rounded-lg p-4 space-y-4">
                     <h4 className="font-medium text-foreground">{eq.equipment_number} – {eq.name}</h4>
+                    <div className="space-y-2 pb-2 border-b border-border">
+                      <Label className="text-sm font-medium text-foreground">Effective from (date)</Label>
+                      <Input
+                        type="date"
+                        className="max-w-xs"
+                        value={(boilerLimits[eq.equipment_number]?.effective_from ?? '').toString().slice(0, 10)}
+                        onChange={(e) => {
+                          const v = e.target.value || null;
+                          setBoilerLimits((prev) => ({
+                            ...prev,
+                            [eq.equipment_number]: { ...(prev[eq.equipment_number] ?? {}), effective_from: v ?? undefined },
+                          }));
+                        }}
+                      />
+                      <p className="text-xs text-muted-foreground">Leave blank to apply to all dates.</p>
+                    </div>
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
                       <div className="space-y-1">
                         <Label className="text-xs">Daily power limit (kWh)</Label>

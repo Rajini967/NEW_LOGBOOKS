@@ -3,6 +3,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from accounts.permissions import CanLogEntries, CanApproveReports
+from reports.utils import log_audit_event
 
 from .models import (
     AirVelocityTest, AirVelocityRoom, AirVelocityFilter,
@@ -35,11 +36,18 @@ class BaseTestCertificateViewSet(viewsets.ModelViewSet):
     
     def perform_create(self, serializer):
         """Set operator when creating a test."""
-        serializer.save(
+        instance = serializer.save(
             operator=self.request.user,
             operator_name=self.request.user.name or self.request.user.email
         )
-    
+        log_audit_event(
+            user=self.request.user,
+            event_type="entity_created",
+            object_type=getattr(instance._meta, "model_name", type(instance).__name__.lower()) or "test_certificate",
+            object_id=str(instance.id),
+            field_name="created",
+        )
+
     @action(detail=True, methods=['post'])
     def approve(self, request, pk=None):
         """Approve or reject a test certificate."""

@@ -10,9 +10,10 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from accounts.permissions import IsManagerOrSuperAdmin
-from reports.utils import create_report_entry
+from reports.utils import create_report_entry, log_audit_event, log_entity_update_changes
 
 from .models import FilterCategory, FilterMaster, FilterAssignment, FilterSchedule, FilterDashboardConfig
+from filter_logs.models import FilterLog
 from .serializers import (
     FilterCategorySerializer,
     FilterMasterSerializer,
@@ -30,6 +31,29 @@ class FilterCategoryViewSet(viewsets.ModelViewSet):
         if self.action in ["create", "update", "partial_update", "destroy"]:
             return [IsAuthenticated(), IsManagerOrSuperAdmin()]
         return [IsAuthenticated()]
+
+    def perform_create(self, serializer):
+        instance = serializer.save()
+        log_audit_event(
+            user=self.request.user,
+            event_type="entity_created",
+            object_type="filter_category",
+            object_id=str(instance.id),
+            field_name="created",
+        )
+
+    def perform_update(self, serializer):
+        log_entity_update_changes(serializer, self.request, "filter_category")
+
+    def perform_destroy(self, instance):
+        log_audit_event(
+            user=self.request.user,
+            event_type="entity_deleted",
+            object_type="filter_category",
+            object_id=str(instance.id),
+            field_name="deleted",
+        )
+        instance.delete()
 
     def destroy(self, request, *args, **kwargs):
         """
@@ -71,6 +95,29 @@ class FilterMasterViewSet(viewsets.ModelViewSet):
         self.perform_create(serializer)
         headers = self.get_success_headers(serializer.data)
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
+    def perform_create(self, serializer):
+        instance = serializer.save()
+        log_audit_event(
+            user=self.request.user,
+            event_type="entity_created",
+            object_type="filter_master",
+            object_id=str(instance.id),
+            field_name="created",
+        )
+
+    def perform_update(self, serializer):
+        log_entity_update_changes(serializer, self.request, "filter_master")
+
+    def perform_destroy(self, instance):
+        log_audit_event(
+            user=self.request.user,
+            event_type="entity_deleted",
+            object_type="filter_master",
+            object_id=str(instance.id),
+            field_name="deleted",
+        )
+        instance.delete()
 
     @action(detail=True, methods=["post"])
     def approve(self, request, pk=None):
@@ -131,6 +178,15 @@ class FilterMasterViewSet(viewsets.ModelViewSet):
             remarks=None,
         )
 
+        log_audit_event(
+            user=request.user,
+            event_type="entity_approved",
+            object_type="filter_master",
+            object_id=str(instance.id),
+            field_name="status",
+            new_value="approved",
+        )
+
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
 
@@ -163,6 +219,15 @@ class FilterMasterViewSet(viewsets.ModelViewSet):
         instance.approved_at = timezone.now()
         instance.save(update_fields=["status", "approved_by", "approved_at", "updated_at"])
 
+        log_audit_event(
+            user=request.user,
+            event_type="entity_rejected",
+            object_type="filter_master",
+            object_id=str(instance.id),
+            field_name="status",
+            new_value="rejected",
+        )
+
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
 
@@ -183,6 +248,29 @@ class FilterAssignmentViewSet(viewsets.ModelViewSet):
         if equipment_id:
             qs = qs.filter(equipment_id=equipment_id)
         return qs
+
+    def perform_create(self, serializer):
+        instance = serializer.save()
+        log_audit_event(
+            user=self.request.user,
+            event_type="entity_created",
+            object_type="filter_assignment",
+            object_id=str(instance.id),
+            field_name="created",
+        )
+
+    def perform_update(self, serializer):
+        log_entity_update_changes(serializer, self.request, "filter_assignment")
+
+    def perform_destroy(self, instance):
+        log_audit_event(
+            user=self.request.user,
+            event_type="entity_deleted",
+            object_type="filter_assignment",
+            object_id=str(instance.id),
+            field_name="deleted",
+        )
+        instance.delete()
 
 
 class FilterScheduleViewSet(viewsets.ModelViewSet):
@@ -272,17 +360,46 @@ class FilterScheduleViewSet(viewsets.ModelViewSet):
             period_start_date = date(ref_date.year, ref_date.month, 1)
             period_end_date = date(ref_date.year, ref_date.month, last_day)
 
-        base_qs = FilterSchedule.objects.filter(
-            last_done_date__gte=period_start_date,
-            last_done_date__lte=period_end_date,
-        ).exclude(last_done_date__isnull=True)
+        equipment_id = (request.query_params.get("equipment_id") or "").strip() or None
+        # Resolve filter IDs for equipment (log entries use filter id e.g. FMT-0001)
+        if equipment_id:
+            filter_ids = list(
+                FilterAssignment.objects.filter(equipment_id=equipment_id)
+                .values_list("filter__filter_id", flat=True)
+            )
+        else:
+            filter_ids = list(
+                FilterAssignment.objects.values_list("filter__filter_id", flat=True).distinct()
+            )
+        filter_ids = [f for f in filter_ids if f]
 
-        counts_by_type = dict(
-            base_qs.values("schedule_type").annotate(count=Count("id")).values_list("schedule_type", "count")
-        )
-        replacement_count = counts_by_type.get("replacement", 0)
-        cleaning_count = counts_by_type.get("cleaning", 0)
-        integrity_count = counts_by_type.get("integrity", 0)
+        # Counts from approved filter log entries (maintenance done in period)
+        replacement_count = 0
+        cleaning_count = 0
+        integrity_count = 0
+        if filter_ids:
+            replacement_count = FilterLog.objects.filter(
+                status="approved",
+                equipment_id__in=filter_ids,
+                installed_date__gte=period_start_date,
+                installed_date__lte=period_end_date,
+            ).count()
+            cleaning_count = FilterLog.objects.filter(
+                status="approved",
+                equipment_id__in=filter_ids,
+            ).filter(
+                cleaning_done_date__isnull=False,
+                cleaning_done_date__gte=period_start_date,
+                cleaning_done_date__lte=period_end_date,
+            ).count()
+            integrity_count = FilterLog.objects.filter(
+                status="approved",
+                equipment_id__in=filter_ids,
+            ).filter(
+                integrity_done_date__isnull=False,
+                integrity_done_date__gte=period_start_date,
+                integrity_done_date__lte=period_end_date,
+            ).count()
         total_consumption = replacement_count + cleaning_count + integrity_count
 
         payload = {
@@ -321,6 +438,29 @@ class FilterScheduleViewSet(viewsets.ModelViewSet):
 
         return Response(payload)
 
+    def perform_create(self, serializer):
+        instance = serializer.save()
+        log_audit_event(
+            user=self.request.user,
+            event_type="entity_created",
+            object_type="filter_schedule",
+            object_id=str(instance.id),
+            field_name="created",
+        )
+
+    def perform_update(self, serializer):
+        log_entity_update_changes(serializer, self.request, "filter_schedule")
+
+    def perform_destroy(self, instance):
+        log_audit_event(
+            user=self.request.user,
+            event_type="entity_deleted",
+            object_type="filter_schedule",
+            object_id=str(instance.id),
+            field_name="deleted",
+        )
+        instance.delete()
+
     @action(detail=True, methods=["post"])
     def approve(self, request, pk=None):
         instance: FilterSchedule = self.get_object()
@@ -344,6 +484,14 @@ class FilterScheduleViewSet(viewsets.ModelViewSet):
                 "updated_at",
             ]
         )
+        log_audit_event(
+            user=request.user,
+            event_type="entity_approved",
+            object_type="filter_schedule",
+            object_id=str(instance.id),
+            field_name="status",
+            new_value="approved",
+        )
         return Response(self.get_serializer(instance).data)
 
     @action(detail=True, methods=["post"])
@@ -351,6 +499,14 @@ class FilterScheduleViewSet(viewsets.ModelViewSet):
         instance: FilterSchedule = self.get_object()
         if instance.is_approved:
             return Response({"detail": "Approved schedules cannot be rejected."}, status=status.HTTP_400_BAD_REQUEST)
+        log_audit_event(
+            user=request.user,
+            event_type="entity_rejected",
+            object_type="filter_schedule",
+            object_id=str(instance.id),
+            field_name="status",
+            new_value="rejected",
+        )
         instance.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 

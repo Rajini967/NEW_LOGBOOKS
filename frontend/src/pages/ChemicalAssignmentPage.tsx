@@ -1,12 +1,30 @@
 import React, { useEffect, useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { Header } from "@/components/layout/Header";
-import { ArrowLeft, Trash2 } from "lucide-react";
+import { ArrowLeft, Trash2, CheckCircle, XCircle } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   chemicalAssignmentAPI,
   chemicalStockAPI,
@@ -41,7 +59,11 @@ interface AssignmentRow {
   equipment_name: string;
   category: "major" | "minor";
   is_active: boolean;
+  status?: "pending" | "approved" | "rejected";
+  created_by_id?: string | null;
   created_by_name?: string | null;
+  approved_by_name?: string | null;
+  rejected_by_name?: string | null;
 }
 
 interface EquipmentOption {
@@ -57,6 +79,11 @@ const ChemicalAssignmentPage: React.FC = () => {
 
   const [rows, setRows] = useState<AssignmentRow[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [approveConfirmOpen, setApproveConfirmOpen] = useState(false);
+  const [rejectConfirmOpen, setRejectConfirmOpen] = useState(false);
+  const [rejectCommentOpen, setRejectCommentOpen] = useState(false);
+  const [selectedAssignmentId, setSelectedAssignmentId] = useState<string | null>(null);
+  const [rejectComment, setRejectComment] = useState("");
 
   const [form, setForm] = useState<{
     location: string;
@@ -96,7 +123,7 @@ const ChemicalAssignmentPage: React.FC = () => {
     void loadAssignments();
   }, []);
 
-  // Load approved, active equipments (excluding chiller/boiler) for Equipment dropdown
+  // Load approved, active equipments from equipment list (excluding chillers) for Equipment dropdown
   useEffect(() => {
     (async () => {
       try {
@@ -104,26 +131,19 @@ const ChemicalAssignmentPage: React.FC = () => {
           id: string;
           name: string;
         }[];
-        const excludedCategoryIds = new Set<string>();
-        for (const c of categories) {
-          const name = (c.name || "").toLowerCase().trim();
-          if (
-            name === "chiller" ||
-            name === "chillers" ||
-            name === "boiler" ||
-            name === "boilers"
-          ) {
-            excludedCategoryIds.add(c.id);
-          }
-        }
+        const chillerCategoryIds = new Set(
+          categories
+            .filter((c) => /^chiller(s)?$/i.test((c.name || "").trim()))
+            .map((c) => c.id)
+        );
 
-        const list = (await equipmentAPI.list()) as any[];
+        const list = (await equipmentAPI.list({ status: "approved" })) as any[];
 
         const options: EquipmentOption[] = (list || [])
           .filter((e: any) => {
             if (e?.is_active === false) return false;
             if (e?.status !== "approved") return false;
-            if (e?.category && excludedCategoryIds.has(e.category)) return false;
+            if (e?.category && chillerCategoryIds.has(e.category)) return false;
             return true;
           })
           .map((e: any) => ({
@@ -221,11 +241,18 @@ const ChemicalAssignmentPage: React.FC = () => {
       return;
     }
     if (!equipmentName) {
-      toast.error("Please enter equipment name.");
+      toast.error("Equipment is required.");
       return;
     }
     if (!form.category) {
       toast.error("Please select a category (Major/Minor).");
+      return;
+    }
+    const isDuplicateEquipment = rows.some(
+      (r) => (r.equipment_name || "").trim().toLowerCase() === equipmentName.trim().toLowerCase()
+    );
+    if (isDuplicateEquipment) {
+      toast.error("Equipment must be unique.");
       return;
     }
     try {
@@ -265,6 +292,61 @@ const ChemicalAssignmentPage: React.FC = () => {
     }
   };
 
+  const handleApproveClick = (row: AssignmentRow) => {
+    if (row.created_by_id && row.created_by_id === user?.id) {
+      toast.error("The assignment must be approved or rejected by a different user than the creator (Created by).");
+      return;
+    }
+    setSelectedAssignmentId(row.id);
+    setApproveConfirmOpen(true);
+  };
+
+  const handleRejectClick = (row: AssignmentRow) => {
+    if (row.created_by_id && row.created_by_id === user?.id) {
+      toast.error("The assignment must be approved or rejected by a different user than the creator (Created by).");
+      return;
+    }
+    setSelectedAssignmentId(row.id);
+    setRejectConfirmOpen(true);
+  };
+
+  const handleApproveConfirm = async () => {
+    if (!selectedAssignmentId) return;
+    setApproveConfirmOpen(false);
+    try {
+      await chemicalAssignmentAPI.approve(selectedAssignmentId, "approve");
+      toast.success("Assignment approved.");
+      await loadAssignments();
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error || error?.message || "Failed to approve assignment");
+    }
+    setSelectedAssignmentId(null);
+  };
+
+  const handleRejectConfirmToComment = () => {
+    setRejectConfirmOpen(false);
+    setRejectCommentOpen(true);
+  };
+
+  const handleRejectSubmit = async () => {
+    if (!selectedAssignmentId) return;
+    const comment = rejectComment.trim();
+    if (!comment) {
+      toast.error("Comment is required for rejection.");
+      return;
+    }
+    try {
+      await chemicalAssignmentAPI.approve(selectedAssignmentId, "reject", comment);
+      setRejectCommentOpen(false);
+      setRejectComment("");
+      setSelectedAssignmentId(null);
+      toast.success("Assignment rejected.");
+      await loadAssignments();
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error || error?.message || "Failed to reject assignment");
+    }
+  };
+
   return (
     <div className="min-h-screen">
       <Header
@@ -296,7 +378,7 @@ const ChemicalAssignmentPage: React.FC = () => {
               <h2 className="text-lg font-semibold">New assignment</h2>
               <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 <div className="space-y-2">
-                  <Label>Location</Label>
+                  <Label>Category</Label>
                   <Select
                     value={form.location || "__none__"}
                     onValueChange={(v) =>
@@ -310,10 +392,10 @@ const ChemicalAssignmentPage: React.FC = () => {
                     }
                   >
                     <SelectTrigger>
-                      <SelectValue placeholder="Select location" />
+                      <SelectValue placeholder="Select category" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="__none__">Select location</SelectItem>
+                      <SelectItem value="__none__">Select category</SelectItem>
                       {locationsFromStock.map((opt) => (
                         <SelectItem key={opt.value} value={opt.value}>
                           {opt.label}
@@ -322,12 +404,12 @@ const ChemicalAssignmentPage: React.FC = () => {
                     </SelectContent>
                   </Select>
                   <p className="text-xs text-muted-foreground">
-                    Only locations that have stock entries are listed. Chemicals at this location will appear below.
+                    Categories are loaded from Chemical Stock Details. Chemicals in the selected category appear below.
                   </p>
                 </div>
 
                 <div className="space-y-2">
-                  <Label>Chemical (from stock at selected location)</Label>
+                  <Label>Chemical (from stock at selected category)</Label>
                   <Select
                     value={form.selectedChemicalId ?? "__none__"}
                     onValueChange={(v) => {
@@ -353,7 +435,7 @@ const ChemicalAssignmentPage: React.FC = () => {
                     disabled={!form.location || stockLoading || chemicalsFromStock.length === 0}
                   >
                     <SelectTrigger>
-                      <SelectValue placeholder={stockLoading ? "Loading..." : form.location ? "Select chemical" : "Select location first"} />
+                      <SelectValue placeholder={stockLoading ? "Loading..." : form.location ? "Select chemical" : "Select category first"} />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="__none__">Select chemical</SelectItem>
@@ -366,7 +448,7 @@ const ChemicalAssignmentPage: React.FC = () => {
                   </Select>
                   {form.location && !stockLoading && chemicalsFromStock.length === 0 && (
                     <p className="text-xs text-amber-600">
-                      No stock entries at this location. Add stock in Chemical Stock Details first.
+                      No stock entries in this category. Add stock in Chemical Stock Details first.
                     </p>
                   )}
                 </div>
@@ -461,13 +543,16 @@ const ChemicalAssignmentPage: React.FC = () => {
                       Chemical
                     </th>
                     <th className="px-4 py-2 text-left font-medium text-muted-foreground">
+                      Type
+                    </th>
+                    <th className="px-4 py-2 text-left font-medium text-muted-foreground">
                       Category
                     </th>
                     <th className="px-4 py-2 text-left font-medium text-muted-foreground">
-                      Location
+                      Created by
                     </th>
                     <th className="px-4 py-2 text-left font-medium text-muted-foreground">
-                      Created by
+                      Status
                     </th>
                     <th className="px-4 py-2 text-right font-medium text-muted-foreground">
                       Actions
@@ -478,7 +563,7 @@ const ChemicalAssignmentPage: React.FC = () => {
                   {isLoading ? (
                     <tr>
                       <td
-                        colSpan={6}
+                        colSpan={7}
                         className="px-4 py-6 text-center text-muted-foreground"
                       >
                         Loading assignments...
@@ -487,20 +572,48 @@ const ChemicalAssignmentPage: React.FC = () => {
                   ) : rows.length === 0 ? (
                     <tr>
                       <td
-                        colSpan={6}
+                        colSpan={7}
                         className="px-4 py-6 text-center text-muted-foreground"
                       >
                         No assignments configured yet.
                       </td>
                     </tr>
                   ) : (
-                    rows.map((row) => (
-                      <tr
-                        key={row.id}
-                        className="border-t border-border hover:bg-muted/40"
-                      >
-                        <td className="px-4 py-2">{row.equipment_name}</td>
-                        <td className="px-4 py-2">
+                    (() => {
+                      // Group by equipment so equipment name appears once (rowSpan)
+                      const sorted = [...rows].sort((a, b) =>
+                        (a.equipment_name || "").localeCompare(b.equipment_name || "")
+                      );
+                      const groups = new Map<string, AssignmentRow[]>();
+                      sorted.forEach((row) => {
+                        const key = row.equipment_name || "";
+                        if (!groups.has(key)) groups.set(key, []);
+                        groups.get(key)!.push(row);
+                      });
+                      const flat: { row: AssignmentRow; isFirstInGroup: boolean; groupSize: number }[] = [];
+                      groups.forEach((groupRows) => {
+                        groupRows.forEach((row, i) => {
+                          flat.push({
+                            row,
+                            isFirstInGroup: i === 0,
+                            groupSize: groupRows.length,
+                          });
+                        });
+                      });
+                      return flat.map(({ row, isFirstInGroup, groupSize }) => (
+                        <tr
+                          key={row.id}
+                          className="border-t border-border hover:bg-muted/40"
+                        >
+                          {isFirstInGroup ? (
+                            <td
+                              className="px-4 py-2 align-top border-r border-border/50 bg-muted/20 font-medium"
+                              rowSpan={groupSize}
+                            >
+                              {row.equipment_name}
+                            </td>
+                          ) : null}
+                          <td className="px-4 py-2">
                           <div className="flex flex-col">
                             <span className="font-medium">
                               {row.chemical_formula}
@@ -519,25 +632,66 @@ const ChemicalAssignmentPage: React.FC = () => {
                         <td className="px-4 py-2">
                           {row.created_by_name || "-"}
                         </td>
+                        <td className="px-4 py-2">
+                          <Badge
+                            variant={
+                              row.status === "approved"
+                                ? "default"
+                                : row.status === "rejected"
+                                ? "destructive"
+                                : "secondary"
+                            }
+                          >
+                            {row.status === "approved"
+                              ? "Approved"
+                              : row.status === "rejected"
+                              ? "Rejected"
+                              : "Pending"}
+                          </Badge>
+                        </td>
                         <td className="px-4 py-2 text-right">
-                          {user?.role === "super_admin" ? (
-                            <Button
-                              size="icon"
-                              variant="outline"
-                              className="h-8 w-8 text-rose-600"
-                              onClick={() => void handleDelete(row.id)}
-                              title="Delete assignment"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </Button>
-                          ) : (
-                            <span className="text-xs text-muted-foreground">
-                              —
-                            </span>
-                          )}
+                          <div className="flex items-center justify-end gap-1">
+                            {row.status === "pending" && isAdmin && (
+                              <>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  className="h-8 w-8 text-green-600 hover:text-green-700 hover:bg-green-500/10"
+                                  onClick={() => handleApproveClick(row)}
+                                  title="Approve"
+                                >
+                                  <CheckCircle className="w-4 h-4" />
+                                </Button>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  className="h-8 w-8 text-destructive hover:bg-destructive/10"
+                                  onClick={() => handleRejectClick(row)}
+                                  title="Reject"
+                                >
+                                  <XCircle className="w-4 h-4" />
+                                </Button>
+                              </>
+                            )}
+                            {user?.role === "super_admin" && (
+                              <Button
+                                size="icon"
+                                variant="outline"
+                                className="h-8 w-8 text-rose-600"
+                                onClick={() => void handleDelete(row.id)}
+                                title="Delete assignment"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </Button>
+                            )}
+                            {!(row.status === "pending" && isAdmin) && !(user?.role === "super_admin") && (
+                              <span className="text-xs text-muted-foreground">—</span>
+                            )}
+                          </div>
                         </td>
                       </tr>
-                    ))
+                      ));
+                    })()
                   )}
                 </tbody>
               </table>
@@ -545,6 +699,100 @@ const ChemicalAssignmentPage: React.FC = () => {
           </section>
         </div>
       </main>
+
+      {/* Approve confirmation */}
+      <AlertDialog open={approveConfirmOpen} onOpenChange={setApproveConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirm Approval</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to approve this assignment? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-green-600 hover:bg-green-700 text-white"
+              onClick={() => void handleApproveConfirm()}
+            >
+              Approve
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Reject confirmation */}
+      <AlertDialog open={rejectConfirmOpen} onOpenChange={setRejectConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirm Rejection</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to reject this assignment? You will be asked to provide a comment. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive hover:bg-destructive/90 text-white"
+              onClick={handleRejectConfirmToComment}
+            >
+              Reject
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Reject comment (required) */}
+      <Dialog
+        open={rejectCommentOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            setRejectCommentOpen(false);
+            setRejectComment("");
+            setSelectedAssignmentId(null);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Rejection Comment (Required)</DialogTitle>
+            <DialogDescription>
+              Please enter a comment for this rejection.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="reject-comment-assignment">Comment <span className="text-destructive">*</span></Label>
+              <Textarea
+                id="reject-comment-assignment"
+                value={rejectComment}
+                onChange={(e) => setRejectComment(e.target.value)}
+                placeholder="Enter rejection comment..."
+                rows={3}
+                className="resize-none"
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setRejectCommentOpen(false);
+                  setRejectComment("");
+                  setSelectedAssignmentId(null);
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={() => void handleRejectSubmit()}
+              >
+                Reject
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

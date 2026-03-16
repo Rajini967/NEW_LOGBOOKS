@@ -70,6 +70,7 @@ interface Equipment {
   status?: "pending" | "approved" | "rejected";
   log_entry_interval?: LogEntryIntervalType | null;
   shift_duration_hours?: number | null;
+  tolerance_minutes?: number | null;
 }
 
 export default function EquipmentListPage() {
@@ -94,6 +95,7 @@ export default function EquipmentListPage() {
     is_active: true,
     log_entry_interval: "" as "" | LogEntryIntervalType,
     shift_duration_hours: "" as "" | number,
+    tolerance_minutes: "" as "" | number,
   });
 
   const [confirmAction, setConfirmAction] = useState<{
@@ -174,6 +176,7 @@ export default function EquipmentListPage() {
       is_active: item.is_active ?? true,
       log_entry_interval: (item.log_entry_interval as LogEntryIntervalType) || "",
       shift_duration_hours: item.shift_duration_hours ?? "",
+      tolerance_minutes: item.tolerance_minutes ?? "",
     });
     setIsDialogOpen(true);
   };
@@ -262,6 +265,13 @@ export default function EquipmentListPage() {
       } else {
         payload.log_entry_interval = null;
         payload.shift_duration_hours = null;
+      }
+
+      if (formData.tolerance_minutes === "" || formData.tolerance_minutes == null) {
+        payload.tolerance_minutes = null;
+      } else {
+        const tol = Number(formData.tolerance_minutes);
+        payload.tolerance_minutes = Number.isFinite(tol) && tol >= 0 ? tol : 0;
       }
 
       if (isEditMode && editingId) {
@@ -578,6 +588,37 @@ export default function EquipmentListPage() {
                         />
                       </div>
                     )}
+                  </div>
+
+                  <div className="space-y-2 pt-2 border-t border-border">
+                    <Label htmlFor="tolerance_minutes">
+                      Log entry tolerance (minutes)
+                    </Label>
+                    <Input
+                      id="tolerance_minutes"
+                      type="number"
+                      min={0}
+                      value={
+                        formData.tolerance_minutes === ""
+                          ? ""
+                          : formData.tolerance_minutes
+                      }
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setFormData((prev) => ({
+                          ...prev,
+                          tolerance_minutes:
+                            v === "" ? "" : Math.max(0, parseInt(v, 10) || 0),
+                        }));
+                      }}
+                      placeholder="e.g. 15 (±15 minutes around scheduled time)"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Within this tolerance window, new log rows will be shown in
+                      yellow; after the tolerance window they will be shown in
+                      red. Leave blank or 0 to disable tolerance highlighting
+                      for this equipment.
+                    </p>
                   </div>
 
                   <div className="space-y-2 pt-2 border-t border-border">

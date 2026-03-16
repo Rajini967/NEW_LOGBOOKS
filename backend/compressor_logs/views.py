@@ -3,6 +3,8 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from django.utils import timezone
+from reports.utils import log_audit_event
 from .models import CompressorLog
 from .serializers import CompressorLogSerializer
 from accounts.permissions import CanLogEntries, CanApproveReports
@@ -53,11 +55,31 @@ class CompressorLogViewSet(viewsets.ModelViewSet):
     
     def perform_create(self, serializer):
         """Set operator when creating a log."""
-        serializer.save(
+        log = serializer.save(
             operator=self.request.user,
             operator_name=self.request.user.name or self.request.user.email
         )
-    
+        log_audit_event(
+            user=self.request.user,
+            event_type="log_created",
+            object_type="compressor_log",
+            object_id=str(log.id),
+            field_name="created",
+            new_value=timezone.localtime(log.timestamp).isoformat() if log.timestamp else None,
+        )
+
+    def perform_destroy(self, instance):
+        """Record log_deleted in audit trail before deleting."""
+        log_audit_event(
+            user=self.request.user,
+            event_type="log_deleted",
+            object_type="compressor_log",
+            object_id=str(instance.id),
+            field_name="deleted",
+            new_value=timezone.localtime(timezone.now()).isoformat(),
+        )
+        super().perform_destroy(instance)
+
     @action(detail=True, methods=['post'])
     def approve(self, request, pk=None):
         """Approve or reject a compressor log."""

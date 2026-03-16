@@ -125,6 +125,17 @@ class ChemicalAssignment(models.Model):
         help_text="Chemical category for this assignment (e.g. major / minor).",
     )
     is_active = models.BooleanField(default=True)
+    STATUS_CHOICES = [
+        ("pending", "Pending"),
+        ("approved", "Approved"),
+        ("rejected", "Rejected"),
+    ]
+    status = models.CharField(
+        max_length=16,
+        choices=STATUS_CHOICES,
+        default="pending",
+        help_text="Approval status for this assignment.",
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -132,6 +143,23 @@ class ChemicalAssignment(models.Model):
         blank=True,
         related_name="chemical_assignments",
     )
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="approved_chemical_assignments",
+    )
+    approved_at = models.DateTimeField(blank=True, null=True)
+    rejected_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="rejected_chemical_assignments",
+    )
+    rejected_at = models.DateTimeField(blank=True, null=True)
+    rejection_comment = models.CharField(max_length=500, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

@@ -65,6 +65,8 @@ const styles = StyleSheet.create({
 });
 
 interface ChemicalMonitoringData {
+  approvedBy?: string;
+  printedBy?: string;
   logs: Array<{
     date: string;
     time: string;
@@ -91,6 +93,9 @@ interface ChemicalMonitoringCertificateProps {
 }
 
 export function ChemicalMonitoringCertificate({ data }: ChemicalMonitoringCertificateProps) {
+  const footerRemarks =
+    data.logs.find((log) => (log.remarks || '').toString().trim().length > 0)?.remarks || '';
+  const doneBy = data.logs[0]?.checkedBy ?? '';
   return (
     <Document>
       <Page size="A4" style={styles.page}>
@@ -110,7 +115,7 @@ export function ChemicalMonitoringCertificate({ data }: ChemicalMonitoringCertif
             <Text style={[styles.tableCell, { width: '10%' }]}>Water Qty</Text>
             <Text style={[styles.tableCell, { width: '10%' }]}>Chemical Qty</Text>
             <Text style={[styles.tableCell, { width: '7%' }]}>Remarks</Text>
-            <Text style={[styles.tableCell, { width: '7%' }, styles.tableCellLast]}>Checked By</Text>
+            <Text style={[styles.tableCell, { width: '7%' }, styles.tableCellLast]}>Done By</Text>
           </View>
 
           {/* Data Rows */}
@@ -162,10 +167,11 @@ export function ChemicalMonitoringCertificate({ data }: ChemicalMonitoringCertif
           ))}
         </View>
 
-        {/* Footer */}
         <View style={styles.footer}>
-          <Text style={styles.footerLine}>Remarks:</Text>
-          <Text style={styles.footerLine}>Digital sign</Text>
+          <Text style={styles.footerLine}>Remarks: {footerRemarks ? String(footerRemarks) : '-'}</Text>
+          <Text style={styles.footerLine}>Done By: {doneBy || '-'}</Text>
+          <Text style={styles.footerLine}>Approved By: {data.approvedBy || '-'}</Text>
+          <Text style={styles.footerLine}>Printed By: {data.printedBy || '-'}</Text>
         </View>
       </Page>
 

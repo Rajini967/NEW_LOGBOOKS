@@ -12,14 +12,6 @@ import { ScheduledReadingsStatus } from '@/components/dashboard/ScheduledReading
 import { useMissedReadingsByType } from '@/hooks/useMissedReadingsByType';
 import { useAuth } from '@/contexts/AuthContext';
 import { filterScheduleAPI, dashboardSummaryAPI } from '@/lib/api';
-import { toast } from 'sonner';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
 import {
   Thermometer,
   Gauge,
@@ -42,7 +34,6 @@ export default function DashboardPage() {
     cleaning?: number;
     integrity?: number;
   } | null>(null);
-  const [overdueDialogOpen, setOverdueDialogOpen] = useState(false);
   const [dashboardSummary, setDashboardSummary] = useState<{
     active_chillers_count: number;
     avg_pressure_bar?: number | null;
@@ -71,14 +62,6 @@ export default function DashboardPage() {
         const data = await filterScheduleAPI.overdueSummary();
         if (cancelled) return;
         setOverdueCounts(data);
-        const total =
-          (data.replacement || 0) + (data.cleaning || 0) + (data.integrity || 0);
-        if (total > 0) {
-          toast.warning(
-            `Filter maintenance overdue: ${total} (Replacement ${data.replacement || 0}, Cleaning ${data.cleaning || 0}, Integrity ${data.integrity || 0})`
-          );
-          setOverdueDialogOpen(true);
-        }
       } catch {
         // Non-blocking: dashboard should still render
       }
@@ -111,21 +94,6 @@ export default function DashboardPage() {
         title="Dashboard"
         subtitle={`Welcome back, ${user?.name || user?.email || 'User'}`}
       />
-
-      <Dialog open={overdueDialogOpen} onOpenChange={setOverdueDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Filter maintenance overdue</DialogTitle>
-            <DialogDescription>
-              {overdueCounts
-                ? `Replacement: ${overdueCounts.replacement || 0}, Cleaning: ${
-                    overdueCounts.cleaning || 0
-                  }, Integrity: ${overdueCounts.integrity || 0}`
-                : 'Some filter maintenance schedules are overdue.'}
-            </DialogDescription>
-          </DialogHeader>
-        </DialogContent>
-      </Dialog>
 
       <div className="p-6 space-y-6">
         {/* Quick Stats */}

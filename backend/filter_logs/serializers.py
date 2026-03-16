@@ -13,6 +13,7 @@ class FilterLogSerializer(serializers.ModelSerializer):
     )
     corrects_id = serializers.UUIDField(source='corrects.id', read_only=True, allow_null=True)
     has_corrections = serializers.SerializerMethodField()
+    tolerance_status = serializers.SerializerMethodField()
 
     class Meta:
         model = FilterLog
@@ -41,6 +42,7 @@ class FilterLogSerializer(serializers.ModelSerializer):
             'secondary_approved_at',
             'corrects_id',
             'has_corrections',
+            'tolerance_status',
             'timestamp',
             'created_at',
             'updated_at',
@@ -55,6 +57,7 @@ class FilterLogSerializer(serializers.ModelSerializer):
             'secondary_approved_at',
             'corrects_id',
             'has_corrections',
+            'tolerance_status',
             'created_at',
             'updated_at',
         ]
@@ -70,6 +73,13 @@ class FilterLogSerializer(serializers.ModelSerializer):
 
     def get_has_corrections(self, obj: FilterLog) -> bool:
         return obj.corrections.exists()
+
+    def get_tolerance_status(self, obj: FilterLog) -> str:
+        try:
+            from core.log_slot_utils import get_tolerance_status
+            return get_tolerance_status(obj.timestamp, obj.equipment_id or "", "filter")
+        except Exception:
+            return "none"
 
     def validate(self, attrs):
         remarks = (attrs.get("remarks") if "remarks" in attrs else getattr(self.instance, "remarks", None)) or ""

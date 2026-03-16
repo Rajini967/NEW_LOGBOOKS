@@ -125,6 +125,7 @@ interface ELogBook {
   approved_by_id?: string;
   corrects_id?: string;
   has_corrections?: boolean;
+  tolerance_status?: 'none' | 'within' | 'outside';
 }
 
 type PumpStatus = 'ON' | 'OFF';
@@ -622,12 +623,31 @@ export default function ELogBookPage() {
   // Refresh logs from API
   const refreshLogs = async () => {
     try {
-      const chillerLogs = await chillerLogAPI.list().catch(err => {
-        console.error('Error fetching chiller logs:', err);
-        return [];
-      });
+      const [
+        chillerLogs,
+        boilerLogs,
+        chemicalLogs,
+        filterLogs,
+      ] = await Promise.all([
+        chillerLogAPI.list().catch(err => {
+          console.error('Error fetching chiller logs:', err);
+          return [];
+        }),
+        boilerLogAPI.list().catch(err => {
+          console.error('Error fetching boiler logs:', err);
+          return [];
+        }),
+        chemicalPrepAPI.list().catch(err => {
+          console.error('Error fetching chemical logs:', err);
+          return [];
+        }),
+        logbookAPI.listFilterLogs?.().catch(err => {
+          console.error('Error fetching filter logs:', err);
+          return [];
+        }) ?? [],
+      ]);
       
-      console.log('Refreshed chiller data:', { chillerLogs });
+      console.log('Refreshed log data:', { chillerLogs, boilerLogs, chemicalLogs, filterLogs });
 
       const allLogs: ELogBook[] = [];
 
@@ -687,11 +707,78 @@ export default function ELogBookPage() {
           approved_by_id: log.approved_by_id,
           corrects_id: log.corrects_id,
           has_corrections: log.has_corrections,
+          tolerance_status: log.tolerance_status as 'none' | 'within' | 'outside' | undefined,
+        });
+      });
+
+      // Convert boiler logs
+      boilerLogs.forEach((log: any) => {
+        const timestamp = new Date(log.timestamp);
+        allLogs.push({
+          id: log.id,
+          equipmentType: 'boiler',
+          equipmentId: log.equipment_id,
+          date: format(timestamp, 'yyyy-MM-dd'),
+          time: format(timestamp, 'HH:mm:ss'),
+          remarks: log.remarks || '',
+          comment: log.comment || '',
+          checkedBy: log.operator_name,
+          timestamp,
+          status: log.status as 'pending' | 'approved' | 'rejected' | 'draft' | 'pending_secondary_approval',
+          operator_id: log.operator_id,
+          approved_by_id: log.approved_by_id,
+          corrects_id: log.corrects_id,
+          has_corrections: log.has_corrections,
+          tolerance_status: log.tolerance_status as 'none' | 'within' | 'outside' | undefined,
+        });
+      });
+
+      // Convert chemical logs
+      chemicalLogs.forEach((log: any) => {
+        const timestamp = new Date(log.timestamp);
+        allLogs.push({
+          id: log.id,
+          equipmentType: 'chemical',
+          equipmentId: log.equipment_name,
+          date: format(timestamp, 'yyyy-MM-dd'),
+          time: format(timestamp, 'HH:mm:ss'),
+          remarks: log.remarks || '',
+          comment: log.comment || '',
+          checkedBy: log.operator_name,
+          timestamp,
+          status: log.status as 'pending' | 'approved' | 'rejected' | 'draft' | 'pending_secondary_approval',
+          operator_id: log.operator_id,
+          approved_by_id: log.approved_by_id,
+          corrects_id: log.corrects_id,
+          has_corrections: log.has_corrections,
+          tolerance_status: log.tolerance_status as 'none' | 'within' | 'outside' | undefined,
+        });
+      });
+
+      // Convert filter logs
+      filterLogs.forEach((log: any) => {
+        const timestamp = new Date(log.timestamp);
+        allLogs.push({
+          id: log.id,
+          equipmentType: 'filter',
+          equipmentId: log.equipment_id,
+          date: format(timestamp, 'yyyy-MM-dd'),
+          time: format(timestamp, 'HH:mm:ss'),
+          remarks: log.remarks || '',
+          comment: log.comment || '',
+          checkedBy: log.operator_name,
+          timestamp,
+          status: log.status as 'pending' | 'approved' | 'rejected' | 'draft' | 'pending_secondary_approval',
+          operator_id: log.operator_id,
+          approved_by_id: log.approved_by_id,
+          corrects_id: log.corrects_id,
+          has_corrections: log.has_corrections,
+          tolerance_status: log.tolerance_status as 'none' | 'within' | 'outside' | undefined,
         });
       });
 
       allLogs.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
-      console.log('Total chiller logs after refresh:', allLogs.length, allLogs);
+      console.log('Total logs after refresh:', allLogs.length, allLogs);
       setLogs(allLogs);
 
       // Rebuild map of first chiller log per operator per day
@@ -742,7 +829,9 @@ export default function ELogBookPage() {
 
     // Equipment ID filter
     if (filters.equipmentId) {
-      result = result.filter(log => log.equipmentId.toLowerCase().includes(filters.equipmentId.toLowerCase()));
+      result = result.filter(
+        (log) => log.equipmentId && log.equipmentId.toString().toLowerCase() === filters.equipmentId.toLowerCase()
+      );
     }
 
     // Checked By filter
@@ -803,7 +892,10 @@ export default function ELogBookPage() {
       if (filters.fromDate) result = result.filter(log => log.date >= filters.fromDate);
       if (filters.toDate) result = result.filter(log => log.date <= filters.toDate);
       if (filters.status !== 'all') result = result.filter(log => log.status === filters.status);
-      if (filters.equipmentId) result = result.filter(log => log.equipmentId.toLowerCase().includes(filters.equipmentId.toLowerCase()));
+      if (filters.equipmentId)
+        result = result.filter(
+          (log) => log.equipmentId && log.equipmentId.toString().toLowerCase() === filters.equipmentId.toLowerCase()
+        );
       if (filters.checkedBy) result = result.filter(log => log.checkedBy === filters.checkedBy);
       if (filters.fromTime) result = result.filter(log => log.time >= filters.fromTime);
       if (filters.toTime) result = result.filter(log => log.time <= filters.toTime);
@@ -971,18 +1063,6 @@ export default function ELogBookPage() {
           cooling_tower_blowdown_time_min: formData.coolingTowerBlowdownTimeMin
             ? parseFloat(formData.coolingTowerBlowdownTimeMin)
             : undefined,
-          cooling_tower_chemical_name: formData.coolingTowerChemicalName || undefined,
-          cooling_tower_chemical_qty_per_day: formData.coolingTowerChemicalQtyPerDay
-            ? parseFloat(formData.coolingTowerChemicalQtyPerDay)
-            : undefined,
-          chilled_water_pump_chemical_name: formData.chilledWaterPumpChemicalName || undefined,
-          chilled_water_pump_chemical_qty_kg: formData.chilledWaterPumpChemicalQtyKg
-            ? parseFloat(formData.chilledWaterPumpChemicalQtyKg)
-            : undefined,
-          cooling_tower_fan_chemical_name: formData.coolingTowerFanChemicalName || undefined,
-          cooling_tower_fan_chemical_qty_kg: formData.coolingTowerFanChemicalQtyKg
-            ? parseFloat(formData.coolingTowerFanChemicalQtyKg)
-            : undefined,
         };
         if (isReadingsApplicable) {
           Object.assign(logData, {
@@ -993,9 +1073,6 @@ export default function ELogBookPage() {
             ct_differential_temp: parseFloat(formData.ctDifferentialTemp),
             chiller_water_inlet_pressure: parseFloat(formData.chillerWaterInletPressure),
             chiller_makeup_water_flow: formData.chillerMakeupWaterFlow ? parseFloat(formData.chillerMakeupWaterFlow) : undefined,
-            daily_water_consumption_ct1_liters: formData.dailyWaterCt1Liters ? parseFloat(formData.dailyWaterCt1Liters) : undefined,
-            daily_water_consumption_ct2_liters: formData.dailyWaterCt2Liters ? parseFloat(formData.dailyWaterCt2Liters) : undefined,
-            daily_water_consumption_ct3_liters: formData.dailyWaterCt3Liters ? parseFloat(formData.dailyWaterCt3Liters) : undefined,
             evap_water_inlet_pressure: formData.evapWaterInletPressure ? parseFloat(formData.evapWaterInletPressure) : undefined,
             evap_water_outlet_pressure: formData.evapWaterOutletPressure ? parseFloat(formData.evapWaterOutletPressure) : undefined,
             evap_entering_water_temp: formData.evapEnteringWaterTemp ? parseFloat(formData.evapEnteringWaterTemp) : undefined,
@@ -1031,7 +1108,7 @@ export default function ELogBookPage() {
             toast.success('Chiller entry updated successfully');
           }
         } else if (!editingLogId) {
-          await chillerLogAPI.create(logData);
+          await chillerLogAPI.create(logData as any);
           toast.success('Chiller entry saved successfully');
         }
       }
@@ -1056,7 +1133,7 @@ export default function ELogBookPage() {
           });
         }
         
-        await boilerLogAPI.create(logData);
+        await boilerLogAPI.create(logData as any);
         toast.success('Boiler entry saved successfully');
       }
       // Handle compressor entries
@@ -1079,7 +1156,7 @@ export default function ELogBookPage() {
           });
         }
         
-        await compressorLogAPI.create(logData);
+        await compressorLogAPI.create(logData as any);
         toast.success('Compressor entry saved successfully');
       }
       
@@ -1430,6 +1507,7 @@ export default function ELogBookPage() {
       { key: 'coolingTowerReturnTemp', label: 'Cooling tower return temp', limitField: 'coolingTowerReturnTemp', numeric: true },
       { key: 'ctDifferentialTemp', label: 'CT differential temp', limitField: 'ctDifferentialTemp', numeric: true },
       { key: 'chillerWaterInletPressure', label: 'Chiller water inlet pressure', limitField: 'chillerWaterInletPressure', numeric: true },
+      { key: 'chillerMakeupWaterFlow', label: 'Chiller make up water flow', numeric: true },
       { key: 'evapWaterInletPressure', label: 'Evap water inlet pressure', limitField: 'evapWaterInletPressure', numeric: true },
       { key: 'evapWaterOutletPressure', label: 'Evap water outlet pressure', limitField: 'evapWaterOutletPressure', numeric: true },
       { key: 'evapEnteringWaterTemp', label: 'Evap entering water temp', limitField: 'evapEnteringWaterTemp', numeric: true },
@@ -1444,7 +1522,10 @@ export default function ELogBookPage() {
       { key: 'avgMotorCurrent', label: 'Average motor current', limitField: 'avgMotorCurrent', numeric: true },
       { key: 'compressorRunningTimeMin', label: 'Compressor running time', limitField: 'compressorRunningTimeMin', numeric: true },
       { key: 'starterEnergyKwh', label: 'Starter energy consumption', limitField: 'starterEnergyKwh', numeric: true },
+      { key: 'coolingTowerBlowdownTimeMin', label: 'Cooling tower blow down time (minutes)', numeric: true },
+      { key: 'recordingFrequency', label: 'Recording frequency' },
       { key: 'operatorSign', label: 'Operator Sign & Date' },
+      { key: 'verifiedBy', label: 'Verified By (Sign & Date)' },
     ];
 
     for (const field of requiredFields) {
@@ -1623,15 +1704,26 @@ export default function ELogBookPage() {
 
                   {/* Equipment Type filter not needed on chiller-only page */}
 
-                  {/* Equipment ID */}
+                  {/* Equipment ID - dropdown of approved chiller equipment */}
                   <div className="space-y-3">
                     <Label className="text-base font-semibold">Equipment ID</Label>
-                    <Input
-                      type="text"
-                      value={filters.equipmentId}
-                      onChange={(e) => setFilters({ ...filters, equipmentId: e.target.value })}
-                      placeholder="e.g., CH-001"
-                    />
+                    <Select
+                      value={filters.equipmentId || 'all'}
+                      onValueChange={(v) => setFilters({ ...filters, equipmentId: v === 'all' ? '' : v })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="All" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All</SelectItem>
+                        {(equipmentByType.chiller ?? []).map((eq) => (
+                          <SelectItem key={eq.id} value={eq.equipment_number}>
+                            {eq.equipment_number}
+                            {eq.name ? ` – ${eq.name}` : ''}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
 
                   {/* Checked By */}
@@ -1975,59 +2067,6 @@ export default function ELogBookPage() {
                       );
                     })()}
                     <fieldset disabled={!isReadingsApplicable} className={cn(!isReadingsApplicable && "opacity-60")}>
-                    {/* Summary temperatures and pressures */}
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <Label className="flex items-center gap-2">
-                          <Thermometer className="w-4 h-4" /> Chiller supply temp
-                          <span className="text-xs text-muted-foreground">(NMT {equipmentLimits.chiller.chillerSupplyTemp.max} {equipmentLimits.chiller.chillerSupplyTemp.unit})</span>
-                        </Label>
-                        <Input
-                          type="number"
-                          step="0.1"
-                          value={formData.chillerSupplyTemp}
-                          onChange={(e) => setFormData({ ...formData, chillerSupplyTemp: e.target.value })}
-                          placeholder="e.g., 8"
-                          className={isFormValueOutOfLimit('chiller', 'chillerSupplyTemp', formData.chillerSupplyTemp)
-                            ? 'border-destructive bg-destructive/5 text-destructive font-semibold'
-                            : undefined}
-                        />
-                        {isFormValueOutOfLimit(
-                          'chiller',
-                          'chillerSupplyTemp',
-                          formData.chillerSupplyTemp,
-                        ) && (
-                          <p className="text-xs text-destructive mt-1">
-                            {getLimitErrorMessage('chiller', 'chillerSupplyTemp')}
-                          </p>
-                        )}
-                      </div>
-                      <div className="space-y-2">
-                        <Label className="flex items-center gap-2">
-                          <Thermometer className="w-4 h-4" /> Chiller return temp
-                          <span className="text-xs text-muted-foreground">(NMT {equipmentLimits.chiller.chillerReturnTemp.max} {equipmentLimits.chiller.chillerReturnTemp.unit})</span>
-                        </Label>
-                        <Input
-                          type="number"
-                          step="0.1"
-                          value={formData.chillerReturnTemp}
-                          onChange={(e) => setFormData({ ...formData, chillerReturnTemp: e.target.value })}
-                          placeholder="e.g., 15"
-                          className={isFormValueOutOfLimit('chiller', 'chillerReturnTemp', formData.chillerReturnTemp)
-                            ? 'border-destructive bg-destructive/5 text-destructive font-semibold'
-                            : undefined}
-                        />
-                        {isFormValueOutOfLimit(
-                          'chiller',
-                          'chillerReturnTemp',
-                          formData.chillerReturnTemp,
-                        ) && (
-                          <p className="text-xs text-destructive mt-1">
-                            {getLimitErrorMessage('chiller', 'chillerReturnTemp')}
-                          </p>
-                        )}
-                      </div>
-                    </div>
 
                     {/* Evaporator section */}
                     <div className="mt-4 border-t pt-4 space-y-4">
@@ -2538,12 +2577,64 @@ export default function ELogBookPage() {
                           )}
                         </div>
                       </div>
-                    </div>
 
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <Label className="flex items-center gap-2">
-                          <Thermometer className="w-4 h-4" /> Cooling tower supply temp
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <Label className="flex items-center gap-2">
+                            <Thermometer className="w-4 h-4" /> Chiller supply temp
+                            <span className="text-xs text-muted-foreground">(NMT {equipmentLimits.chiller.chillerSupplyTemp.max} {equipmentLimits.chiller.chillerSupplyTemp.unit})</span>
+                          </Label>
+                          <Input
+                            type="number"
+                            step="0.1"
+                            value={formData.chillerSupplyTemp}
+                            onChange={(e) => setFormData({ ...formData, chillerSupplyTemp: e.target.value })}
+                            placeholder="e.g., 8"
+                            className={isFormValueOutOfLimit('chiller', 'chillerSupplyTemp', formData.chillerSupplyTemp)
+                              ? 'border-destructive bg-destructive/5 text-destructive font-semibold'
+                              : undefined}
+                          />
+                          {isFormValueOutOfLimit(
+                            'chiller',
+                            'chillerSupplyTemp',
+                            formData.chillerSupplyTemp,
+                          ) && (
+                            <p className="text-xs text-destructive mt-1">
+                              {getLimitErrorMessage('chiller', 'chillerSupplyTemp')}
+                            </p>
+                          )}
+                        </div>
+                        <div className="space-y-2">
+                          <Label className="flex items-center gap-2">
+                            <Thermometer className="w-4 h-4" /> Chiller return temp
+                            <span className="text-xs text-muted-foreground">(NMT {equipmentLimits.chiller.chillerReturnTemp.max} {equipmentLimits.chiller.chillerReturnTemp.unit})</span>
+                          </Label>
+                          <Input
+                            type="number"
+                            step="0.1"
+                            value={formData.chillerReturnTemp}
+                            onChange={(e) => setFormData({ ...formData, chillerReturnTemp: e.target.value })}
+                            placeholder="e.g., 15"
+                            className={isFormValueOutOfLimit('chiller', 'chillerReturnTemp', formData.chillerReturnTemp)
+                              ? 'border-destructive bg-destructive/5 text-destructive font-semibold'
+                              : undefined}
+                          />
+                          {isFormValueOutOfLimit(
+                            'chiller',
+                            'chillerReturnTemp',
+                            formData.chillerReturnTemp,
+                          ) && (
+                            <p className="text-xs text-destructive mt-1">
+                              {getLimitErrorMessage('chiller', 'chillerReturnTemp')}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <Label className="flex items-center gap-2">
+                            <Thermometer className="w-4 h-4" /> Cooling tower supply temp
                           <span className="text-xs text-muted-foreground">(NMT {equipmentLimits.chiller.coolingTowerSupplyTemp.max} {equipmentLimits.chiller.coolingTowerSupplyTemp.unit})</span>
                         </Label>
                         <Input
@@ -2565,130 +2656,95 @@ export default function ELogBookPage() {
                             {getLimitErrorMessage('chiller', 'coolingTowerSupplyTemp')}
                           </p>
                         )}
+                        </div>
+                        <div className="space-y-2">
+                          <Label className="flex items-center gap-2">
+                            <Thermometer className="w-4 h-4" /> Cooling tower Return temp
+                            <span className="text-xs text-muted-foreground">(NMT {equipmentLimits.chiller.coolingTowerReturnTemp.max} {equipmentLimits.chiller.coolingTowerReturnTemp.unit})</span>
+                          </Label>
+                          <Input
+                            type="number"
+                            step="0.1"
+                            value={formData.coolingTowerReturnTemp}
+                            onChange={(e) => setFormData({ ...formData, coolingTowerReturnTemp: e.target.value })}
+                            placeholder="e.g., 30"
+                            className={isFormValueOutOfLimit('chiller', 'coolingTowerReturnTemp', formData.coolingTowerReturnTemp)
+                              ? 'border-destructive bg-destructive/5 text-destructive font-semibold'
+                              : undefined}
+                          />
+                          {isFormValueOutOfLimit(
+                            'chiller',
+                            'coolingTowerReturnTemp',
+                            formData.coolingTowerReturnTemp,
+                          ) && (
+                            <p className="text-xs text-destructive mt-1">
+                              {getLimitErrorMessage('chiller', 'coolingTowerReturnTemp')}
+                            </p>
+                          )}
+                        </div>
                       </div>
-                      <div className="space-y-2">
-                        <Label className="flex items-center gap-2">
-                          <Thermometer className="w-4 h-4" /> Cooling tower Return temp
-                          <span className="text-xs text-muted-foreground">(NMT {equipmentLimits.chiller.coolingTowerReturnTemp.max} {equipmentLimits.chiller.coolingTowerReturnTemp.unit})</span>
-                        </Label>
-                        <Input
-                          type="number"
-                          step="0.1"
-                          value={formData.coolingTowerReturnTemp}
-                          onChange={(e) => setFormData({ ...formData, coolingTowerReturnTemp: e.target.value })}
-                          placeholder="e.g., 30"
-                          className={isFormValueOutOfLimit('chiller', 'coolingTowerReturnTemp', formData.coolingTowerReturnTemp)
-                            ? 'border-destructive bg-destructive/5 text-destructive font-semibold'
-                            : undefined}
-                        />
-                        {isFormValueOutOfLimit(
-                          'chiller',
-                          'coolingTowerReturnTemp',
-                          formData.coolingTowerReturnTemp,
-                        ) && (
-                          <p className="text-xs text-destructive mt-1">
-                            {getLimitErrorMessage('chiller', 'coolingTowerReturnTemp')}
-                          </p>
-                        )}
-                      </div>
-                    </div>
 
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <Label className="flex items-center gap-2">
-                          <Thermometer className="w-4 h-4" /> CT Differential temperature
-                          <span className="text-xs text-muted-foreground">(NMT {equipmentLimits.chiller.ctDifferentialTemp.max} {equipmentLimits.chiller.ctDifferentialTemp.unit})</span>
-                        </Label>
-                        <Input
-                          type="number"
-                          step="0.1"
-                          value={formData.ctDifferentialTemp}
-                          onChange={(e) => setFormData({ ...formData, ctDifferentialTemp: e.target.value })}
-                          placeholder="e.g., 5"
-                          className={isFormValueOutOfLimit('chiller', 'ctDifferentialTemp', formData.ctDifferentialTemp)
-                            ? 'border-destructive bg-destructive/5 text-destructive font-semibold'
-                            : undefined}
-                        />
-                        {isFormValueOutOfLimit(
-                          'chiller',
-                          'ctDifferentialTemp',
-                          formData.ctDifferentialTemp,
-                        ) && (
-                          <p className="text-xs text-destructive mt-1">
-                            {getLimitErrorMessage('chiller', 'ctDifferentialTemp')}
-                          </p>
-                        )}
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <Label className="flex items-center gap-2">
+                            <Thermometer className="w-4 h-4" /> CT Differential temperature
+                            <span className="text-xs text-muted-foreground">(NMT {equipmentLimits.chiller.ctDifferentialTemp.max} {equipmentLimits.chiller.ctDifferentialTemp.unit})</span>
+                          </Label>
+                          <Input
+                            type="number"
+                            step="0.1"
+                            value={formData.ctDifferentialTemp}
+                            onChange={(e) => setFormData({ ...formData, ctDifferentialTemp: e.target.value })}
+                            placeholder="e.g., 5"
+                            className={isFormValueOutOfLimit('chiller', 'ctDifferentialTemp', formData.ctDifferentialTemp)
+                              ? 'border-destructive bg-destructive/5 text-destructive font-semibold'
+                              : undefined}
+                          />
+                          {isFormValueOutOfLimit(
+                            'chiller',
+                            'ctDifferentialTemp',
+                            formData.ctDifferentialTemp,
+                          ) && (
+                            <p className="text-xs text-destructive mt-1">
+                              {getLimitErrorMessage('chiller', 'ctDifferentialTemp')}
+                            </p>
+                          )}
+                        </div>
+                        <div className="space-y-2">
+                          <Label className="flex items-center gap-2">
+                            <Gauge className="w-4 h-4" /> Chiller water inlet pressure
+                            <span className="text-xs text-muted-foreground">(NLT {equipmentLimits.chiller.chillerWaterInletPressure.min} {equipmentLimits.chiller.chillerWaterInletPressure.unit})</span>
+                          </Label>
+                          <Input
+                            type="number"
+                            step="0.1"
+                            value={formData.chillerWaterInletPressure}
+                            onChange={(e) => setFormData({ ...formData, chillerWaterInletPressure: e.target.value })}
+                            placeholder="e.g., 2"
+                            className={isFormValueOutOfLimit('chiller', 'chillerWaterInletPressure', formData.chillerWaterInletPressure)
+                              ? 'border-destructive bg-destructive/5 text-destructive font-semibold'
+                              : undefined}
+                          />
+                          {isFormValueOutOfLimit(
+                            'chiller',
+                            'chillerWaterInletPressure',
+                            formData.chillerWaterInletPressure,
+                          ) && (
+                            <p className="text-xs text-destructive mt-1">
+                              {getLimitErrorMessage('chiller', 'chillerWaterInletPressure')}
+                            </p>
+                          )}
+                        </div>
                       </div>
-                      <div className="space-y-2">
-                        <Label className="flex items-center gap-2">
-                          <Gauge className="w-4 h-4" /> Chiller water inlet pressure
-                          <span className="text-xs text-muted-foreground">(NLT {equipmentLimits.chiller.chillerWaterInletPressure.min} {equipmentLimits.chiller.chillerWaterInletPressure.unit})</span>
-                        </Label>
-                        <Input
-                          type="number"
-                          step="0.1"
-                          value={formData.chillerWaterInletPressure}
-                          onChange={(e) => setFormData({ ...formData, chillerWaterInletPressure: e.target.value })}
-                          placeholder="e.g., 2"
-                          className={isFormValueOutOfLimit('chiller', 'chillerWaterInletPressure', formData.chillerWaterInletPressure)
-                            ? 'border-destructive bg-destructive/5 text-destructive font-semibold'
-                            : undefined}
-                        />
-                        {isFormValueOutOfLimit(
-                          'chiller',
-                          'chillerWaterInletPressure',
-                          formData.chillerWaterInletPressure,
-                        ) && (
-                          <p className="text-xs text-destructive mt-1">
-                            {getLimitErrorMessage('chiller', 'chillerWaterInletPressure')}
-                          </p>
-                        )}
-                      </div>
-                    </div>
 
-                    <div className="space-y-2">
-                      <Label>Chiller make up water Flow (LPH)</Label>
-                      <Input
-                        type="number"
-                        step="1"
-                        value={formData.chillerMakeupWaterFlow}
-                        onChange={(e) => setFormData({ ...formData, chillerMakeupWaterFlow: e.target.value })}
-                        placeholder="e.g., 10000"
-                      />
-                    </div>
-
-                    <div className="grid grid-cols-3 gap-4">
                       <div className="space-y-2">
-                        <Label>Cooling Tower 1 – Daily water consumption (L)</Label>
+                        <Label>Chiller make up water Flow (LPH)</Label>
                         <Input
                           type="number"
-                          min={0}
                           step="1"
-                          value={formData.dailyWaterCt1Liters}
-                          onChange={(e) => setFormData({ ...formData, dailyWaterCt1Liters: e.target.value })}
-                          placeholder="Optional"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label>Cooling Tower 2 – Daily water consumption (L)</Label>
-                        <Input
-                          type="number"
-                          min={0}
-                          step="1"
-                          value={formData.dailyWaterCt2Liters}
-                          onChange={(e) => setFormData({ ...formData, dailyWaterCt2Liters: e.target.value })}
-                          placeholder="Optional"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label>Cooling Tower 3 – Daily water consumption (L)</Label>
-                        <Input
-                          type="number"
-                          min={0}
-                          step="1"
-                          value={formData.dailyWaterCt3Liters}
-                          onChange={(e) => setFormData({ ...formData, dailyWaterCt3Liters: e.target.value })}
-                          placeholder="Optional"
+                          value={formData.chillerMakeupWaterFlow}
+                          onChange={(e) => setFormData({ ...formData, chillerMakeupWaterFlow: e.target.value })}
+                          placeholder="e.g., 10000"
                         />
                       </div>
                     </div>
@@ -3064,125 +3120,6 @@ export default function ELogBookPage() {
                         </div>
                       </div>
 
-                      {/* Cooling tower chemicals table - 3 columns matching physical sheet */}
-                      <div className="mt-4 space-y-3">
-                        <Label className="text-sm">
-                          Cooling tower chemicals to be added &amp; to be mentioned below in table
-                          column:
-                        </Label>
-
-                        {/* Column headers */}
-                        <div className="grid grid-cols-3 gap-4 text-sm font-semibold">
-                          <div>Cooling Tower-1</div>
-                          <div>Chilled Water Pump</div>
-                          <div>Cooling Tower Fan</div>
-                        </div>
-
-                        {/* Chemical names row */}
-                        <div className="grid grid-cols-3 gap-4">
-                          <div className="space-y-1">
-                            <Label className="text-xs">Chemical Name</Label>
-                            <Input
-                              type="text"
-                              value={formData.coolingTowerChemicalName}
-                              disabled={!canEditRunningSection}
-                              onChange={(e) =>
-                                setFormData({
-                                  ...formData,
-                                  coolingTowerChemicalName: e.target.value,
-                                })
-                              }
-                              placeholder="e.g., CU450"
-                            />
-                          </div>
-                          <div className="space-y-1">
-                            <Label className="text-xs">Chemical Name</Label>
-                            <Input
-                              type="text"
-                              value={formData.chilledWaterPumpChemicalName}
-                              disabled={!canEditRunningSection}
-                              onChange={(e) =>
-                                setFormData({
-                                  ...formData,
-                                  chilledWaterPumpChemicalName: e.target.value,
-                                })
-                              }
-                              placeholder="e.g., C1810"
-                            />
-                          </div>
-                          <div className="space-y-1">
-                            <Label className="text-xs">Chemical Name</Label>
-                            <Input
-                              type="text"
-                              value={formData.coolingTowerFanChemicalName}
-                              disabled={!canEditRunningSection}
-                              onChange={(e) =>
-                                setFormData({
-                                  ...formData,
-                                  coolingTowerFanChemicalName: e.target.value,
-                                })
-                              }
-                              placeholder="e.g., C3003"
-                            />
-                          </div>
-                        </div>
-
-                        {/* Quantities row */}
-                        <div className="grid grid-cols-3 gap-4">
-                          <div className="space-y-1">
-                            <Label className="text-xs">Quantity (Kg)</Label>
-                            <Input
-                              type="number"
-                              min={0}
-                              step="0.01"
-                              value={formData.coolingTowerChemicalQtyPerDay}
-                              disabled={!canEditRunningSection}
-                              onChange={(e) =>
-                                setFormData({
-                                  ...formData,
-                                  coolingTowerChemicalQtyPerDay: e.target.value,
-                                })
-                              }
-                              placeholder="e.g., 0.27"
-                            />
-                          </div>
-                          <div className="space-y-1">
-                            <Label className="text-xs">Quantity (Kg)</Label>
-                            <Input
-                              type="number"
-                              min={0}
-                              step="0.01"
-                              value={formData.chilledWaterPumpChemicalQtyKg}
-                              disabled={!canEditRunningSection}
-                              onChange={(e) =>
-                                setFormData({
-                                  ...formData,
-                                  chilledWaterPumpChemicalQtyKg: e.target.value,
-                                })
-                              }
-                              placeholder="e.g., 0.32"
-                            />
-                          </div>
-                          <div className="space-y-1">
-                            <Label className="text-xs">Quantity (Kg)</Label>
-                            <Input
-                              type="number"
-                              min={0}
-                              step="0.01"
-                              value={formData.coolingTowerFanChemicalQtyKg}
-                              disabled={!canEditRunningSection}
-                              onChange={(e) =>
-                                setFormData({
-                                  ...formData,
-                                  coolingTowerFanChemicalQtyKg: e.target.value,
-                                })
-                              }
-                              placeholder="e.g., 0.42"
-                            />
-                          </div>
-                        </div>
-                      </div>
-
                       <div className="grid grid-cols-2 gap-4 mt-6">
                         <div className="space-y-2">
                           <Label>Recording Frequency</Label>
@@ -3532,7 +3469,13 @@ export default function ELogBookPage() {
         {/* Logs Table - horizontal scroll when wide */}
         <div className="bg-card rounded-lg border border-border overflow-hidden">
           <div className="border-b px-4 py-2 flex justify-between items-center">
-            <span className="text-sm font-medium">{filteredLogs.length} entries</span>
+            {/** On the chiller page, only show chiller entries in the table/counts */}
+            {(() => {
+              const pageLogs = filteredLogs.filter((log) => log.equipmentType === 'chiller');
+              return (
+                <span className="text-sm font-medium">{pageLogs.length} entries</span>
+              );
+            })()}
             {selectedLogIds.length > 0 && user?.role !== 'operator' && (
               <Button
                 type="button"
@@ -3576,7 +3519,7 @@ export default function ELogBookPage() {
                       <p className="text-sm">Loading entries...</p>
                     </td>
                   </tr>
-                ) : filteredLogs.length === 0 ? (
+                ) : filteredLogs.filter((log) => log.equipmentType === 'chiller').length === 0 ? (
                   <tr>
                     <td colSpan={10} className="px-4 py-12 text-center text-muted-foreground">
                       <p className="text-sm">
@@ -3592,8 +3535,17 @@ export default function ELogBookPage() {
                     </td>
                   </tr>
                 ) : (
-                  filteredLogs.map((log) => (
-                    <tr key={log.id} className="hover:bg-muted/30 transition-colors">
+                  filteredLogs
+                    .filter((log) => log.equipmentType === 'chiller')
+                    .map((log) => {
+                    const tolClass =
+                      log.tolerance_status === 'within'
+                        ? 'bg-yellow-50/70'
+                        : log.tolerance_status === 'outside'
+                        ? 'bg-red-50/80'
+                        : '';
+                    return (
+                    <tr key={log.id} className={cn(tolClass, "hover:bg-muted/30 transition-colors")}>
                       <td className="px-4 py-3 align-middle">
                         {(log.status === 'pending' || log.status === 'draft' || log.status === 'pending_secondary_approval') &&
                         user?.role !== 'operator' &&
@@ -3673,8 +3625,6 @@ export default function ELogBookPage() {
                             variant={
                               log.has_corrections && !log.corrects_id
                                 ? 'destructive'
-                                : log.corrects_id
-                                ? 'warning'
                                 : log.status === 'approved'
                                 ? 'success'
                                 : log.status === 'rejected'
@@ -3686,20 +3636,20 @@ export default function ELogBookPage() {
                           >
                             {log.has_corrections && !log.corrects_id
                               ? 'Rejected'
-                              : log.corrects_id
-                              ? 'Pending'
+                              : log.status === 'approved'
+                              ? 'Approved'
                               : log.status === 'pending_secondary_approval' || log.status === 'pending'
                               ? 'Pending'
                               : log.status === 'rejected'
                               ? 'Rejected'
-                              : log.status === 'approved'
-                              ? 'Approved'
                               : log.status === 'draft'
                               ? 'Draft'
                               : log.status}
                           </Badge>
                           {log.corrects_id && (
-                            <span className="text-[10px] text-amber-700 whitespace-nowrap">Correction entry</span>
+                            <span className={log.status === 'approved' ? 'text-[10px] text-emerald-700 whitespace-nowrap' : 'text-[10px] text-amber-700 whitespace-nowrap'}>
+                              {log.status === 'approved' ? 'Approved correction entry' : 'Correction entry'}
+                            </span>
                           )}
                           {log.has_corrections && !log.corrects_id && (
                             <span className="text-[10px] text-emerald-700 whitespace-nowrap">Has corrections</span>
@@ -3810,7 +3760,7 @@ export default function ELogBookPage() {
                         </div>
                       </td>
                     </tr>
-                  ))
+                  )})
                 )}
               </tbody>
             </table>
