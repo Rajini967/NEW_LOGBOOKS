@@ -40,7 +40,7 @@ export function MissedReadingPopup({
   const renderEquipmentList = () => {
     if (!hasEquipment) return null;
     return (
-      <div className="mt-3 space-y-2">
+      <div className="mt-3 max-h-[60vh] space-y-2 overflow-y-auto pr-1">
         {equipmentList!.map((eq) => {
           const lastStr = eq.lastTimestamp ? format(eq.lastTimestamp, 'PPp') : 'no readings yet';
           const nextStr = eq.nextDue ? format(eq.nextDue, 'PPp') : 'not scheduled';
@@ -82,7 +82,7 @@ export function MissedReadingPopup({
 
   return (
     <AlertDialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <AlertDialogContent>
+      <AlertDialogContent className="max-h-[80vh] overflow-y-auto">
         <AlertDialogHeader>
           <AlertDialogTitle>Scheduled reading missed</AlertDialogTitle>
           <AlertDialogDescription>{defaultDescription}</AlertDialogDescription>
