@@ -36,7 +36,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Plus, Thermometer, Gauge, Droplets, Zap, Package, Save, Clock, Trash2, Filter, X, CheckCircle, XCircle, Edit, History, Eye } from 'lucide-react';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
-import { logbookAPI, chemicalPrepAPI, chillerLogAPI, boilerLogAPI, compressorLogAPI, chemicalMasterAPI, equipmentAPI, equipmentCategoryAPI } from '@/lib/api';
+import { logbookAPI, chemicalPrepAPI, chillerLogAPI, boilerLogAPI, compressorLogAPI, chemicalMasterAPI, equipmentAPI, equipmentCategoryAPI, filterLogAPI } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { LogbookSchema } from '@/types/logbook-config';
 import { FieldWithValidation } from '@/components/logbook/FieldWithValidation';
@@ -275,6 +275,7 @@ export default function ELogBookPage() {
   const [customFormData, setCustomFormData] = useState<Record<string, any>>({});
   const [logs, setLogs] = useState<ELogBook[]>([]);
   const [firstChillerLogByDay, setFirstChillerLogByDay] = useState<Record<string, ELogBook>>({});
+  const [firstChillerLogByDate, setFirstChillerLogByDate] = useState<Record<string, ELogBook>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [chemicalOptions, setChemicalOptions] = useState<{ id: string; label: string }[]>([]);
@@ -364,14 +365,6 @@ export default function ELogBookPage() {
   });
   const isReadingsApplicable = maintenanceTimings.activityType === "operation";
   
-  // Whether the current entry is the first chiller reading of the day for the current operator
-  const todayKey =
-    user?.id && formData.equipmentType === 'chiller'
-      ? `${user.id}_${format(new Date(), 'yyyy-MM-dd')}`
-      : '';
-  const hasFirstChillerLogToday = !!(todayKey && firstChillerLogByDay[todayKey]);
-  const canEditRunningSection = !hasFirstChillerLogToday;
-  
   // Filter state
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [approveConfirmOpen, setApproveConfirmOpen] = useState(false);
@@ -389,6 +382,14 @@ export default function ELogBookPage() {
   const [editingCommentValue, setEditingCommentValue] = useState('');
   const [editingLogId, setEditingLogId] = useState<string | null>(null);
   const [readingsModalLogId, setReadingsModalLogId] = useState<string | null>(null);
+
+  // Pump/fan running section can be edited only for the first chiller reading of the day (global).
+  // Subsequent entries (and all edits) can view but cannot change these values.
+  const activeDateKey = formData.date || format(new Date(), 'yyyy-MM-dd');
+  const hasFirstChillerLogForDay =
+    formData.equipmentType === 'chiller' && !!firstChillerLogByDate[activeDateKey];
+  const isEditingLog = !!editingLogId;
+  const canEditRunningSection = !isEditingLog && !hasFirstChillerLogForDay;
   const [filters, setFilters] = useState({
     fromDate: '',
     toDate: '',
@@ -641,10 +642,10 @@ export default function ELogBookPage() {
           console.error('Error fetching chemical logs:', err);
           return [];
         }),
-        logbookAPI.listFilterLogs?.().catch(err => {
+        filterLogAPI.list().catch(err => {
           console.error('Error fetching filter logs:', err);
           return [];
-        }) ?? [],
+        }),
       ]);
       
       console.log('Refreshed log data:', { chillerLogs, boilerLogs, chemicalLogs, filterLogs });
@@ -781,18 +782,28 @@ export default function ELogBookPage() {
       console.log('Total logs after refresh:', allLogs.length, allLogs);
       setLogs(allLogs);
 
-      // Rebuild map of first chiller log per operator per day
+      // Rebuild map of first chiller log per operator per day (legacy; kept for other logic)
       const firstMap: Record<string, ELogBook> = {};
+      // First chiller log per date (global day baseline)
+      const firstByDate: Record<string, ELogBook> = {};
       allLogs.forEach(log => {
         if (log.equipmentType !== 'chiller') return;
-        if (!log.operator_id) return;
-        const key = `${log.operator_id}_${log.date}`;
-        const existing = firstMap[key];
-        if (!existing || log.timestamp.getTime() < existing.timestamp.getTime()) {
-          firstMap[key] = log;
+        if (log.operator_id) {
+          const key = `${log.operator_id}_${log.date}`;
+          const existing = firstMap[key];
+          if (!existing || log.timestamp.getTime() < existing.timestamp.getTime()) {
+            firstMap[key] = log;
+          }
+        }
+
+        const dateKey = log.date;
+        const existingForDate = firstByDate[dateKey];
+        if (!existingForDate || log.timestamp.getTime() < existingForDate.timestamp.getTime()) {
+          firstByDate[dateKey] = log;
         }
       });
       setFirstChillerLogByDay(firstMap);
+      setFirstChillerLogByDate(firstByDate);
     } catch (error) {
       console.error('Error refreshing logs:', error);
       toast.error('Failed to refresh log entries');
@@ -966,9 +977,8 @@ export default function ELogBookPage() {
         const now = new Date();
         const today = format(now, 'yyyy-MM-dd');
 
-        // Determine operator-day baseline log (first chiller log by this operator today)
-        const key = user?.id ? `${user.id}_${today}` : '';
-        const firstLogForDay = key ? firstChillerLogByDay[key] : undefined;
+        // Determine day baseline log (first chiller log globally for the day)
+        const firstLogForDay = firstChillerLogByDate[today];
 
         // If not the first log, enforce remarks when pump/fan status changes
         if (firstLogForDay) {
@@ -1919,9 +1929,8 @@ export default function ELogBookPage() {
                               equipmentId: v,
                             }));
                             if (formData.equipmentType === 'chiller') {
-                              const today = format(new Date(), 'yyyy-MM-dd');
-                              const key = user?.id ? `${user.id}_${today}` : '';
-                              const firstLog = key ? firstChillerLogByDay[key] : undefined;
+                              const dateKey = formData.date || format(new Date(), 'yyyy-MM-dd');
+                              const firstLog = firstChillerLogByDate[dateKey];
                               if (firstLog) {
                                 const initialPumps = decodePumpPair(
                                   firstLog.coolingTowerPumpStatus,

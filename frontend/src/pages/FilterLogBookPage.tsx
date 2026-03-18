@@ -109,6 +109,7 @@ interface FilterLog {
   cleaningDueDate: string;
   replacementDueDate: string;
   remarks: string;
+  comment?: string;
   checkedBy: string;
   timestamp: Date;
   status: "pending" | "approved" | "rejected" | "draft" | "pending_secondary_approval";
@@ -477,6 +478,7 @@ const FilterLogBookPage: React.FC = () => {
           cleaningDueDate: log.cleaning_due_date,
           replacementDueDate: log.replacement_due_date,
           remarks: log.remarks || "",
+          comment: log.comment || "",
           checkedBy: log.operator_name,
           timestamp,
           status: log.status as FilterLog["status"],
@@ -558,6 +560,7 @@ const FilterLogBookPage: React.FC = () => {
             cleaningDueDate: log.cleaning_due_date,
             replacementDueDate: log.replacement_due_date,
             remarks: log.remarks || "",
+            comment: log.comment || "",
             checkedBy: log.operator_name,
             timestamp,
             status: log.status,
@@ -1866,7 +1869,7 @@ const FilterLogBookPage: React.FC = () => {
             )}
           </div>
           <div className="overflow-x-auto">
-            <table className="min-w-full text-xs md:text-sm" style={{ minWidth: '1320px' }}>
+            <table className="min-w-full text-xs md:text-sm" style={{ minWidth: '1500px' }}>
               <thead className="bg-muted">
                 <tr className="border-b">
                   <th className="px-3 py-2 text-center align-middle w-12">
@@ -1925,6 +1928,9 @@ const FilterLogBookPage: React.FC = () => {
                   <th className="px-3 py-2 text-center align-middle min-w-[180px]">
                     Remarks
                   </th>
+                  <th className="px-3 py-2 text-center align-middle min-w-[180px]">
+                    Comment
+                  </th>
                   <th className="px-3 py-2 text-center align-middle w-[140px]">
                     Done by
                   </th>
@@ -1939,7 +1945,7 @@ const FilterLogBookPage: React.FC = () => {
               <tbody>
                 {filteredLogs.length === 0 && (
                   <tr>
-                    <td colSpan={18} className="px-4 py-6 text-center text-sm text-muted-foreground">
+                    <td colSpan={19} className="px-4 py-6 text-center text-sm text-muted-foreground">
                       {isLoading ? "Loading entries..." : "No entries found"}
                     </td>
                   </tr>
@@ -2006,6 +2012,11 @@ const FilterLogBookPage: React.FC = () => {
                       <td className="px-3 py-2 align-top max-w-xs">
                         <div className="whitespace-pre-wrap break-words text-xs">
                           {log.remarks || "-"}
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 align-top max-w-xs">
+                        <div className="whitespace-pre-wrap break-words text-xs">
+                          {log.comment || "-"}
                         </div>
                       </td>
                       <td className="px-3 py-2 align-top">{log.checkedBy}</td>

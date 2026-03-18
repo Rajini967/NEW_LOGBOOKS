@@ -176,7 +176,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       )}
 
       {/* Navigation */}
-      <nav className="flex-1 p-2 space-y-1 overflow-y-auto">
+      <nav className="flex-1 p-2 space-y-1 overflow-y-auto scrollbar-hide">
         {/* Dashboard */}
         {user && navItems[0].roles.includes(user.role) && (() => {
           const Icon = navItems[0].icon;

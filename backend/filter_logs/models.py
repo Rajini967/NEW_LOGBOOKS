@@ -47,6 +47,7 @@ class FilterLog(models.Model):
     replacement_due_date = models.DateField()
 
     remarks = models.TextField(blank=True, null=True)
+    comment = models.TextField(blank=True, null=True)
 
     operator = models.ForeignKey(
         settings.AUTH_USER_MODEL,

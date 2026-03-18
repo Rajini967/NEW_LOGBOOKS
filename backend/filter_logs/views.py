@@ -242,9 +242,10 @@ class FilterLogViewSet(viewsets.ModelViewSet):
         """
         log = self.get_object()
         action_type = request.data.get('action', 'approve')
-        remarks = (request.data.get('remarks') or '').strip()
+        # Backwards compatible: frontend currently sends approval/rejection comment as `remarks`.
+        comment = (request.data.get('comment') or request.data.get('remarks') or '').strip()
 
-        if action_type == 'reject' and not remarks:
+        if action_type == 'reject' and not comment:
             raise ValidationError({'remarks': ['Comment is required when rejecting.']})
 
         if action_type == 'approve':
@@ -283,14 +284,15 @@ class FilterLogViewSet(viewsets.ModelViewSet):
                 log.approved_at = now
                 log.status = 'approved'
 
-        log.remarks = remarks or log.remarks
+        if comment:
+            log.comment = comment
         log.save(update_fields=[
             'status',
             'approved_by',
             'approved_at',
             'secondary_approved_by',
             'secondary_approved_at',
-            'remarks',
+            'comment',
             'updated_at',
         ])
 
@@ -305,7 +307,7 @@ class FilterLogViewSet(viewsets.ModelViewSet):
                 created_by=log.operator_name or 'Unknown',
                 created_at=log.created_at,
                 approved_by=request.user,
-                remarks=remarks or None,
+                remarks=comment or None,
             )
 
         serializer = self.get_serializer(log)

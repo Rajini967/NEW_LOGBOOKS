@@ -148,6 +148,7 @@ export default function EquipmentListPage() {
       is_active: true,
       log_entry_interval: "",
       shift_duration_hours: "",
+      tolerance_minutes: "",
     });
     setIsEditMode(false);
     setEditingId(null);
@@ -423,230 +424,245 @@ export default function EquipmentListPage() {
                   Add Equipment
                 </Button>
               </DialogTrigger>
-              <DialogContent className="sm:max-w-[520px]">
+              <DialogContent className="flex flex-col w-[95vw] sm:max-w-xl md:max-w-2xl lg:max-w-3xl max-h-[85vh] overflow-hidden">
                 <DialogHeader>
                   <DialogTitle className="flex items-center gap-2">
                     <Wrench className="w-5 h-5" />
                     {isEditMode ? "Edit Equipment" : "Register Equipment"}
                   </DialogTitle>
                 </DialogHeader>
-                <form onSubmit={handleSubmit} className="space-y-4">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="equipment_number">
-                        Equipment Number{" "}
-                        <span className="text-destructive">*</span>
-                      </Label>
-                      <Input
-                        id="equipment_number"
-                        value={formData.equipment_number}
-                        onChange={(e) =>
-                          setFormData((prev) => ({
-                            ...prev,
-                            equipment_number: e.target.value,
-                          }))
-                        }
-                        placeholder="e.g. CH-001"
-                        required
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="name">
-                        Equipment Name{" "}
-                        <span className="text-destructive">*</span>
-                      </Label>
-                      <Input
-                        id="name"
-                        value={formData.name}
-                        onChange={(e) =>
-                          setFormData((prev) => ({
-                            ...prev,
-                            name: e.target.value,
-                          }))
-                        }
-                        placeholder="e.g. Chiller 1"
-                        required
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="department">
-                        Department <span className="text-destructive">*</span>
-                      </Label>
-                      <Select
-                        value={formData.department}
-                        onValueChange={(value) =>
-                          setFormData((prev) => ({
-                            ...prev,
-                            department: value,
-                          }))
-                        }
-                      >
-                        <SelectTrigger id="department">
-                          <SelectValue placeholder="Select department" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {departments.map((dept) => (
-                            <SelectItem key={dept.id} value={dept.id}>
-                              {dept.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="category">
-                        Category <span className="text-destructive">*</span>
-                      </Label>
-                      <Select
-                        value={formData.category}
-                        onValueChange={(value) =>
-                          setFormData((prev) => ({
-                            ...prev,
-                            category: value,
-                          }))
-                        }
-                      >
-                        <SelectTrigger id="category">
-                          <SelectValue placeholder="Select category" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {categories.map((cat) => (
-                            <SelectItem key={cat.id} value={cat.id}>
-                              {cat.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="capacity">
-                      Capacity
-                      <span className="text-xs text-muted-foreground ml-1">
-                        (numeric value with optional unit, e.g. 1000 TR)
-                      </span>
-                    </Label>
-                    <Input
-                      id="capacity"
-                      value={formData.capacity}
-                      onChange={(e) =>
-                        setFormData((prev) => ({
-                          ...prev,
-                          capacity: e.target.value,
-                        }))
-                      }
-                      placeholder='e.g. "1000 TR" or "5 TPH"'
-                    />
-                  </div>
-
-                  <div className="space-y-2 pt-2 border-t border-border">
-                    <Label>Log entry interval</Label>
-                    <Select
-                      value={formData.log_entry_interval || "__none__"}
-                      onValueChange={(v) =>
-                        setFormData((prev) => ({
-                          ...prev,
-                          log_entry_interval: v === "__none__" ? "" : (v as LogEntryIntervalType),
-                          shift_duration_hours: v === "shift" ? prev.shift_duration_hours : "",
-                        }))
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Use global default" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="__none__">Use global default</SelectItem>
-                        <SelectItem value="hourly">Hourly</SelectItem>
-                        <SelectItem value="shift">Shift</SelectItem>
-                        <SelectItem value="daily">Daily</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <p className="text-xs text-muted-foreground">
-                      Override the global log entry interval for this equipment. Empty = use Settings default.
-                    </p>
-                    {formData.log_entry_interval === "shift" && (
-                      <div className="space-y-1 pt-2">
-                        <Label htmlFor="shift_duration_hours">Shift duration (hours)</Label>
+                <form
+                  onSubmit={handleSubmit}
+                  className="flex flex-col gap-4 flex-1 min-h-0"
+                >
+                  <div className="space-y-4 overflow-y-auto pr-2 flex-1 min-h-0">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="equipment_number">
+                          Equipment Number{" "}
+                          <span className="text-destructive">*</span>
+                        </Label>
                         <Input
-                          id="shift_duration_hours"
-                          type="number"
-                          min={1}
-                          max={24}
-                          value={formData.shift_duration_hours === "" ? "" : formData.shift_duration_hours}
-                          onChange={(e) => {
-                            const v = e.target.value;
+                          id="equipment_number"
+                          value={formData.equipment_number}
+                          onChange={(e) =>
                             setFormData((prev) => ({
                               ...prev,
-                              shift_duration_hours: v === "" ? "" : parseInt(v, 10) || 8,
-                            }));
-                          }}
-                          placeholder="e.g. 8"
+                              equipment_number: e.target.value,
+                            }))
+                          }
+                          placeholder="e.g. CH-001"
+                          required
                         />
                       </div>
-                    )}
-                  </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="name">
+                          Equipment Name{" "}
+                          <span className="text-destructive">*</span>
+                        </Label>
+                        <Input
+                          id="name"
+                          value={formData.name}
+                          onChange={(e) =>
+                            setFormData((prev) => ({
+                              ...prev,
+                              name: e.target.value,
+                            }))
+                          }
+                          placeholder="e.g. Chiller 1"
+                          required
+                        />
+                      </div>
+                    </div>
 
-                  <div className="space-y-2 pt-2 border-t border-border">
-                    <Label htmlFor="tolerance_minutes">
-                      Log entry tolerance (minutes)
-                    </Label>
-                    <Input
-                      id="tolerance_minutes"
-                      type="number"
-                      min={0}
-                      value={
-                        formData.tolerance_minutes === ""
-                          ? ""
-                          : formData.tolerance_minutes
-                      }
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        setFormData((prev) => ({
-                          ...prev,
-                          tolerance_minutes:
-                            v === "" ? "" : Math.max(0, parseInt(v, 10) || 0),
-                        }));
-                      }}
-                      placeholder="e.g. 15 (±15 minutes around scheduled time)"
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      Within this tolerance window, new log rows will be shown in
-                      yellow; after the tolerance window they will be shown in
-                      red. Leave blank or 0 to disable tolerance highlighting
-                      for this equipment.
-                    </p>
-                  </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="department">
+                          Department <span className="text-destructive">*</span>
+                        </Label>
+                        <Select
+                          value={formData.department}
+                          onValueChange={(value) =>
+                            setFormData((prev) => ({
+                              ...prev,
+                              department: value,
+                            }))
+                          }
+                        >
+                          <SelectTrigger id="department">
+                            <SelectValue placeholder="Select department" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {departments.map((dept) => (
+                              <SelectItem key={dept.id} value={dept.id}>
+                                {dept.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="category">
+                          Category <span className="text-destructive">*</span>
+                        </Label>
+                        <Select
+                          value={formData.category}
+                          onValueChange={(value) =>
+                            setFormData((prev) => ({
+                              ...prev,
+                              category: value,
+                            }))
+                          }
+                        >
+                          <SelectTrigger id="category">
+                            <SelectValue placeholder="Select category" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {categories.map((cat) => (
+                              <SelectItem key={cat.id} value={cat.id}>
+                                {cat.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
 
-                  <div className="space-y-2 pt-2 border-t border-border">
-                    <div className="flex items-center space-x-2">
-                      <Checkbox
-                        id="is_active"
-                        checked={formData.is_active}
-                        onCheckedChange={(checked) =>
+                    <div className="space-y-2">
+                      <Label htmlFor="capacity">
+                        Capacity
+                        <span className="text-xs text-muted-foreground ml-1">
+                          (numeric value with optional unit, e.g. 1000 TR)
+                        </span>
+                      </Label>
+                      <Input
+                        id="capacity"
+                        value={formData.capacity}
+                        onChange={(e) =>
                           setFormData((prev) => ({
                             ...prev,
-                            is_active: checked as boolean,
+                            capacity: e.target.value,
                           }))
                         }
+                        placeholder='e.g. "1000 TR" or "5 TPH"'
                       />
-                      <Label
-                        htmlFor="is_active"
-                        className="text-sm font-normal cursor-pointer"
-                      >
-                        Active
-                      </Label>
                     </div>
-                    <p className="text-xs text-muted-foreground ml-6">
-                      Inactive equipment will be hidden from selection in new
-                      entries.
-                    </p>
+
+                    <div className="space-y-2 pt-2 border-t border-border">
+                      <Label>Log entry interval</Label>
+                      <Select
+                        value={formData.log_entry_interval || "__none__"}
+                        onValueChange={(v) =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            log_entry_interval:
+                              v === "__none__" ? "" : (v as LogEntryIntervalType),
+                            shift_duration_hours:
+                              v === "shift" ? prev.shift_duration_hours : "",
+                          }))
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Use global default" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">Use global default</SelectItem>
+                          <SelectItem value="hourly">Hourly</SelectItem>
+                          <SelectItem value="shift">Shift</SelectItem>
+                          <SelectItem value="daily">Daily</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted-foreground">
+                        Override the global log entry interval for this equipment.
+                        Empty = use Settings default.
+                      </p>
+                      {formData.log_entry_interval === "shift" && (
+                        <div className="space-y-1 pt-2">
+                          <Label htmlFor="shift_duration_hours">
+                            Shift duration (hours)
+                          </Label>
+                          <Input
+                            id="shift_duration_hours"
+                            type="number"
+                            min={1}
+                            max={24}
+                            value={
+                              formData.shift_duration_hours === ""
+                                ? ""
+                                : formData.shift_duration_hours
+                            }
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setFormData((prev) => ({
+                                ...prev,
+                                shift_duration_hours:
+                                  v === "" ? "" : parseInt(v, 10) || 8,
+                              }));
+                            }}
+                            placeholder="e.g. 8"
+                          />
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="space-y-2 pt-2 border-t border-border">
+                      <Label htmlFor="tolerance_minutes">
+                        Log entry tolerance (minutes)
+                      </Label>
+                      <Input
+                        id="tolerance_minutes"
+                        type="number"
+                        min={0}
+                        value={
+                          formData.tolerance_minutes === ""
+                            ? ""
+                            : formData.tolerance_minutes
+                        }
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setFormData((prev) => ({
+                            ...prev,
+                            tolerance_minutes:
+                              v === "" ? "" : Math.max(0, parseInt(v, 10) || 0),
+                          }));
+                        }}
+                        placeholder="e.g. 15 (±15 minutes around scheduled time)"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Within this tolerance window, new log rows will be shown in
+                        yellow; after the tolerance window they will be shown in
+                        red. Leave blank or 0 to disable tolerance highlighting for
+                        this equipment.
+                      </p>
+                    </div>
+
+                    <div className="space-y-2 pt-2 border-t border-border">
+                      <div className="flex items-center space-x-2">
+                        <Checkbox
+                          id="is_active"
+                          checked={formData.is_active}
+                          onCheckedChange={(checked) =>
+                            setFormData((prev) => ({
+                              ...prev,
+                              is_active: checked as boolean,
+                            }))
+                          }
+                        />
+                        <Label
+                          htmlFor="is_active"
+                          className="text-sm font-normal cursor-pointer"
+                        >
+                          Active
+                        </Label>
+                      </div>
+                      <p className="text-xs text-muted-foreground ml-6">
+                        Inactive equipment will be hidden from selection in new
+                        entries.
+                      </p>
+                    </div>
                   </div>
 
-                  <div className="flex justify-end gap-2 pt-2">
+                  <div className="flex justify-end gap-2 pt-2 border-t border-border">
                     <Button
                       type="button"
                       variant="outline"
@@ -660,8 +676,8 @@ export default function EquipmentListPage() {
                           ? "Saving..."
                           : "Creating..."
                         : isEditMode
-                        ? "Save Changes"
-                        : "Create Equipment"}
+                          ? "Save Changes"
+                          : "Create Equipment"}
                     </Button>
                   </div>
                 </form>

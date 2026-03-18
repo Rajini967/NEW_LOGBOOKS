@@ -33,6 +33,7 @@ class FilterLogSerializer(serializers.ModelSerializer):
             'cleaning_due_date',
             'replacement_due_date',
             'remarks',
+            'comment',
             'operator_id',
             'operator_name',
             'status',
