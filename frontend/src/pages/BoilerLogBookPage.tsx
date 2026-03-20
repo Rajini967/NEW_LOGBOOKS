@@ -153,6 +153,7 @@ const BoilerLogBookPage: React.FC = () => {
   const [editingCommentValue, setEditingCommentValue] = useState("");
   const [readingsModalLogId, setReadingsModalLogId] = useState<string | null>(null);
   const [editingLogId, setEditingLogId] = useState<string | null>(null);
+  const [viewedReadingsLogIds, setViewedReadingsLogIds] = useState<Set<string>>(new Set());
   const [equipmentOptions, setEquipmentOptions] = useState<
     {
       id: string;
@@ -867,6 +868,26 @@ const BoilerLogBookPage: React.FC = () => {
     }
   };
 
+  const handleViewReadingsClick = (id: string) => {
+    setViewedReadingsLogIds((prev) => {
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+    setReadingsModalLogId(id);
+  };
+
+  const handleApproveSelectedClick = () => {
+    const notViewedIds = selectedLogIds.filter((id) => !viewedReadingsLogIds.has(id));
+    if (notViewedIds.length > 0) {
+      toast.error(
+        `Please click View Readings before approval for ${notViewedIds.length} selected entr${notViewedIds.length === 1 ? "y" : "ies"}.`
+      );
+      return;
+    }
+    setApproveConfirmOpen(true);
+  };
+
   const handleReject = async (id: string, remarks: string) => {
     setRejectCommentOpen(false);
     setRejectComment("");
@@ -1413,7 +1434,7 @@ const BoilerLogBookPage: React.FC = () => {
                 type="button"
                 size="sm"
                 className="bg-green-600 hover:bg-green-700 text-white"
-                onClick={() => setApproveConfirmOpen(true)}
+                onClick={handleApproveSelectedClick}
               >
                 <CheckCircle className="w-4 h-4 mr-2" />
                 Approve selected ({selectedLogIds.length})
@@ -1489,7 +1510,7 @@ const BoilerLogBookPage: React.FC = () => {
                         variant="outline"
                         size="sm"
                         className="text-xs"
-                        onClick={() => setReadingsModalLogId(log.id)}
+                        onClick={() => handleViewReadingsClick(log.id)}
                       >
                         <Eye className="w-3.5 h-3.5 mr-1.5" />
                         View Readings
@@ -1596,6 +1617,10 @@ const BoilerLogBookPage: React.FC = () => {
                                   }
                                   if (log.operator_id === user?.id) {
                                     toast.error("The log book entry must be approved by a different user than the operator (Log Book Done By).");
+                                    return;
+                                  }
+                                  if (!viewedReadingsLogIds.has(log.id)) {
+                                    toast.error("Please click View Readings before approving this entry.");
                                     return;
                                   }
                                   setSelectedLogIds([log.id]);
@@ -1870,6 +1895,13 @@ const BoilerLogBookPage: React.FC = () => {
                     if (log.status === "pending_secondary_approval" && log.approved_by_id === user?.id) return false;
                     return true;
                   });
+                  const notViewedIds = ids.filter((id) => !viewedReadingsLogIds.has(id));
+                  if (notViewedIds.length > 0) {
+                    toast.error(
+                      `Please click View Readings before approval for ${notViewedIds.length} selected entr${notViewedIds.length === 1 ? "y" : "ies"}.`
+                    );
+                    return;
+                  }
                   if (ids.length === 0) return;
                   if (ids.length === 1) {
                     handleApprove(ids[0], comment);

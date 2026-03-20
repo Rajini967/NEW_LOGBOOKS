@@ -355,6 +355,7 @@ export default function ELogBookPage() {
   const [editingCommentValue, setEditingCommentValue] = useState('');
   const [editingLogId, setEditingLogId] = useState<string | null>(null);
   const [readingsModalLogId, setReadingsModalLogId] = useState<string | null>(null);
+  const [viewedReadingsLogIds, setViewedReadingsLogIds] = useState<Set<string>>(new Set());
 
   // Pump/fan running section can be edited only for the first chiller reading of the day (global).
   // Subsequent entries (and all edits) can view but cannot change these values.
@@ -1238,6 +1239,12 @@ export default function ELogBookPage() {
   const handleApproveClick = (id: string) => {
     const log = logs.find((l) => l.id === id);
     if (!log) return;
+    const requiresReadingsBeforeApprove =
+      log.equipmentType === 'chiller' || log.equipmentType === 'boiler' || log.equipmentType === 'chemical';
+    if (requiresReadingsBeforeApprove && !viewedReadingsLogIds.has(id)) {
+      toast.error('Please click View Readings before approving this entry.');
+      return;
+    }
 
     // Prevent operator from attempting approval – show same message as backend
     if (log.operator_id && user?.id && log.operator_id === user.id) {
@@ -1248,6 +1255,32 @@ export default function ELogBookPage() {
     }
 
     setSelectedLogIds([id]);
+    setApproveConfirmOpen(true);
+  };
+
+  const handleViewReadingsClick = (id: string) => {
+    setViewedReadingsLogIds((prev) => {
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+    setReadingsModalLogId(id);
+  };
+
+  const handleApproveSelectedClick = () => {
+    const notViewedIds = selectedLogIds.filter((id) => {
+      const log = logs.find((l) => l.id === id);
+      if (!log) return false;
+      const requiresReadingsBeforeApprove =
+        log.equipmentType === 'chiller' || log.equipmentType === 'boiler' || log.equipmentType === 'chemical';
+      return requiresReadingsBeforeApprove && !viewedReadingsLogIds.has(id);
+    });
+    if (notViewedIds.length > 0) {
+      toast.error(
+        `Please click View Readings before approval for ${notViewedIds.length} selected entr${notViewedIds.length === 1 ? 'y' : 'ies'}.`
+      );
+      return;
+    }
     setApproveConfirmOpen(true);
   };
 
@@ -3192,7 +3225,7 @@ export default function ELogBookPage() {
                 type="button"
                 size="sm"
                 className="bg-green-600 hover:bg-green-700 text-white"
-                onClick={() => setApproveConfirmOpen(true)}
+                onClick={handleApproveSelectedClick}
               >
                 <CheckCircle className="w-4 h-4 mr-2" />
                 Approve selected ({selectedLogIds.length})
@@ -3289,7 +3322,7 @@ export default function ELogBookPage() {
                           variant="outline"
                           size="sm"
                           className="text-xs"
-                          onClick={() => setReadingsModalLogId(log.id)}
+                          onClick={() => handleViewReadingsClick(log.id)}
                         >
                           <Eye className="w-3.5 h-3.5 mr-1.5" />
                           View Readings
@@ -3719,6 +3752,19 @@ export default function ELogBookPage() {
                     if (log.status === 'pending_secondary_approval' && log.approved_by_id === user?.id) return false;
                     return true;
                   });
+                  const notViewedIds = ids.filter((id) => {
+                    const log = logs.find((l) => l.id === id);
+                    if (!log) return false;
+                    const requiresReadingsBeforeApprove =
+                      log.equipmentType === 'chiller' || log.equipmentType === 'boiler' || log.equipmentType === 'chemical';
+                    return requiresReadingsBeforeApprove && !viewedReadingsLogIds.has(id);
+                  });
+                  if (notViewedIds.length > 0) {
+                    toast.error(
+                      `Please click View Readings before approval for ${notViewedIds.length} selected entr${notViewedIds.length === 1 ? 'y' : 'ies'}.`
+                    );
+                    return;
+                  }
                   if (ids.length === 0) return;
                   if (ids.length === 1) {
                     handleApprove(ids[0], comment);
