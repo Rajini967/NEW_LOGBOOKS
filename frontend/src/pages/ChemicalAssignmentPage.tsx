@@ -248,11 +248,19 @@ const ChemicalAssignmentPage: React.FC = () => {
       toast.error("Please select a category (Major/Minor).");
       return;
     }
-    const isDuplicateEquipment = rows.some(
-      (r) => (r.equipment_name || "").trim().toLowerCase() === equipmentName.trim().toLowerCase()
-    );
-    if (isDuplicateEquipment) {
-      toast.error("Equipment must be unique.");
+    const isExactDuplicateAssignment = rows.some((r) => {
+      const sameEquipment =
+        (r.equipment_name || "").trim().toLowerCase() === equipmentName.trim().toLowerCase();
+      const sameCategory =
+        (r.category || "").trim().toLowerCase() === (form.category || "").trim().toLowerCase();
+      const rowChemicalName = (r.chemical_name || "").trim().toLowerCase();
+      const sameChemical =
+        rowChemicalName === chemicalName.trim().toLowerCase() ||
+        (!!form.selectedChemicalId && r.chemical === form.selectedChemicalId);
+      return sameEquipment && sameCategory && sameChemical;
+    });
+    if (isExactDuplicateAssignment) {
+      toast.error("This chemical is already assigned to this equipment for the selected category.");
       return;
     }
     try {
