@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Header } from "@/components/layout/Header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -301,6 +301,15 @@ const ChemicalLogBookPage: React.FC = () => {
     })();
   }, []);
 
+  const toChemicalDisplay = useCallback(
+    (formula: string | null | undefined, name: string | null | undefined) => {
+      const f = String(formula ?? "").trim();
+      const n = String(name ?? "").trim();
+      return f ? `${f} – ${n}` : n;
+    },
+    [],
+  );
+
   // Derive chemical options per equipment from assignments
   const chemOptionsByEquipment = useMemo(() => {
     const map: Record<
@@ -314,7 +323,7 @@ const ChemicalLogBookPage: React.FC = () => {
       const formula = a.chemical_formula?.trim();
       if (!equipment || !name) return;
 
-      const label = formula ? `${formula} – ${name}` : name;
+      const label = toChemicalDisplay(formula, name);
       const value = label;
 
       if (!map[equipment]) {
@@ -407,7 +416,7 @@ const ChemicalLogBookPage: React.FC = () => {
     const assignment = assignments.find(
       (a) =>
         a.equipment_name === formData.equipmentName &&
-        `${a.chemical_formula} – ${a.chemical_name}` === formData.chemicalName,
+        toChemicalDisplay(a.chemical_formula, a.chemical_name) === (formData.chemicalName || "").trim(),
     );
     const fromAssignment = assignment?.chemical_id ?? null;
     setSelectedChemicalId(fromAssignment);
@@ -425,7 +434,7 @@ const ChemicalLogBookPage: React.FC = () => {
       const sameFormulaName =
         (c.formula || "").trim().toLowerCase() === (assignment.chemical_formula || "").trim().toLowerCase() &&
         (c.name || "").trim().toLowerCase() === (assignment.chemical_name || "").trim().toLowerCase();
-      const sameDisplay = `${(c.formula || "").trim()} – ${(c.name || "").trim()}` === (formData.chemicalName || "").trim();
+      const sameDisplay = toChemicalDisplay(c.formula, c.name) === (formData.chemicalName || "").trim();
       return sameFormulaName || sameDisplay;
     });
     setResolvedChemicalId(match?.id ?? null);
@@ -448,7 +457,7 @@ const ChemicalLogBookPage: React.FC = () => {
     return assignments.find(
       (a) =>
         a.equipment_name === formData.equipmentName &&
-        `${a.chemical_formula} – ${a.chemical_name}` === formData.chemicalName,
+        toChemicalDisplay(a.chemical_formula, a.chemical_name) === (formData.chemicalName || "").trim(),
     ) ?? null;
   }, [formData.equipmentName, formData.chemicalName, assignments]);
 
