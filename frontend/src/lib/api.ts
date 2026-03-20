@@ -791,13 +791,6 @@ export const chillerLogAPI = {
   create: async (data: {
     equipment_id: string;
     site_id?: string;
-    chiller_supply_temp: number;
-    chiller_return_temp: number;
-    cooling_tower_supply_temp: number;
-    cooling_tower_return_temp: number;
-    ct_differential_temp: number;
-    chiller_water_inlet_pressure: number;
-    chiller_makeup_water_flow?: number;
     remarks?: string;
   }) => {
     const response = await api.post('/chiller-logs/', data);

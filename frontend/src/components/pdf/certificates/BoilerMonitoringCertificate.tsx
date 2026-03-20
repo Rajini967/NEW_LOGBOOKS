@@ -16,6 +16,12 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     textTransform: 'uppercase',
   },
+  subtitle: {
+    fontSize: 10,
+    textAlign: 'center',
+    marginTop: -10,
+    marginBottom: 10,
+  },
   table: {
     width: '100%',
     marginTop: 10,
@@ -131,9 +137,6 @@ export function BoilerMonitoringCertificate({ data }: BoilerMonitoringCertificat
     if (value === undefined) return false;
     const limit = limits[field as keyof typeof limits];
     if (!limit) return false;
-    if (limit.type === 'NMT' && limit.max !== undefined) {
-      return value > limit.max;
-    }
     if (limit.type === 'NLT' && limit.min !== undefined) {
       return value < limit.min;
     }
@@ -143,6 +146,7 @@ export function BoilerMonitoringCertificate({ data }: BoilerMonitoringCertificat
   const footerRemarks =
     data.logs.find((log) => (log.remarks || '').toString().trim().length > 0)?.remarks || '';
   const doneBy = data.logs[0]?.checkedBy ?? '';
+  const equipmentId = data.logs[0]?.equipmentId || '-';
 
   return (
     <Document>
@@ -150,6 +154,7 @@ export function BoilerMonitoringCertificate({ data }: BoilerMonitoringCertificat
         <PDFHeader />
         
         <Text style={styles.title}>RAW DATA FOR BOILER MONITORING</Text>
+        <Text style={styles.subtitle}>Equipment ID: {equipmentId}</Text>
 
         <View style={styles.table}>
           {/* Header Row */}
@@ -251,6 +256,7 @@ export function BoilerMonitoringCertificate({ data }: BoilerMonitoringCertificat
       <Page size="A4" style={styles.page}>
         <PDFHeader />
         <Text style={styles.detailsTitle}>RAW DATA FOR BOILER MONITORING (DETAILS – HOURLY/SHIFT)</Text>
+        <Text style={styles.subtitle}>Equipment ID: {equipmentId}</Text>
 
         <View style={styles.table}>
           <View style={[styles.tableRow, styles.tableHeader]}>
@@ -287,6 +293,7 @@ export function BoilerMonitoringCertificate({ data }: BoilerMonitoringCertificat
       <Page size="A4" style={styles.page}>
         <PDFHeader />
         <Text style={styles.detailsTitle}>RAW DATA FOR BOILER MONITORING (DETAILS – DAILY)</Text>
+        <Text style={styles.subtitle}>Equipment ID: {equipmentId}</Text>
 
         <View style={styles.table}>
           <View style={[styles.tableRow, styles.tableHeader]}>

@@ -133,12 +133,12 @@ Goal: prove that **every field** in the Chiller form is **editable (where applic
 Chiller log data is stored in DB table **`chiller_logs`** (model `ChillerLog`).
 
 **Required numeric fields** (cannot be blank):
-- `chiller_supply_temp`, `chiller_return_temp`
-- `cooling_tower_supply_temp`, `cooling_tower_return_temp`
-- `ct_differential_temp`, `chiller_water_inlet_pressure`
+- `evap_water_inlet_pressure`, `evap_water_outlet_pressure`
+- `evap_entering_water_temp`, `evap_leaving_water_temp`, `evap_approach_temp`
+- `cond_water_inlet_pressure`, `cond_water_outlet_pressure`
+- `cond_entering_water_temp`, `cond_leaving_water_temp`, `cond_approach_temp`
 
 **Optional fields** (can be blank/null):
-- Summary: `chiller_makeup_water_flow`
 - Evaporator: `evap_water_inlet_pressure`, `evap_water_outlet_pressure`, `evap_entering_water_temp`, `evap_leaving_water_temp`, `evap_approach_temp`
 - Condenser: `cond_water_inlet_pressure`, `cond_water_outlet_pressure`, `cond_entering_water_temp`, `cond_leaving_water_temp`, `cond_approach_temp`
 - Electrical/control: `chiller_control_signal`, `avg_motor_current`, `compressor_running_time_min`, `starter_energy_kwh`
@@ -169,15 +169,6 @@ Chiller log data is stored in DB table **`chiller_logs`** (model `ChillerLog`).
 4. Fill the form using these **example values**:
 
 **Required**
-- `chiller_supply_temp`: `7.2`
-- `chiller_return_temp`: `12.8`
-- `cooling_tower_supply_temp`: `29.5`
-- `cooling_tower_return_temp`: `33.1`
-- `ct_differential_temp`: `3.6`
-- `chiller_water_inlet_pressure`: `2.1`
-
-**Optional (fill to prove all fields work)**
-- `chiller_makeup_water_flow`: `120`
 - Evaporator:
   - `evap_water_inlet_pressure`: `2.6`
   - `evap_water_outlet_pressure`: `2.3`
@@ -235,7 +226,7 @@ Chiller log data is stored in DB table **`chiller_logs`** (model `ChillerLog`).
 
 Backend enforces `MinValueValidator(0)` on numeric fields.
 
-- **Missing required**: clear `chiller_supply_temp` → Save should fail
+- **Missing required**: clear `evap_water_inlet_pressure` → Save should fail
 - **Negative number**: set `starter_energy_kwh = -1` → Save should fail
 
 ### 6) Daily limits tests (Settings → Chiller daily limits)

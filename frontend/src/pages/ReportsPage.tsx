@@ -127,6 +127,151 @@ interface AuditEventRow {
   new_value: string | null;
 }
 
+const mapChillerLogForMonitoringPdf = (l: any) => ({
+  date: l.timestamp ? format(new Date(l.timestamp), 'dd/MM/yy') : '',
+  time: l.timestamp ? format(new Date(l.timestamp), 'HH:mm') : '',
+  id: l.id,
+  equipmentType: 'chiller',
+  equipmentId: l.equipment_id,
+  evapWaterInletPressure: l.evap_water_inlet_pressure,
+  evapWaterOutletPressure: l.evap_water_outlet_pressure,
+  evapEnteringWaterTemp: l.evap_entering_water_temp,
+  evapLeavingWaterTemp: l.evap_leaving_water_temp,
+  evapApproachTemp: l.evap_approach_temp,
+  condWaterInletPressure: l.cond_water_inlet_pressure,
+  condWaterOutletPressure: l.cond_water_outlet_pressure,
+  condEnteringWaterTemp: l.cond_entering_water_temp,
+  condLeavingWaterTemp: l.cond_leaving_water_temp,
+  condApproachTemp: l.cond_approach_temp,
+  chillerControlSignal: l.chiller_control_signal,
+  avgMotorCurrent: l.avg_motor_current,
+  compressorRunningTimeMin: l.compressor_running_time_min,
+  starterEnergyKwh: l.starter_energy_kwh,
+  coolingTowerPumpStatus: l.cooling_tower_pump_status,
+  chilledWaterPumpStatus: l.chilled_water_pump_status,
+  coolingTowerFanStatus: l.cooling_tower_fan_status,
+  coolingTowerBlowoffValveStatus: l.cooling_tower_blowoff_valve_status,
+  coolingTowerBlowdownTimeMin: l.cooling_tower_blowdown_time_min,
+  dailyWaterConsumptionCt1Liters: l.daily_water_consumption_ct1_liters,
+  dailyWaterConsumptionCt2Liters: l.daily_water_consumption_ct2_liters,
+  dailyWaterConsumptionCt3Liters: l.daily_water_consumption_ct3_liters,
+  coolingTowerChemicalName: l.cooling_tower_chemical_name,
+  coolingTowerChemicalQtyPerDay: l.cooling_tower_chemical_qty_per_day,
+  chilledWaterPumpChemicalName: l.chilled_water_pump_chemical_name,
+  chilledWaterPumpChemicalQtyKg: l.chilled_water_pump_chemical_qty_kg,
+  coolingTowerFanChemicalName: l.cooling_tower_fan_chemical_name,
+  coolingTowerFanChemicalQtyKg: l.cooling_tower_fan_chemical_qty_kg,
+  recordingFrequency: l.recording_frequency,
+  operatorSign: l.operator_sign,
+  verifiedBy: l.verified_by,
+  comment: l.comment,
+  remarks: l.remarks,
+  checkedBy: l.operator_name,
+  timestamp: new Date(l.timestamp),
+  status: l.status,
+  raw: l,
+});
+
+const mapBoilerLogForMonitoringPdf = (l: any) => ({
+  date: l.timestamp ? format(new Date(l.timestamp), 'dd/MM/yy') : '',
+  time: l.timestamp ? format(new Date(l.timestamp), 'HH:mm') : '',
+  id: l.id,
+  equipmentType: 'boiler',
+  equipmentId: l.equipment_id,
+  feedWaterTemp: l.feed_water_temp,
+  oilTemp: l.oil_temp,
+  steamTemp: l.steam_temp,
+  steamPressure: l.steam_pressure,
+  steamFlowLPH: l.steam_flow_lph,
+  foHsdNgDayTankLevel: l.fo_hsd_ng_day_tank_level,
+  feedWaterTankLevel: l.feed_water_tank_level,
+  foPreHeaterTemp: l.fo_pre_heater_temp,
+  burnerOilPressure: l.burner_oil_pressure,
+  burnerHeaterTemp: l.burner_heater_temp,
+  boilerSteamPressure: l.boiler_steam_pressure,
+  stackTemperature: l.stack_temperature,
+  steamPressureAfterPrv: l.steam_pressure_after_prv,
+  feedWaterHardnessPpm: l.feed_water_hardness_ppm,
+  feedWaterTdsPpm: l.feed_water_tds_ppm,
+  foHsdNgConsumption: l.fo_hsd_ng_consumption,
+  mobreyFunctioning: l.mobrey_functioning,
+  manualBlowdownTime: l.manual_blowdown_time,
+  dieselStockLiters: l.diesel_stock_liters,
+  dieselCostRupees: l.diesel_cost_rupees,
+  furnaceOilStockLiters: l.furnace_oil_stock_liters,
+  furnaceOilCostRupees: l.furnace_oil_cost_rupees,
+  brigadeStockKg: l.brigade_stock_kg,
+  brigadeCostRupees: l.brigade_cost_rupees,
+  dailyPowerConsumptionKwh: l.daily_power_consumption_kwh,
+  dailyWaterConsumptionLiters: l.daily_water_consumption_liters,
+  dailyChemicalConsumptionKg: l.daily_chemical_consumption_kg,
+  dailyDieselConsumptionLiters: l.daily_diesel_consumption_liters,
+  dailyFurnaceOilConsumptionLiters: l.daily_furnace_oil_consumption_liters,
+  dailyBrigadeConsumptionKg: l.daily_brigade_consumption_kg,
+  steamConsumptionKgHr: l.steam_consumption_kg_hr,
+  comment: l.comment,
+  remarks: l.remarks,
+  checkedBy: l.operator_name,
+  timestamp: new Date(l.timestamp),
+  status: l.status,
+  raw: l,
+});
+
+const mapChemicalLogForMonitoringPdf = (l: any) => ({
+  date: l.timestamp ? format(new Date(l.timestamp), 'dd/MM/yy') : '',
+  time: l.timestamp ? format(new Date(l.timestamp), 'HH:mm') : '',
+  id: l.id,
+  equipmentType: 'chemical',
+  equipmentName: l.equipment_name,
+  chemicalName: l.chemical_name,
+  chemicalPercent: l.chemical_percent,
+  solutionConcentration: l.solution_concentration,
+  waterQty: l.water_qty,
+  chemicalQty: l.chemical_qty,
+  batchNo: l.batch_no,
+  doneBy: l.done_by,
+  operatorName: l.operator_name,
+  approvedAt: l.approved_at,
+  secondaryApprovedAt: l.secondary_approved_at,
+  comment: l.comment,
+  remarks: l.remarks,
+  checkedBy: l.checked_by || l.operator_name,
+  timestamp: new Date(l.timestamp),
+  status: l.status,
+  raw: l,
+});
+
+const mapFilterLogForMonitoringPdf = (l: any) => {
+  const fd = (val: string | null | undefined) => (val ? format(new Date(val), 'dd/MM/yyyy') : '');
+  return {
+    date: l.timestamp ? format(new Date(l.timestamp), 'dd/MM/yy') : '',
+    time: l.timestamp ? format(new Date(l.timestamp), 'HH:mm') : '',
+    id: l.id,
+    equipmentType: 'filter',
+    equipmentId: l.equipment_id ?? '',
+    category: l.category ?? '',
+    filterNo: l.filter_no ?? '',
+    filterMicron: l.filter_micron ?? '',
+    filterSize: l.filter_size ?? '',
+    tagInfo: l.tag_info ?? '',
+    activityType: l.activity_type ?? '',
+    installedDate: fd(l.installed_date),
+    integrityDoneDate: fd(l.integrity_done_date),
+    integrityDueDate: fd(l.integrity_due_date),
+    cleaningDoneDate: fd(l.cleaning_done_date),
+    cleaningDueDate: fd(l.cleaning_due_date),
+    replacementDueDate: fd(l.replacement_due_date),
+    remarks: l.remarks ?? '',
+    checkedBy: l.operator_name ?? '',
+    timestamp: l.timestamp ? new Date(l.timestamp) : new Date(),
+    status: l.status,
+    raw: l,
+  };
+};
+
+const isApprovedReportRow = (row: any): boolean =>
+  String(row?.status ?? '').toLowerCase() === 'approved';
+
 // TODO: Replace with API call to fetch reports
 const typeIcons = {
   utility: FileText,
@@ -193,7 +338,10 @@ export default function ReportsPage() {
           site: report.site,
           createdBy: report.created_by,
           createdAt: new Date(report.created_at),
-          approvedBy: report.approved_by_name || undefined,
+          approvedBy:
+            (report.approved_by_name && String(report.approved_by_name).trim()) ||
+            (report.approved_by_email && String(report.approved_by_email).trim()) ||
+            undefined,
           approvedAt: report.approved_at ? new Date(report.approved_at) : undefined,
           status: 'approved' as const,
           remarks: report.remarks,
@@ -1158,171 +1306,86 @@ export default function ReportsPage() {
       }
     }
     
-    // For utility reports (chiller, boiler, chemical), generate PDF with all logs
-    if (report.type === 'utility' && log) {
+    // For utility reports (and legacy chemical report rows), generate PDF with equipment-wise logs
+    if ((report.type === 'utility' || report.type === 'chemical') && log) {
       try {
         // Fetch all logs of the same equipment type from API
         let allLogs: any[] = [];
         
         if (log.equipmentType === 'chiller') {
+          const targetEquipmentId = (log.equipment_id ?? log.equipmentId ?? report.site ?? '').toString();
           const chillerLogs = await chillerLogAPI.list();
-          allLogs = chillerLogs.map((l: any) => ({
-            date: l.timestamp ? format(new Date(l.timestamp), 'dd/MM/yy') : '',
-            time: l.timestamp ? format(new Date(l.timestamp), 'HH:mm') : '',
-            id: l.id,
-            equipmentType: 'chiller',
-            equipmentId: l.equipment_id,
-            chillerSupplyTemp: l.chiller_supply_temp,
-            chillerReturnTemp: l.chiller_return_temp,
-            coolingTowerSupplyTemp: l.cooling_tower_supply_temp,
-            coolingTowerReturnTemp: l.cooling_tower_return_temp,
-            ctDifferentialTemp: l.ct_differential_temp,
-            chillerWaterInletPressure: l.chiller_water_inlet_pressure,
-            chillerMakeupWaterFlow: l.chiller_makeup_water_flow,
-            evapWaterInletPressure: l.evap_water_inlet_pressure,
-            evapWaterOutletPressure: l.evap_water_outlet_pressure,
-            evapEnteringWaterTemp: l.evap_entering_water_temp,
-            evapLeavingWaterTemp: l.evap_leaving_water_temp,
-            evapApproachTemp: l.evap_approach_temp,
-            condWaterInletPressure: l.cond_water_inlet_pressure,
-            condWaterOutletPressure: l.cond_water_outlet_pressure,
-            condEnteringWaterTemp: l.cond_entering_water_temp,
-            condLeavingWaterTemp: l.cond_leaving_water_temp,
-            condApproachTemp: l.cond_approach_temp,
-            chillerControlSignal: l.chiller_control_signal,
-            avgMotorCurrent: l.avg_motor_current,
-            compressorRunningTimeMin: l.compressor_running_time_min,
-            starterEnergyKwh: l.starter_energy_kwh,
-            coolingTowerPumpStatus: l.cooling_tower_pump_status,
-            chilledWaterPumpStatus: l.chilled_water_pump_status,
-            coolingTowerFanStatus: l.cooling_tower_fan_status,
-            coolingTowerBlowoffValveStatus: l.cooling_tower_blowoff_valve_status,
-            coolingTowerBlowdownTimeMin: l.cooling_tower_blowdown_time_min,
-            dailyWaterConsumptionCt1Liters: l.daily_water_consumption_ct1_liters,
-            dailyWaterConsumptionCt2Liters: l.daily_water_consumption_ct2_liters,
-            dailyWaterConsumptionCt3Liters: l.daily_water_consumption_ct3_liters,
-            coolingTowerChemicalName: l.cooling_tower_chemical_name,
-            coolingTowerChemicalQtyPerDay: l.cooling_tower_chemical_qty_per_day,
-            chilledWaterPumpChemicalName: l.chilled_water_pump_chemical_name,
-            chilledWaterPumpChemicalQtyKg: l.chilled_water_pump_chemical_qty_kg,
-            coolingTowerFanChemicalName: l.cooling_tower_fan_chemical_name,
-            coolingTowerFanChemicalQtyKg: l.cooling_tower_fan_chemical_qty_kg,
-            recordingFrequency: l.recording_frequency,
-            operatorSign: l.operator_sign,
-            verifiedBy: l.verified_by,
-            comment: l.comment,
-            remarks: l.remarks,
-            checkedBy: l.operator_name,
-            timestamp: new Date(l.timestamp),
-            status: l.status,
-            raw: l,
-          }));
+          allLogs = chillerLogs
+            .filter(
+              (l: any) =>
+                isApprovedReportRow(l) &&
+                (!targetEquipmentId || String(l.equipment_id ?? '') === targetEquipmentId)
+            )
+            .map(mapChillerLogForMonitoringPdf);
+          if (allLogs.length === 0) {
+            toast.error('No logs found for this equipment');
+            return;
+          }
           const chillerPdfData: MonitoringPDFData = { logs: allLogs, approvedBy: report.approvedBy, printedBy: user?.name || user?.email || '' };
           const blob = await generateChillerMonitoringPDF(chillerPdfData);
           downloadPDF(blob, 'Chiller Monitoring.pdf');
           toast.success('PDF generated successfully');
           return;
         } else if (log.equipmentType === 'boiler') {
+          const targetEquipmentId = (log.equipment_id ?? log.equipmentId ?? report.site ?? '').toString();
           const boilerLogs = await boilerLogAPI.list();
-          allLogs = boilerLogs.map((l: any) => ({
-            date: l.timestamp ? format(new Date(l.timestamp), 'dd/MM/yy') : '',
-            time: l.timestamp ? format(new Date(l.timestamp), 'HH:mm') : '',
-            id: l.id,
-            equipmentType: 'boiler',
-            equipmentId: l.equipment_id,
-            feedWaterTemp: l.feed_water_temp,
-            oilTemp: l.oil_temp,
-            steamTemp: l.steam_temp,
-            steamPressure: l.steam_pressure,
-            steamFlowLPH: l.steam_flow_lph,
-            foHsdNgDayTankLevel: l.fo_hsd_ng_day_tank_level,
-            feedWaterTankLevel: l.feed_water_tank_level,
-            foPreHeaterTemp: l.fo_pre_heater_temp,
-            burnerOilPressure: l.burner_oil_pressure,
-            burnerHeaterTemp: l.burner_heater_temp,
-            boilerSteamPressure: l.boiler_steam_pressure,
-            stackTemperature: l.stack_temperature,
-            steamPressureAfterPrv: l.steam_pressure_after_prv,
-            feedWaterHardnessPpm: l.feed_water_hardness_ppm,
-            feedWaterTdsPpm: l.feed_water_tds_ppm,
-            foHsdNgConsumption: l.fo_hsd_ng_consumption,
-            mobreyFunctioning: l.mobrey_functioning,
-            manualBlowdownTime: l.manual_blowdown_time,
-            dieselStockLiters: l.diesel_stock_liters,
-            dieselCostRupees: l.diesel_cost_rupees,
-            furnaceOilStockLiters: l.furnace_oil_stock_liters,
-            furnaceOilCostRupees: l.furnace_oil_cost_rupees,
-            brigadeStockKg: l.brigade_stock_kg,
-            brigadeCostRupees: l.brigade_cost_rupees,
-            dailyPowerConsumptionKwh: l.daily_power_consumption_kwh,
-            dailyWaterConsumptionLiters: l.daily_water_consumption_liters,
-            dailyChemicalConsumptionKg: l.daily_chemical_consumption_kg,
-            dailyDieselConsumptionLiters: l.daily_diesel_consumption_liters,
-            dailyFurnaceOilConsumptionLiters: l.daily_furnace_oil_consumption_liters,
-            dailyBrigadeConsumptionKg: l.daily_brigade_consumption_kg,
-            steamConsumptionKgHr: l.steam_consumption_kg_hr,
-            comment: l.comment,
-            remarks: l.remarks,
-            checkedBy: l.operator_name,
-            timestamp: new Date(l.timestamp),
-            status: l.status,
-            raw: l,
-          }));
+          allLogs = boilerLogs
+            .filter(
+              (l: any) =>
+                isApprovedReportRow(l) &&
+                (!targetEquipmentId || String(l.equipment_id ?? '') === targetEquipmentId)
+            )
+            .map(mapBoilerLogForMonitoringPdf);
+          if (allLogs.length === 0) {
+            toast.error('No logs found for this equipment');
+            return;
+          }
           const boilerPdfData: MonitoringPDFData = { logs: allLogs, approvedBy: report.approvedBy, printedBy: user?.name || user?.email || '' };
           const blob = await generateBoilerMonitoringPDF(boilerPdfData);
           downloadPDF(blob, 'Boiler Monitoring.pdf');
           toast.success('PDF generated successfully');
           return;
         } else if (log.equipmentType === 'chemical') {
+          const targetEquipmentName = (log.equipment_name ?? log.equipmentName ?? report.site ?? '').toString();
           const chemicalPreps = await chemicalPrepAPI.list();
-          allLogs = chemicalPreps.map((l: any) => ({
-            date: l.timestamp ? format(new Date(l.timestamp), 'dd/MM/yy') : '',
-            time: l.timestamp ? format(new Date(l.timestamp), 'HH:mm') : '',
-            id: l.id,
-            equipmentType: 'chemical',
-            equipmentName: l.equipment_name,
-            chemicalName: l.chemical_name,
-            chemicalPercent: l.chemical_percent,
-            solutionConcentration: l.solution_concentration,
-            waterQty: l.water_qty,
-            chemicalQty: l.chemical_qty,
-            batchNo: l.batch_no,
-            doneBy: l.done_by,
-            comment: l.comment,
-            checkedBy: l.checked_by || l.operator_name,
-            operatorName: l.operator_name,
-            approvedAt: l.approved_at,
-            secondaryApprovedAt: l.secondary_approved_at,
-            remarks: l.remarks,
-            timestamp: new Date(l.timestamp),
-            status: l.status,
-            raw: l,
-          }));
+          allLogs = chemicalPreps
+            .filter(
+              (l: any) =>
+                isApprovedReportRow(l) &&
+                (!targetEquipmentName || String(l.equipment_name ?? '') === targetEquipmentName)
+            )
+            .map(mapChemicalLogForMonitoringPdf);
+          if (allLogs.length === 0) {
+            toast.error('No logs found for this equipment');
+            return;
+          }
           const chemicalPdfData: MonitoringPDFData = { logs: allLogs, approvedBy: report.approvedBy, printedBy: user?.name || user?.email || '' };
           const blob = await generateChemicalMonitoringPDF(chemicalPdfData);
           downloadPDF(blob, 'Chemical Monitoring.pdf');
           toast.success('PDF generated successfully');
           return;
         } else if (log.equipmentType === 'filter') {
-          const fd = (val: string | null | undefined) => (val ? format(new Date(val), 'dd/MM/yyyy') : '');
-          const filterPdfLog = {
-            date: log.timestamp ? format(new Date(log.timestamp), 'dd/MM/yy') : '',
-            time: log.timestamp ? format(new Date(log.timestamp), 'HH:mm') : '',
-            equipmentId: log.equipment_id ?? '',
-            category: log.category ?? '',
-            filterNo: log.filter_no ?? '',
-            filterMicron: log.filter_micron ?? '',
-            filterSize: log.filter_size ?? '',
-            installedDate: fd(log.installed_date),
-            integrityDoneDate: fd(log.integrity_done_date),
-            integrityDueDate: fd(log.integrity_due_date),
-            cleaningDoneDate: fd(log.cleaning_done_date),
-            cleaningDueDate: fd(log.cleaning_due_date),
-            replacementDueDate: fd(log.replacement_due_date),
-            remarks: log.remarks ?? '',
-            checkedBy: log.operator_name ?? '',
-          };
-          const filterPdfData: MonitoringPDFData = { logs: [filterPdfLog], approvedBy: report.approvedBy, printedBy: user?.name || user?.email || '' };
+          const targetEquipmentId = (log.equipment_id ?? log.equipmentId ?? report.site ?? '').toString();
+          const targetFilterNo = (log.filter_no ?? log.filterNo ?? '').toString();
+          const filterLogs = await filterLogAPI.list();
+          allLogs = filterLogs
+            .filter((l: any) => {
+              if (!isApprovedReportRow(l)) return false;
+              const matchEquipment = !targetEquipmentId || String(l.equipment_id ?? '') === targetEquipmentId;
+              const matchFilter = !targetFilterNo || String(l.filter_no ?? '') === targetFilterNo;
+              return matchEquipment && matchFilter;
+            })
+            .map(mapFilterLogForMonitoringPdf);
+          if (allLogs.length === 0) {
+            toast.error('No logs found for this equipment');
+            return;
+          }
+          const filterPdfData: MonitoringPDFData = { logs: allLogs, approvedBy: report.approvedBy, printedBy: user?.name || user?.email || '' };
           const blob = await generateFilterMonitoringPDF(filterPdfData);
           downloadPDF(blob, 'Filter Monitoring.pdf');
           toast.success('PDF generated successfully');
@@ -1497,13 +1560,10 @@ export default function ReportsPage() {
     
     if (log.equipmentType === 'chiller') {
       detailsHTML += `
-        <div class="info"><span class="label">Chiller Supply Temp:</span><span class="value">${log.chillerSupplyTemp !== undefined ? log.chillerSupplyTemp + '°C' : 'N/A'}</span></div>
-        <div class="info"><span class="label">Chiller Return Temp:</span><span class="value">${log.chillerReturnTemp !== undefined ? log.chillerReturnTemp + '°C' : 'N/A'}</span></div>
-        <div class="info"><span class="label">Cooling Tower Supply Temp:</span><span class="value">${log.coolingTowerSupplyTemp !== undefined ? log.coolingTowerSupplyTemp + '°C' : 'N/A'}</span></div>
-        <div class="info"><span class="label">Cooling Tower Return Temp:</span><span class="value">${log.coolingTowerReturnTemp !== undefined ? log.coolingTowerReturnTemp + '°C' : 'N/A'}</span></div>
-        <div class="info"><span class="label">CT Differential Temp:</span><span class="value">${log.ctDifferentialTemp !== undefined ? log.ctDifferentialTemp + '°C' : 'N/A'}</span></div>
-        <div class="info"><span class="label">Chiller Water Inlet Pressure:</span><span class="value">${log.chillerWaterInletPressure !== undefined ? log.chillerWaterInletPressure + ' bar' : 'N/A'}</span></div>
-        <div class="info"><span class="label">Chiller Makeup Water Flow:</span><span class="value">${log.chillerMakeupWaterFlow !== undefined ? log.chillerMakeupWaterFlow + ' LPH' : 'N/A'}</span></div>
+        <div class="info"><span class="label">Evap Entering Temp:</span><span class="value">${log.evapEnteringWaterTemp !== undefined ? log.evapEnteringWaterTemp + '°C' : 'N/A'}</span></div>
+        <div class="info"><span class="label">Evap Leaving Temp:</span><span class="value">${log.evapLeavingWaterTemp !== undefined ? log.evapLeavingWaterTemp + '°C' : 'N/A'}</span></div>
+        <div class="info"><span class="label">Cond Entering Temp:</span><span class="value">${log.condEnteringWaterTemp !== undefined ? log.condEnteringWaterTemp + '°C' : 'N/A'}</span></div>
+        <div class="info"><span class="label">Cond Leaving Temp:</span><span class="value">${log.condLeavingWaterTemp !== undefined ? log.condLeavingWaterTemp + '°C' : 'N/A'}</span></div>
       `;
     } else if (log.equipmentType === 'boiler') {
       detailsHTML += `
@@ -1658,65 +1718,26 @@ export default function ReportsPage() {
       }
     }
     
-    // For utility reports (chiller, boiler, chemical), generate PDF with all logs
-    if (report.type === 'utility' && log) {
+    // For utility reports (and legacy chemical report rows), generate PDF with equipment-wise logs
+    if ((report.type === 'utility' || report.type === 'chemical') && log) {
       try {
         // Fetch all logs of the same equipment type from API
         let allLogs: any[] = [];
         
         if (log.equipmentType === 'chiller') {
+          const targetEquipmentId = (log.equipment_id ?? log.equipmentId ?? report.site ?? '').toString();
           const chillerLogs = await chillerLogAPI.list();
-          allLogs = chillerLogs.map((l: any) => ({
-            date: l.timestamp ? format(new Date(l.timestamp), 'dd/MM/yy') : '',
-            time: l.timestamp ? format(new Date(l.timestamp), 'HH:mm') : '',
-            id: l.id,
-            equipmentType: 'chiller',
-            equipmentId: l.equipment_id,
-            chillerSupplyTemp: l.chiller_supply_temp,
-            chillerReturnTemp: l.chiller_return_temp,
-            coolingTowerSupplyTemp: l.cooling_tower_supply_temp,
-            coolingTowerReturnTemp: l.cooling_tower_return_temp,
-            ctDifferentialTemp: l.ct_differential_temp,
-            chillerWaterInletPressure: l.chiller_water_inlet_pressure,
-            chillerMakeupWaterFlow: l.chiller_makeup_water_flow,
-            evapWaterInletPressure: l.evap_water_inlet_pressure,
-            evapWaterOutletPressure: l.evap_water_outlet_pressure,
-            evapEnteringWaterTemp: l.evap_entering_water_temp,
-            evapLeavingWaterTemp: l.evap_leaving_water_temp,
-            evapApproachTemp: l.evap_approach_temp,
-            condWaterInletPressure: l.cond_water_inlet_pressure,
-            condWaterOutletPressure: l.cond_water_outlet_pressure,
-            condEnteringWaterTemp: l.cond_entering_water_temp,
-            condLeavingWaterTemp: l.cond_leaving_water_temp,
-            condApproachTemp: l.cond_approach_temp,
-            chillerControlSignal: l.chiller_control_signal,
-            avgMotorCurrent: l.avg_motor_current,
-            compressorRunningTimeMin: l.compressor_running_time_min,
-            starterEnergyKwh: l.starter_energy_kwh,
-            coolingTowerPumpStatus: l.cooling_tower_pump_status,
-            chilledWaterPumpStatus: l.chilled_water_pump_status,
-            coolingTowerFanStatus: l.cooling_tower_fan_status,
-            coolingTowerBlowoffValveStatus: l.cooling_tower_blowoff_valve_status,
-            coolingTowerBlowdownTimeMin: l.cooling_tower_blowdown_time_min,
-            dailyWaterConsumptionCt1Liters: l.daily_water_consumption_ct1_liters,
-            dailyWaterConsumptionCt2Liters: l.daily_water_consumption_ct2_liters,
-            dailyWaterConsumptionCt3Liters: l.daily_water_consumption_ct3_liters,
-            coolingTowerChemicalName: l.cooling_tower_chemical_name,
-            coolingTowerChemicalQtyPerDay: l.cooling_tower_chemical_qty_per_day,
-            chilledWaterPumpChemicalName: l.chilled_water_pump_chemical_name,
-            chilledWaterPumpChemicalQtyKg: l.chilled_water_pump_chemical_qty_kg,
-            coolingTowerFanChemicalName: l.cooling_tower_fan_chemical_name,
-            coolingTowerFanChemicalQtyKg: l.cooling_tower_fan_chemical_qty_kg,
-            recordingFrequency: l.recording_frequency,
-            operatorSign: l.operator_sign,
-            verifiedBy: l.verified_by,
-            comment: l.comment,
-            remarks: l.remarks,
-            checkedBy: l.operator_name,
-            timestamp: new Date(l.timestamp),
-            status: l.status,
-            raw: l,
-          }));
+          allLogs = chillerLogs
+            .filter(
+              (l: any) =>
+                isApprovedReportRow(l) &&
+                (!targetEquipmentId || String(l.equipment_id ?? '') === targetEquipmentId)
+            )
+            .map(mapChillerLogForMonitoringPdf);
+          if (allLogs.length === 0) {
+            toast.error('No logs found for this equipment');
+            return;
+          }
           const chillerPdfData: MonitoringPDFData = { logs: allLogs, approvedBy: report.approvedBy, printedBy: user?.name || user?.email || '' };
           const blob = await generateChillerMonitoringPDF(chillerPdfData);
           const success = printPDF(blob);
@@ -1727,51 +1748,19 @@ export default function ReportsPage() {
           }
           return;
         } else if (log.equipmentType === 'boiler') {
+          const targetEquipmentId = (log.equipment_id ?? log.equipmentId ?? report.site ?? '').toString();
           const boilerLogs = await boilerLogAPI.list();
-          allLogs = boilerLogs.map((l: any) => ({
-            date: l.timestamp ? format(new Date(l.timestamp), 'dd/MM/yy') : '',
-            time: l.timestamp ? format(new Date(l.timestamp), 'HH:mm') : '',
-            id: l.id,
-            equipmentType: 'boiler',
-            equipmentId: l.equipment_id,
-            feedWaterTemp: l.feed_water_temp,
-            oilTemp: l.oil_temp,
-            steamTemp: l.steam_temp,
-            steamPressure: l.steam_pressure,
-            steamFlowLPH: l.steam_flow_lph,
-            foHsdNgDayTankLevel: l.fo_hsd_ng_day_tank_level,
-            feedWaterTankLevel: l.feed_water_tank_level,
-            foPreHeaterTemp: l.fo_pre_heater_temp,
-            burnerOilPressure: l.burner_oil_pressure,
-            burnerHeaterTemp: l.burner_heater_temp,
-            boilerSteamPressure: l.boiler_steam_pressure,
-            stackTemperature: l.stack_temperature,
-            steamPressureAfterPrv: l.steam_pressure_after_prv,
-            feedWaterHardnessPpm: l.feed_water_hardness_ppm,
-            feedWaterTdsPpm: l.feed_water_tds_ppm,
-            foHsdNgConsumption: l.fo_hsd_ng_consumption,
-            mobreyFunctioning: l.mobrey_functioning,
-            manualBlowdownTime: l.manual_blowdown_time,
-            dieselStockLiters: l.diesel_stock_liters,
-            dieselCostRupees: l.diesel_cost_rupees,
-            furnaceOilStockLiters: l.furnace_oil_stock_liters,
-            furnaceOilCostRupees: l.furnace_oil_cost_rupees,
-            brigadeStockKg: l.brigade_stock_kg,
-            brigadeCostRupees: l.brigade_cost_rupees,
-            dailyPowerConsumptionKwh: l.daily_power_consumption_kwh,
-            dailyWaterConsumptionLiters: l.daily_water_consumption_liters,
-            dailyChemicalConsumptionKg: l.daily_chemical_consumption_kg,
-            dailyDieselConsumptionLiters: l.daily_diesel_consumption_liters,
-            dailyFurnaceOilConsumptionLiters: l.daily_furnace_oil_consumption_liters,
-            dailyBrigadeConsumptionKg: l.daily_brigade_consumption_kg,
-            steamConsumptionKgHr: l.steam_consumption_kg_hr,
-            comment: l.comment,
-            remarks: l.remarks,
-            checkedBy: l.operator_name,
-            timestamp: new Date(l.timestamp),
-            status: l.status,
-            raw: l,
-          }));
+          allLogs = boilerLogs
+            .filter(
+              (l: any) =>
+                isApprovedReportRow(l) &&
+                (!targetEquipmentId || String(l.equipment_id ?? '') === targetEquipmentId)
+            )
+            .map(mapBoilerLogForMonitoringPdf);
+          if (allLogs.length === 0) {
+            toast.error('No logs found for this equipment');
+            return;
+          }
           const boilerPdfData: MonitoringPDFData = { logs: allLogs, approvedBy: report.approvedBy, printedBy: user?.name || user?.email || '' };
           const blob = await generateBoilerMonitoringPDF(boilerPdfData);
           const success = printPDF(blob);
@@ -1782,30 +1771,19 @@ export default function ReportsPage() {
           }
           return;
         } else if (log.equipmentType === 'chemical') {
+          const targetEquipmentName = (log.equipment_name ?? log.equipmentName ?? report.site ?? '').toString();
           const chemicalPreps = await chemicalPrepAPI.list();
-          allLogs = chemicalPreps.map((l: any) => ({
-            date: l.timestamp ? format(new Date(l.timestamp), 'dd/MM/yy') : '',
-            time: l.timestamp ? format(new Date(l.timestamp), 'HH:mm') : '',
-            id: l.id,
-            equipmentType: 'chemical',
-            equipmentName: l.equipment_name,
-            chemicalName: l.chemical_name,
-            chemicalPercent: l.chemical_percent,
-            solutionConcentration: l.solution_concentration,
-            waterQty: l.water_qty,
-            chemicalQty: l.chemical_qty,
-            batchNo: l.batch_no,
-            doneBy: l.done_by,
-            comment: l.comment,
-            checkedBy: l.checked_by || l.operator_name,
-            operatorName: l.operator_name,
-            approvedAt: l.approved_at,
-            secondaryApprovedAt: l.secondary_approved_at,
-            remarks: l.remarks,
-            timestamp: new Date(l.timestamp),
-            status: l.status,
-            raw: l,
-          }));
+          allLogs = chemicalPreps
+            .filter(
+              (l: any) =>
+                isApprovedReportRow(l) &&
+                (!targetEquipmentName || String(l.equipment_name ?? '') === targetEquipmentName)
+            )
+            .map(mapChemicalLogForMonitoringPdf);
+          if (allLogs.length === 0) {
+            toast.error('No logs found for this equipment');
+            return;
+          }
           const chemicalPdfData: MonitoringPDFData = { logs: allLogs, approvedBy: report.approvedBy, printedBy: user?.name || user?.email || '' };
           const blob = await generateChemicalMonitoringPDF(chemicalPdfData);
           const success = printPDF(blob);
@@ -1816,25 +1794,22 @@ export default function ReportsPage() {
           }
           return;
         } else if (log.equipmentType === 'filter') {
-          const fd = (val: string | null | undefined) => (val ? format(new Date(val), 'dd/MM/yyyy') : '');
-          const filterPdfLog = {
-            date: log.timestamp ? format(new Date(log.timestamp), 'dd/MM/yy') : '',
-            time: log.timestamp ? format(new Date(log.timestamp), 'HH:mm') : '',
-            equipmentId: log.equipment_id ?? '',
-            category: log.category ?? '',
-            filterNo: log.filter_no ?? '',
-            filterMicron: log.filter_micron ?? '',
-            filterSize: log.filter_size ?? '',
-            installedDate: fd(log.installed_date),
-            integrityDoneDate: fd(log.integrity_done_date),
-            integrityDueDate: fd(log.integrity_due_date),
-            cleaningDoneDate: fd(log.cleaning_done_date),
-            cleaningDueDate: fd(log.cleaning_due_date),
-            replacementDueDate: fd(log.replacement_due_date),
-            remarks: log.remarks ?? '',
-            checkedBy: log.operator_name ?? '',
-          };
-          const filterPdfData: MonitoringPDFData = { logs: [filterPdfLog], approvedBy: report.approvedBy, printedBy: user?.name || user?.email || '' };
+          const targetEquipmentId = (log.equipment_id ?? log.equipmentId ?? report.site ?? '').toString();
+          const targetFilterNo = (log.filter_no ?? log.filterNo ?? '').toString();
+          const filterLogs = await filterLogAPI.list();
+          allLogs = filterLogs
+            .filter((l: any) => {
+              if (!isApprovedReportRow(l)) return false;
+              const matchEquipment = !targetEquipmentId || String(l.equipment_id ?? '') === targetEquipmentId;
+              const matchFilter = !targetFilterNo || String(l.filter_no ?? '') === targetFilterNo;
+              return matchEquipment && matchFilter;
+            })
+            .map(mapFilterLogForMonitoringPdf);
+          if (allLogs.length === 0) {
+            toast.error('No logs found for this equipment');
+            return;
+          }
+          const filterPdfData: MonitoringPDFData = { logs: allLogs, approvedBy: report.approvedBy, printedBy: user?.name || user?.email || '' };
           const blob = await generateFilterMonitoringPDF(filterPdfData);
           const success = printPDF(blob);
           if (success) {

@@ -113,10 +113,10 @@ def dashboard_summary(request):
 
     try:
         chiller_agg = ChillerLog.objects.filter(timestamp__gte=cutoff_24h).exclude(
-            chiller_water_inlet_pressure__isnull=True
-        ).exclude(chiller_water_inlet_pressure=0).aggregate(
-            s=Sum("chiller_water_inlet_pressure"),
-            c=Count("chiller_water_inlet_pressure"),
+            evap_water_inlet_pressure__isnull=True
+        ).exclude(evap_water_inlet_pressure=0).aggregate(
+            s=Sum("evap_water_inlet_pressure"),
+            c=Count("evap_water_inlet_pressure"),
         )
         pressure_sum += float(chiller_agg["s"] or 0)
         pressure_count += int(chiller_agg["c"] or 0)
@@ -884,10 +884,10 @@ def equipment_status(request):
                 "equipment_number": eq.equipment_number,
                 "type": eq_id_to_type.get(eid, "chiller"),
                 "status": status,
-                "t1": log.chiller_supply_temp,
-                "t2": log.chiller_return_temp,
-                "p1": getattr(log, "chiller_water_inlet_pressure", None),
-                "p2": getattr(log, "evap_water_inlet_pressure", None) or getattr(log, "chiller_water_inlet_pressure", None),
+                "t1": log.evap_entering_water_temp,
+                "t2": log.evap_leaving_water_temp,
+                "p1": getattr(log, "evap_water_inlet_pressure", None),
+                "p2": getattr(log, "evap_water_outlet_pressure", None),
             })
     except Exception:
         pass

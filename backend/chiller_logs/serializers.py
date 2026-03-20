@@ -16,10 +16,6 @@ class ChillerLogSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'equipment_id', 'site_id',
             'activity_type', 'activity_from_date', 'activity_to_date', 'activity_from_time', 'activity_to_time',
-            'chiller_supply_temp', 'chiller_return_temp',
-            'cooling_tower_supply_temp', 'cooling_tower_return_temp',
-            'ct_differential_temp', 'chiller_water_inlet_pressure',
-            'chiller_makeup_water_flow',
             'evap_water_inlet_pressure', 'evap_water_outlet_pressure',
             'evap_entering_water_temp', 'evap_leaving_water_temp',
             'evap_approach_temp',
@@ -71,18 +67,6 @@ class ChillerLogSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({"remarks": ["Remarks are required."]})
 
         activity_type = attrs.get("activity_type") if "activity_type" in attrs else getattr(self.instance, "activity_type", "operation")
-        if (activity_type or "operation") == "operation":
-            required = [
-                "chiller_supply_temp",
-                "chiller_return_temp",
-                "cooling_tower_supply_temp",
-                "cooling_tower_return_temp",
-                "ct_differential_temp",
-                "chiller_water_inlet_pressure",
-            ]
-            missing = [f for f in required if attrs.get(f, getattr(self.instance, f, None)) in (None, "")]
-            if missing:
-                raise serializers.ValidationError({f: ["This field is required when activity_type is operation."] for f in missing})
         return super().validate(attrs)
 
 

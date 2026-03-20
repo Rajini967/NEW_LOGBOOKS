@@ -35,22 +35,13 @@ class ChillerLog(models.Model):
     activity_from_time = models.TimeField(blank=True, null=True)
     activity_to_time = models.TimeField(blank=True, null=True)
     
-    # Chiller specific readings - existing summary parameters
-    chiller_supply_temp = models.FloatField(validators=[MinValueValidator(0)], blank=True, null=True, help_text="Chiller supply temperature (°C)")
-    chiller_return_temp = models.FloatField(validators=[MinValueValidator(0)], blank=True, null=True, help_text="Chiller return temperature (°C)")
-    cooling_tower_supply_temp = models.FloatField(validators=[MinValueValidator(0)], blank=True, null=True, help_text="Cooling tower supply temperature (°C)")
-    cooling_tower_return_temp = models.FloatField(validators=[MinValueValidator(0)], blank=True, null=True, help_text="Cooling tower return temperature (°C)")
-    ct_differential_temp = models.FloatField(validators=[MinValueValidator(0)], blank=True, null=True, help_text="CT differential temperature (°C)")
-    chiller_water_inlet_pressure = models.FloatField(validators=[MinValueValidator(0)], blank=True, null=True, help_text="Chiller water inlet pressure (bar)")
-    chiller_makeup_water_flow = models.FloatField(validators=[MinValueValidator(0)], blank=True, null=True, help_text="Chiller makeup water flow (LPH)")
-
     # Detailed readings from physical sheet
     # Evaporator section
     evap_water_inlet_pressure = models.FloatField(
         validators=[MinValueValidator(0)],
         blank=True,
         null=True,
-        help_text="Evap water inlet pressure (e.g. NLT 2.3 kg/cm²)"
+        help_text="Evap water inlet pressure (e.g. NLT 2.5 kg/cm²)"
     )
     evap_water_outlet_pressure = models.FloatField(
         validators=[MinValueValidator(0)],

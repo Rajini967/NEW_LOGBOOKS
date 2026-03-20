@@ -16,6 +16,18 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     textTransform: 'uppercase',
   },
+  subtitle: {
+    fontSize: 10,
+    textAlign: 'center',
+    marginTop: -2,
+    marginBottom: 10,
+  },
+  detailsSubtitle: {
+    fontSize: 10,
+    textAlign: 'center',
+    marginTop: 0,
+    marginBottom: 10,
+  },
   table: {
     width: '100%',
     marginTop: 10,
@@ -82,13 +94,6 @@ interface ChillerMonitoringData {
     date: string;
     time: string;
     equipmentId: string;
-    chillerSupplyTemp?: number;
-    chillerReturnTemp?: number;
-    coolingTowerSupplyTemp?: number;
-    coolingTowerReturnTemp?: number;
-    ctDifferentialTemp?: number;
-    chillerWaterInletPressure?: number;
-    chillerMakeupWaterFlow?: number;
     // Evaporator
     evapWaterInletPressure?: number;
     evapWaterOutletPressure?: number;
@@ -136,15 +141,8 @@ interface ChillerMonitoringCertificateProps {
 
 export function ChillerMonitoringCertificate({ data }: ChillerMonitoringCertificateProps) {
   const limits: Record<string, LimitConfig> = {
-    // Summary row
-    chillerSupplyTemp: { type: 'NMT', max: 8, unit: '°C' },
-    chillerReturnTemp: { type: 'NMT', max: 15, unit: '°C' },
-    coolingTowerSupplyTemp: { type: 'NMT', max: 25, unit: '°C' },
-    coolingTowerReturnTemp: { type: 'NMT', max: 30, unit: '°C' },
-    ctDifferentialTemp: { type: 'NMT', max: 5, unit: '°C' },
-    chillerWaterInletPressure: { type: 'NLT', min: 2, unit: 'bar' },
     // Evaporator (from model help_text)
-    evapWaterInletPressure: { type: 'NLT', min: 2.3, unit: 'kg/cm²' },
+    evapWaterInletPressure: { type: 'NLT', min: 2.5, unit: 'kg/cm²' },
     evapEnteringWaterTemp: { type: 'NMT', max: 18, unit: '°C' },
     evapApproachTemp: { type: 'NMT', max: 4, unit: '°C' },
     // Condenser (from model help_text)
@@ -170,134 +168,52 @@ export function ChillerMonitoringCertificate({ data }: ChillerMonitoringCertific
   const footerRemarks =
     data.logs.find((log) => (log.remarks || '').toString().trim().length > 0)?.remarks || '';
   const doneBy = data.logs[0]?.checkedBy ?? '';
+  const approvedBy = (data.approvedBy || '').toString().trim();
+  const printedBy = (data.printedBy || '').toString().trim();
+  const equipmentType = (data.logs[0] as any)?.equipmentType || 'chiller';
+  const equipmentTitle =
+    equipmentType === 'boiler'
+      ? 'BOILER'
+      : equipmentType === 'chemical'
+      ? 'CHEMICAL'
+      : equipmentType === 'filter'
+      ? 'FILTER'
+      : 'CHILLER';
+  const equipmentId = (data.logs[0] as any)?.equipmentId || '-';
+  const parseStatus = (value?: string, key?: string, index?: number) => {
+    if (!value) return '';
+    const parts = String(value)
+      .split(/[\/,\n]+/)
+      .map((p) => p.trim())
+      .filter(Boolean);
+    const cleanToken = (token: string) =>
+      token
+        .replace(/^(?:pump|fan)?\s*[0-9]+\s*:\s*/i, '')
+        .replace(/^[A-Za-z][0-9]+\s*:\s*/i, '')
+        .trim();
+    const normalizeOnOff = (token: string) => {
+      const m = cleanToken(token).match(/\b(ON|OFF)\b/i);
+      return m ? m[1].toUpperCase() : cleanToken(token);
+    };
+    if (!key && index == null) return cleanToken(parts[0] || value);
+
+    // Prefer keyed values like "P1: ON / P2: OFF"
+    const hit = parts.find((p) => p.toUpperCase().startsWith(`${key.toUpperCase()}:`));
+    if (hit) return normalizeOnOff(hit);
+
+    // Fallback for positional values like "ON/OFF" or "ON/OFF/OFF"
+    if (index != null && parts[index]) return normalizeOnOff(parts[index]);
+    return '';
+  };
+  const wrapUser = (value?: string) => (value ? String(value).replace('@', '@\n') : '');
 
   return (
     <Document>
       <Page size="A4" style={styles.page}>
         <PDFHeader />
-        
-        <Text style={styles.title}>RAW DATA FOR CHILLER MONITORING</Text>
-
-        <View style={styles.table}>
-          {/* Header Row */}
-          <View style={[styles.tableRow, styles.tableHeader]}>
-            <Text style={[styles.tableCell, { width: '7%' }]}>Date</Text>
-            <Text style={[styles.tableCell, { width: '7%' }]}>Time</Text>
-            <Text style={[styles.tableCell, { width: '11%' }]}>Chiller supply temp</Text>
-            <Text style={[styles.tableCell, { width: '11%' }]}>Chiller return temp</Text>
-            <Text style={[styles.tableCell, { width: '11%' }]}>Cooling tower supply temp</Text>
-            <Text style={[styles.tableCell, { width: '11%' }]}>Cooling tower Return temp</Text>
-            <Text style={[styles.tableCell, { width: '9%' }]}>CT Differential temperature</Text>
-            <Text style={[styles.tableCell, { width: '9%' }]}>Chiller water inlet pressure</Text>
-            <Text style={[styles.tableCell, { width: '7%' }]}>Chiller make up water Flow</Text>
-            <Text style={[styles.tableCell, { width: '9%' }]}>Remarks</Text>
-            <Text style={[styles.tableCell, { width: '9%' }, styles.tableCellLast]}>Done By</Text>
-          </View>
-
-          {/* Limits Row */}
-          <View style={[styles.tableRow, styles.limitRow]}>
-            <Text style={[styles.tableCell, { width: '7%' }]}>Limits</Text>
-            <Text style={[styles.tableCell, { width: '7%' }]}></Text>
-            <Text style={[styles.tableCell, { width: '11%' }]}>NMT 8 °C</Text>
-            <Text style={[styles.tableCell, { width: '11%' }]}>NMT 15 °C</Text>
-            <Text style={[styles.tableCell, { width: '11%' }]}>NMT 25 °C</Text>
-            <Text style={[styles.tableCell, { width: '11%' }]}>NMT 30 °C</Text>
-            <Text style={[styles.tableCell, { width: '9%' }]}>NMT 5 °C</Text>
-            <Text style={[styles.tableCell, { width: '9%' }]}>NLT 2 bar</Text>
-            <Text style={[styles.tableCell, { width: '7%' }]}>LPH</Text>
-            <Text style={[styles.tableCell, { width: '9%' }]}></Text>
-            <Text style={[styles.tableCell, { width: '9%' }, styles.tableCellLast]}></Text>
-          </View>
-
-          {/* Data Rows */}
-          {data.logs.map((log, index) => (
-            <View key={index} style={styles.tableRow}>
-              <Text style={[styles.tableCell, { width: '7%' }]}>{log.date === 'Automatic' || !log.date ? 'Automatic' : log.date}</Text>
-              <Text style={[styles.tableCell, { width: '7%' }]}>{log.time === 'Automatic' || !log.time ? 'Automatic' : log.time}</Text>
-              <Text style={[
-                styles.tableCell, 
-                { width: '11%' },
-                checkLimit('chillerSupplyTemp', log.chillerSupplyTemp) && styles.redText
-              ]}>
-                {log.chillerSupplyTemp !== undefined ? log.chillerSupplyTemp : ''}
-              </Text>
-              <Text style={[
-                styles.tableCell, 
-                { width: '11%' },
-                checkLimit('chillerReturnTemp', log.chillerReturnTemp) && styles.redText
-              ]}>
-                {log.chillerReturnTemp !== undefined ? log.chillerReturnTemp : ''}
-              </Text>
-              <Text style={[
-                styles.tableCell, 
-                { width: '11%' },
-                checkLimit('coolingTowerSupplyTemp', log.coolingTowerSupplyTemp) && styles.redText
-              ]}>
-                {log.coolingTowerSupplyTemp !== undefined ? log.coolingTowerSupplyTemp : ''}
-              </Text>
-              <Text style={[
-                styles.tableCell, 
-                { width: '11%' },
-                checkLimit('coolingTowerReturnTemp', log.coolingTowerReturnTemp) && styles.redText
-              ]}>
-                {log.coolingTowerReturnTemp !== undefined ? log.coolingTowerReturnTemp : ''}
-              </Text>
-              <Text style={[
-                styles.tableCell, 
-                { width: '9%' },
-                checkLimit('ctDifferentialTemp', log.ctDifferentialTemp) && styles.redText
-              ]}>
-                {log.ctDifferentialTemp !== undefined ? log.ctDifferentialTemp : ''}
-              </Text>
-              <Text style={[
-                styles.tableCell, 
-                { width: '9%' },
-                checkLimit('chillerWaterInletPressure', log.chillerWaterInletPressure) && styles.redText
-              ]}>
-                {log.chillerWaterInletPressure !== undefined ? log.chillerWaterInletPressure : ''}
-              </Text>
-              <Text style={[styles.tableCell, { width: '7%' }]}>
-                {log.chillerMakeupWaterFlow !== undefined ? log.chillerMakeupWaterFlow : ''}
-              </Text>
-              <Text style={[styles.tableCell, { width: '9%' }]}>
-                {log.remarks || '-'}
-              </Text>
-              <Text style={[styles.tableCell, { width: '9%' }, styles.tableCellLast]}>
-                {log.checkedBy || ''}
-              </Text>
-            </View>
-          ))}
-
-          {/* Empty rows for additional entries */}
-          {Array.from({ length: Math.max(0, 10 - data.logs.length) }).map((_, index) => (
-            <View key={`empty-${index}`} style={styles.tableRow}>
-              <Text style={[styles.tableCell, { width: '7%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '7%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '11%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '11%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '11%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '11%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '9%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '9%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '7%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '9%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '9%' }, styles.tableCellLast]}></Text>
-            </View>
-          ))}
-        </View>
-
-        <View style={styles.footer}>
-          <Text style={styles.footerLine}>Remarks: {footerRemarks ? String(footerRemarks) : '-'}</Text>
-          <Text style={styles.footerLine}>Done By: {doneBy || '-'}</Text>
-          <Text style={styles.footerLine}>Approved By: {data.approvedBy || '-'}</Text>
-          <Text style={styles.footerLine}>Printed By: {data.printedBy || '-'}</Text>
-        </View>
-      </Page>
-
-      {/* DETAILS – All parameters on one page */}
-      <Page size="A4" style={styles.page}>
-        <PDFHeader />
-        <Text style={styles.detailsTitle}>RAW DATA FOR CHILLER MONITORING (DETAILS – ALL PARAMETERS)</Text>
+        <Text style={styles.title}>RAW DATA FOR {equipmentTitle} MONITORING</Text>
+        <Text style={styles.detailsTitle}>DETAILS - ALL PARAMETERS</Text>
+        <Text style={styles.detailsSubtitle}>Equipment ID: {equipmentId}</Text>
 
         {/* Evaporator */}
         <View style={styles.table}>
@@ -419,82 +335,78 @@ export function ChillerMonitoringCertificate({ data }: ChillerMonitoringCertific
           ))}
         </View>
 
-        {/* Water, chemicals & status */}
         <View style={styles.table}>
           <View style={[styles.tableRow, styles.tableHeader]}>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>Date</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>Time</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '18%' }]}>CT 1 – Daily water (L)</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '18%' }]}>CT 2 – Daily water (L)</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '18%' }]}>CT 3 – Daily water (L)</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '18%' }]}>CT Blow down time (min)</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '8%' }, styles.tableCellLast]}>Status</Text>
-          </View>
-
-          {data.logs.map((log, index) => (
-            <View key={`water-${index}`} style={styles.tableRow}>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>{log.date || ''}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>{log.time || ''}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '18%' }]}>{log.dailyWaterConsumptionCt1Liters ?? ''}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '18%' }]}>{log.dailyWaterConsumptionCt2Liters ?? ''}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '18%' }]}>{log.dailyWaterConsumptionCt3Liters ?? ''}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '18%' }]}>{log.coolingTowerBlowdownTimeMin ?? ''}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '8%' }, styles.tableCellLast]}>
-                {(log.coolingTowerPumpStatus || log.chilledWaterPumpStatus || log.coolingTowerFanStatus) ? 'See below' : ''}
-              </Text>
-            </View>
-          ))}
-        </View>
-
-        <View style={styles.table}>
-          <View style={[styles.tableRow, styles.tableHeader]}>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '8%' }]}>Date</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '8%' }]}>Time</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>CT Pump status</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>Chilled Pump status</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>CT Fan status</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>CT Pump chem (name / kg)</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>Chilled Pump chem (name / kg)</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>CT Fan chem (name / kg)</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '9%' }]}>Recording freq</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '9%' }]}>Operator sign</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }, styles.tableCellLast]}>Verified by</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '7%' }]}>Date</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '7%' }]}>Time</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '14%' }]}>Cooling Tower-1</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '14%' }]}>Chilled Water Pump</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '14%' }]}>Cooling Tower Fan</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '11%' }]}>Cooling Tower Blow Down Time (Minutes)</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '11%' }]}>Recording Frequency</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '11%' }]}>Verified By</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '11%' }, styles.tableCellLast]}>Operator Sign</Text>
           </View>
 
           {data.logs.map((log, index) => (
             <View key={`status-${index}`} style={styles.tableRow}>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '8%' }]}>{log.date || ''}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '8%' }]}>{log.time || ''}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>{log.coolingTowerPumpStatus || ''}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>{log.chilledWaterPumpStatus || ''}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>{log.coolingTowerFanStatus || ''}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>
-                {log.coolingTowerChemicalName
-                  ? `${log.coolingTowerChemicalName}${log.coolingTowerChemicalQtyPerDay != null ? ` / ${log.coolingTowerChemicalQtyPerDay}` : ''}`
-                  : ''}
+              <Text style={[styles.tableCell, styles.smallCell, { width: '7%' }]}>{log.date || ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '7%' }]}>{log.time || ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '14%' }]}>
+                {`Pump 1: ${parseStatus(log.coolingTowerPumpStatus, 'P1', 0) || '-'}\nPump 2: ${parseStatus(log.coolingTowerPumpStatus, 'P2', 1) || '-'}`}
               </Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>
-                {log.chilledWaterPumpChemicalName
-                  ? `${log.chilledWaterPumpChemicalName}${log.chilledWaterPumpChemicalQtyKg != null ? ` / ${log.chilledWaterPumpChemicalQtyKg}` : ''}`
-                  : ''}
+              <Text style={[styles.tableCell, styles.smallCell, { width: '14%' }]}>
+                {`Pump 1: ${parseStatus(log.chilledWaterPumpStatus, 'P1', 0) || '-'}\nPump 2: ${parseStatus(log.chilledWaterPumpStatus, 'P2', 1) || '-'}`}
               </Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>
-                {log.coolingTowerFanChemicalName
-                  ? `${log.coolingTowerFanChemicalName}${log.coolingTowerFanChemicalQtyKg != null ? ` / ${log.coolingTowerFanChemicalQtyKg}` : ''}`
-                  : ''}
+              <Text style={[styles.tableCell, styles.smallCell, { width: '14%' }]}>
+                {`Fan 1: ${parseStatus(log.coolingTowerFanStatus, 'F1', 0) || '-'}\nFan 2: ${parseStatus(log.coolingTowerFanStatus, 'F2', 1) || '-'}\nFan 3: ${parseStatus(log.coolingTowerFanStatus, 'F3', 2) || '-'}`}
               </Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '9%' }]}>{log.recordingFrequency || ''}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '9%' }]}>{log.operatorSign || ''}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }, styles.tableCellLast]}>{log.verifiedBy || ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '11%' }]}>{log.coolingTowerBlowdownTimeMin ?? ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '11%' }]}>{log.recordingFrequency || ''}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '11%' }]}>{wrapUser(log.verifiedBy)}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '11%' }, styles.tableCellLast]}>{wrapUser(log.operatorSign)}</Text>
+            </View>
+          ))}
+        </View>
+      </Page>
+
+      <Page size="A4" style={styles.page}>
+        <PDFHeader />
+        <Text style={styles.title}>RAW DATA FOR {equipmentTitle} MONITORING</Text>
+        <Text style={styles.subtitle}>Equipment ID: {equipmentId}</Text>
+
+        <View style={styles.table}>
+          <View style={[styles.tableRow, styles.tableHeader]}>
+            <Text style={[styles.tableCell, { width: '10%' }]}>Date</Text>
+            <Text style={[styles.tableCell, { width: '10%' }]}>Time</Text>
+            <Text style={[styles.tableCell, { width: '35%' }]}>Remarks</Text>
+            <Text style={[styles.tableCell, { width: '25%' }]}>Done By</Text>
+            <Text style={[styles.tableCell, { width: '20%' }, styles.tableCellLast]}>Approved By</Text>
+          </View>
+
+          {data.logs.map((log, index) => (
+            <View key={`remarks-${index}`} style={styles.tableRow}>
+              <Text style={[styles.tableCell, { width: '10%' }]}>{log.date === 'Automatic' || !log.date ? 'Automatic' : log.date}</Text>
+              <Text style={[styles.tableCell, { width: '10%' }]}>{log.time === 'Automatic' || !log.time ? 'Automatic' : log.time}</Text>
+              <Text style={[styles.tableCell, { width: '35%' }]}>{log.remarks || '-'}</Text>
+              <Text style={[styles.tableCell, { width: '25%' }]}>{log.checkedBy || ''}</Text>
+              <Text style={[styles.tableCell, { width: '20%' }, styles.tableCellLast]}>{approvedBy || '-'}</Text>
+            </View>
+          ))}
+
+          {Array.from({ length: Math.max(0, 10 - data.logs.length) }).map((_, index) => (
+            <View key={`empty-remarks-${index}`} style={styles.tableRow}>
+              <Text style={[styles.tableCell, { width: '10%' }]}></Text>
+              <Text style={[styles.tableCell, { width: '10%' }]}></Text>
+              <Text style={[styles.tableCell, { width: '35%' }]}></Text>
+              <Text style={[styles.tableCell, { width: '25%' }]}></Text>
+              <Text style={[styles.tableCell, { width: '20%' }, styles.tableCellLast]}></Text>
             </View>
           ))}
         </View>
 
-        {/* Footer with overall remarks and digital sign */}
         <View style={styles.footer}>
-          <Text style={styles.footerLine}>
-            Remarks: {footerRemarks ? String(footerRemarks) : ''}
-          </Text>
+          <Text style={styles.footerLine}>Printed By: {printedBy || '-'}</Text>
           <Text style={styles.footerLine}>Digital sign</Text>
         </View>
       </Page>

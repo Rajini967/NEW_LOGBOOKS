@@ -1553,9 +1553,7 @@ const ChemicalLogBookPage: React.FC = () => {
                 )}
                 {filteredLogs.map((log) => {
                   const tolClass =
-                    log.tolerance_status === "within"
-                      ? "bg-yellow-50/70"
-                      : log.tolerance_status === "outside"
+                    log.tolerance_status === "outside"
                       ? "bg-red-50/80"
                       : "";
                   return (

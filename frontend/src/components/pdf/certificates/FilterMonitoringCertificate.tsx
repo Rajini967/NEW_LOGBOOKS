@@ -16,6 +16,12 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     textTransform: 'uppercase',
   },
+  subtitle: {
+    fontSize: 10,
+    textAlign: 'center',
+    marginTop: -10,
+    marginBottom: 10,
+  },
   table: {
     width: '100%',
     marginTop: 10,
@@ -86,12 +92,14 @@ export function FilterMonitoringCertificate({ data }: FilterMonitoringCertificat
   const footerRemarks =
     data.logs.find((log) => (log.remarks || '').toString().trim().length > 0)?.remarks || '';
   const doneBy = data.logs[0]?.checkedBy ?? '';
+  const equipmentId = data.logs[0]?.equipmentId || '-';
   return (
     <Document>
       <Page size="A4" style={styles.page}>
         <PDFHeader />
 
         <Text style={styles.title}>RAW DATA FOR FILTER MONITORING</Text>
+        <Text style={styles.subtitle}>Equipment ID: {equipmentId}</Text>
 
         <View style={styles.table}>
           <View style={[styles.tableRow, styles.tableHeader]}>

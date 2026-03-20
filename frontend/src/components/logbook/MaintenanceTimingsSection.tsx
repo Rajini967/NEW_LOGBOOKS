@@ -23,6 +23,8 @@ const ACTIVITY_OPTIONS: { value: MaintenanceActivityType; label: string }[] = [
 ];
 
 export function MaintenanceTimingsSection({ value, onChange, disabled = false }: Props) {
+  const showTimingWindow = value.activityType !== "operation";
+
   return (
     <div className="space-y-3 pt-2">
       <h3 className="text-sm font-semibold border-b pb-2">Maintenance Timings</h3>
@@ -51,49 +53,53 @@ export function MaintenanceTimingsSection({ value, onChange, disabled = false }:
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
-        <div className="space-y-2">
-          <Label>From date</Label>
-          <Input
-            type="date"
-            value={value.fromDate}
-            onChange={(e) => onChange({ ...value, fromDate: e.target.value })}
-            disabled={disabled}
-          />
-        </div>
-        <div className="space-y-2">
-          <Label>To date</Label>
-          <Input
-            type="date"
-            value={value.toDate}
-            onChange={(e) => onChange({ ...value, toDate: e.target.value })}
-            min={value.fromDate || undefined}
-            disabled={disabled}
-          />
-        </div>
-      </div>
+      {showTimingWindow && (
+        <>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>From date</Label>
+              <Input
+                type="date"
+                value={value.fromDate}
+                onChange={(e) => onChange({ ...value, fromDate: e.target.value })}
+                disabled={disabled}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>To date</Label>
+              <Input
+                type="date"
+                value={value.toDate}
+                onChange={(e) => onChange({ ...value, toDate: e.target.value })}
+                min={value.fromDate || undefined}
+                disabled={disabled}
+              />
+            </div>
+          </div>
 
-      <div className="grid grid-cols-2 gap-4">
-        <div className="space-y-2">
-          <Label>From time</Label>
-          <Input
-            type="time"
-            value={value.fromTime}
-            onChange={(e) => onChange({ ...value, fromTime: e.target.value })}
-            disabled={disabled}
-          />
-        </div>
-        <div className="space-y-2">
-          <Label>To time</Label>
-          <Input
-            type="time"
-            value={value.toTime}
-            onChange={(e) => onChange({ ...value, toTime: e.target.value })}
-            min={value.fromTime || undefined}
-            disabled={disabled}
-          />
-        </div>
-      </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>From time</Label>
+              <Input
+                type="time"
+                value={value.fromTime}
+                onChange={(e) => onChange({ ...value, fromTime: e.target.value })}
+                disabled={disabled}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>To time</Label>
+              <Input
+                type="time"
+                value={value.toTime}
+                onChange={(e) => onChange({ ...value, toTime: e.target.value })}
+                min={value.fromTime || undefined}
+                disabled={disabled}
+              />
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }

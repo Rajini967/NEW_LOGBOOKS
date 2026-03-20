@@ -473,13 +473,6 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
             )
         # Capture old readings before update
         tracked_fields = [
-            'chiller_supply_temp',
-            'chiller_return_temp',
-            'cooling_tower_supply_temp',
-            'cooling_tower_return_temp',
-            'ct_differential_temp',
-            'chiller_water_inlet_pressure',
-            'chiller_makeup_water_flow',
             'evap_water_inlet_pressure',
             'evap_water_outlet_pressure',
             'evap_entering_water_temp',
@@ -1001,13 +994,6 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
 
         # Record field-by-field diffs in audit trail
         tracked_fields = [
-            'chiller_supply_temp',
-            'chiller_return_temp',
-            'cooling_tower_supply_temp',
-            'cooling_tower_return_temp',
-            'ct_differential_temp',
-            'chiller_water_inlet_pressure',
-            'chiller_makeup_water_flow',
             'evap_water_inlet_pressure',
             'evap_water_outlet_pressure',
             'evap_entering_water_temp',

@@ -99,7 +99,7 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='chillerlog',
             name='evap_water_inlet_pressure',
-            field=models.FloatField(blank=True, help_text='Evap water inlet pressure (e.g. NLT 2.3 kg/cm²)', null=True, validators=[django.core.validators.MinValueValidator(0)]),
+            field=models.FloatField(blank=True, help_text='Evap water inlet pressure (e.g. NLT 2.5 kg/cm²)', null=True, validators=[django.core.validators.MinValueValidator(0)]),
         ),
         migrations.AddField(
             model_name='chillerlog',
