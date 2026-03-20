@@ -182,7 +182,8 @@ export function ChillerMonitoringCertificate({ data }: ChillerMonitoringCertific
   const equipmentId = (data.logs[0] as any)?.equipmentId || '-';
   const parseStatus = (value?: string, key?: string, index?: number) => {
     if (!value) return '';
-    const parts = String(value)
+    const raw = String(value);
+    const parts = raw
       .split(/[\/,\n]+/)
       .map((p) => p.trim())
       .filter(Boolean);
@@ -198,8 +199,21 @@ export function ChillerMonitoringCertificate({ data }: ChillerMonitoringCertific
     if (!key && index == null) return cleanToken(parts[0] || value);
 
     // Prefer keyed values like "P1: ON / P2: OFF"
-    const hit = parts.find((p) => p.toUpperCase().startsWith(`${key.toUpperCase()}:`));
-    if (hit) return normalizeOnOff(hit);
+    if (key) {
+      const keyRegex = new RegExp(`${key}\\s*:\\s*(ON|OFF)`, 'i');
+      const keyMatch = raw.match(keyRegex);
+      if (keyMatch && keyMatch[1]) return keyMatch[1].toUpperCase();
+    }
+
+    const hit = key ? parts.find((p) => p.toUpperCase().startsWith(`${key.toUpperCase()}:`)) : undefined;
+    if (hit) {
+      const v = normalizeOnOff(hit);
+      if (v) return v;
+    }
+
+    // Extract ON/OFF tokens directly from full raw text
+    const statusTokens = Array.from(raw.matchAll(/\b(ON|OFF)\b/gi)).map((m) => m[1].toUpperCase());
+    if (index != null && statusTokens[index]) return statusTokens[index];
 
     // Fallback for positional values like "ON/OFF" or "ON/OFF/OFF"
     if (index != null && parts[index]) return normalizeOnOff(parts[index]);
@@ -353,13 +367,13 @@ export function ChillerMonitoringCertificate({ data }: ChillerMonitoringCertific
               <Text style={[styles.tableCell, styles.smallCell, { width: '7%' }]}>{log.date || ''}</Text>
               <Text style={[styles.tableCell, styles.smallCell, { width: '7%' }]}>{log.time || ''}</Text>
               <Text style={[styles.tableCell, styles.smallCell, { width: '14%' }]}>
-                {`Pump 1: ${parseStatus(log.coolingTowerPumpStatus, 'P1', 0) || '-'}\nPump 2: ${parseStatus(log.coolingTowerPumpStatus, 'P2', 1) || '-'}`}
+                {`Pump 1: ${parseStatus(log.coolingTowerPumpStatus, 'P1', 0) || ''}\nPump 2: ${parseStatus(log.coolingTowerPumpStatus, 'P2', 1) || ''}`}
               </Text>
               <Text style={[styles.tableCell, styles.smallCell, { width: '14%' }]}>
-                {`Pump 1: ${parseStatus(log.chilledWaterPumpStatus, 'P1', 0) || '-'}\nPump 2: ${parseStatus(log.chilledWaterPumpStatus, 'P2', 1) || '-'}`}
+                {`Pump 1: ${parseStatus(log.chilledWaterPumpStatus, 'P1', 0) || ''}\nPump 2: ${parseStatus(log.chilledWaterPumpStatus, 'P2', 1) || ''}`}
               </Text>
               <Text style={[styles.tableCell, styles.smallCell, { width: '14%' }]}>
-                {`Fan 1: ${parseStatus(log.coolingTowerFanStatus, 'F1', 0) || '-'}\nFan 2: ${parseStatus(log.coolingTowerFanStatus, 'F2', 1) || '-'}\nFan 3: ${parseStatus(log.coolingTowerFanStatus, 'F3', 2) || '-'}`}
+                {`Fan 1: ${parseStatus(log.coolingTowerFanStatus, 'F1', 0) || ''}\nFan 2: ${parseStatus(log.coolingTowerFanStatus, 'F2', 1) || ''}\nFan 3: ${parseStatus(log.coolingTowerFanStatus, 'F3', 2) || ''}`}
               </Text>
               <Text style={[styles.tableCell, styles.smallCell, { width: '11%' }]}>{log.coolingTowerBlowdownTimeMin ?? ''}</Text>
               <Text style={[styles.tableCell, styles.smallCell, { width: '11%' }]}>{log.recordingFrequency || ''}</Text>
