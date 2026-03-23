@@ -49,7 +49,10 @@ import {
 } from "@/components/ui/alert-dialog";
 import { EntryIntervalBadge } from "@/components/logbook/EntryIntervalBadge";
 import { MissedReadingPopup } from "@/components/logbook/MissedReadingPopup";
-import { getNextDueAndMissed } from "@/lib/missed-reading";
+import {
+  computeMissedByEquipment,
+  type EquipmentMissInfo,
+} from "@/lib/missed-reading";
 import { MaintenanceTimingsSection } from "@/components/logbook/MaintenanceTimingsSection";
 import type { MaintenanceTimingsValue } from "@/types/maintenance-timings";
 
@@ -111,6 +114,8 @@ interface FilterLog {
   remarks: string;
   comment?: string;
   checkedBy: string;
+  approvedBy?: string;
+  rejectedBy?: string;
   timestamp: Date;
   status: "pending" | "approved" | "rejected" | "draft" | "pending_secondary_approval";
   operator_id?: string;
@@ -120,12 +125,15 @@ interface FilterLog {
   tolerance_status?: "none" | "within" | "outside";
 }
 
+const CREATOR_ONLY_REJECTED_EDIT_MESSAGE = "Only the original creator can edit/correct a rejected entry.";
+
 const FilterLogBookPage: React.FC = () => {
   const { user, sessionSettings } = useAuth();
   const navigate = useNavigate();
   const [logs, setLogs] = useState<FilterLog[]>([]);
   const [showMissedReadingPopup, setShowMissedReadingPopup] = useState(false);
   const [missedReadingNextDue, setMissedReadingNextDue] = useState<Date | null>(null);
+  const [missedEquipments, setMissedEquipments] = useState<EquipmentMissInfo[] | null>(null);
   const [filteredLogs, setFilteredLogs] = useState<FilterLog[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -480,6 +488,14 @@ const FilterLogBookPage: React.FC = () => {
           remarks: log.remarks || "",
           comment: log.comment || "",
           checkedBy: log.operator_name,
+          approvedBy:
+            log.status === "approved"
+              ? (log.secondary_approved_by_name || log.approved_by_name || "")
+              : "",
+          rejectedBy:
+            log.status === "rejected" || log.status === "pending_secondary_approval"
+              ? (log.approved_by_name || "")
+              : "",
           timestamp,
           status: log.status as FilterLog["status"],
           operator_id: log.operator_id,
@@ -510,26 +526,58 @@ const FilterLogBookPage: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (!sessionSettings?.log_entry_interval || logs.length === 0) return;
-    const latest = logs[0];
-    const lastTs = latest?.timestamp
-      ? latest.timestamp instanceof Date
-        ? latest.timestamp
-        : new Date(latest.timestamp)
-      : null;
-    const filterId = latest?.equipmentId || "";
-    const eqInterval = filterId ? filterIdToEquipmentInterval.get(filterId) : undefined;
-    const interval = (eqInterval?.log_entry_interval || sessionSettings.log_entry_interval) as "hourly" | "shift" | "daily";
-    const shiftHours = eqInterval?.shift_duration_hours ?? sessionSettings.shift_duration_hours ?? 8;
-    const { nextDue, isMissed } = getNextDueAndMissed(lastTs, interval, shiftHours);
-    if (isMissed && nextDue) {
-      setMissedReadingNextDue(nextDue);
-      setShowMissedReadingPopup(true);
+    if (!sessionSettings?.log_entry_interval || logs.length === 0) {
+      setMissedEquipments(null);
+      setShowMissedReadingPopup(false);
+      setMissedReadingNextDue(null);
+      return;
+    }
+    const defaultInterval = sessionSettings.log_entry_interval as "hourly" | "shift" | "daily";
+    const defaultShift = sessionSettings.shift_duration_hours ?? 8;
+    const resolveInterval = (equipmentId?: string): "hourly" | "shift" | "daily" => {
+      const meta = equipmentId ? filterIdToEquipmentInterval.get(equipmentId) : undefined;
+      return (
+        (meta?.log_entry_interval as "hourly" | "shift" | "daily") ||
+        defaultInterval ||
+        "daily"
+      );
+    };
+    const resolveShiftHours = (equipmentId?: string): number => {
+      const meta = equipmentId ? filterIdToEquipmentInterval.get(equipmentId) : undefined;
+      return meta?.shift_duration_hours ?? defaultShift;
+    };
+
+    const perEquipment = computeMissedByEquipment(
+      logs.map((log) => ({
+        equipment_id: log.equipmentId,
+        equipment_name: log.equipmentId,
+        timestamp: log.timestamp,
+      })),
+      {
+        resolveInterval: (eqId) => resolveInterval(eqId),
+        resolveShiftHours: (eqId) => resolveShiftHours(eqId),
+      },
+    );
+
+    const missedOnly = perEquipment.filter((m) => m.isMissed);
+    if (missedOnly.length > 0) {
+      setMissedEquipments(missedOnly);
+      const firstNext =
+        missedOnly
+          .map((m) => m.nextDue)
+          .filter((d): d is Date => !!d)
+          .sort((a, b) => a.getTime() - b.getTime())[0] || null;
+      setMissedReadingNextDue(firstNext);
     } else {
+      setMissedEquipments(null);
       setShowMissedReadingPopup(false);
       setMissedReadingNextDue(null);
     }
   }, [logs, sessionSettings, filterIdToEquipmentInterval]);
+
+  const hasMissedReadings =
+    !!missedReadingNextDue || (missedEquipments?.length ?? 0) > 0;
+  const missedReadingsCount = missedEquipments?.length ?? (hasMissedReadings ? 1 : 0);
 
   // After equipment selection, fetch previous readings with entered-by for that equipment
   useEffect(() => {
@@ -562,6 +610,14 @@ const FilterLogBookPage: React.FC = () => {
             remarks: log.remarks || "",
             comment: log.comment || "",
             checkedBy: log.operator_name,
+            approvedBy:
+              log.status === "approved"
+                ? (log.secondary_approved_by_name || log.approved_by_name || "")
+                : "",
+            rejectedBy:
+              log.status === "rejected" || log.status === "pending_secondary_approval"
+                ? (log.approved_by_name || "")
+                : "",
             timestamp,
             status: log.status,
             operator_id: log.operator_id,
@@ -771,6 +827,14 @@ const FilterLogBookPage: React.FC = () => {
   };
 
   const handleEditLog = (log: FilterLog) => {
+    if (
+      log.status !== "rejected" ||
+      log.operator_id !== user?.id ||
+      (log.has_corrections && !log.corrects_id)
+    ) {
+      toast.error(CREATOR_ONLY_REJECTED_EDIT_MESSAGE);
+      return;
+    }
     const timestampStr = format(log.timestamp, "yyyy-MM-dd'T'HH:mm");
     const [datePart, timePart] = timestampStr.split("T");
     setFormData({
@@ -793,9 +857,6 @@ const FilterLogBookPage: React.FC = () => {
     setEditingLogId(log.id);
     setIsDialogOpen(true);
   };
-
-  const isSupervisor = user?.role === "supervisor" || user?.role === "super_admin" || user?.role === "manager";
-  const isOperator = user?.role === "operator";
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -870,10 +931,13 @@ const FilterLogBookPage: React.FC = () => {
       const existing = logs.find((log) => log.id === editingLogId) || null;
 
       if (editingLogId && existing) {
-        if (
-          (existing.status === "rejected" || existing.status === "pending_secondary_approval") &&
-          isSupervisor
-        ) {
+        const isCorrection =
+          existing.status === "rejected" || existing.status === "pending_secondary_approval";
+        if (isCorrection && existing.operator_id !== user?.id) {
+          toast.error(CREATOR_ONLY_REJECTED_EDIT_MESSAGE);
+          return;
+        }
+        if (isCorrection) {
           await filterLogAPI.correct(editingLogId, payload);
           toast.success("Correction entry created successfully");
         } else {
@@ -1055,7 +1119,7 @@ const FilterLogBookPage: React.FC = () => {
       <div className="px-4 pt-0">
         <EntryIntervalBadge />
       </div>
-      {showMissedReadingPopup && missedReadingNextDue && (
+      {showMissedReadingPopup && hasMissedReadings && (
         <MissedReadingPopup
           open={showMissedReadingPopup}
           onClose={() => {
@@ -1064,6 +1128,7 @@ const FilterLogBookPage: React.FC = () => {
           }}
           logTypeLabel="Filter"
           nextDue={missedReadingNextDue}
+          equipmentList={missedEquipments ?? undefined}
         />
       )}
       <div className="px-4 pt-2">
@@ -1102,6 +1167,21 @@ const FilterLogBookPage: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!hasMissedReadings}
+              onClick={() => setShowMissedReadingPopup(true)}
+              title={!hasMissedReadings ? "No missed readings" : "Show missing readings"}
+            >
+              <Clock className="w-4 h-4 mr-2" />
+              Missing Readings
+              {missedReadingsCount > 0 && (
+                <span className="ml-2 px-1.5 py-0.5 text-xs font-semibold bg-primary text-primary-foreground rounded-full">
+                  {missedReadingsCount}
+                </span>
+              )}
+            </Button>
             <Button
               size="sm"
               variant="outline"
@@ -1934,6 +2014,12 @@ const FilterLogBookPage: React.FC = () => {
                   <th className="px-3 py-2 text-center align-middle w-[140px]">
                     Done by
                   </th>
+                  <th className="px-3 py-2 text-center align-middle w-[160px]">
+                    Approved By
+                  </th>
+                  <th className="px-3 py-2 text-center align-middle w-[160px]">
+                    Rejected By
+                  </th>
                   <th className="px-3 py-2 text-center align-middle w-[110px]">
                     Status
                   </th>
@@ -1945,7 +2031,7 @@ const FilterLogBookPage: React.FC = () => {
               <tbody>
                 {filteredLogs.length === 0 && (
                   <tr>
-                    <td colSpan={19} className="px-4 py-6 text-center text-sm text-muted-foreground">
+                    <td colSpan={21} className="px-4 py-6 text-center text-sm text-muted-foreground">
                       {isLoading ? "Loading entries..." : "No entries found"}
                     </td>
                   </tr>
@@ -2018,27 +2104,31 @@ const FilterLogBookPage: React.FC = () => {
                         </div>
                       </td>
                       <td className="px-3 py-2 align-top">{log.checkedBy}</td>
+                      <td className="px-3 py-2 align-top">{log.approvedBy || "—"}</td>
+                      <td className="px-3 py-2 align-top">{log.rejectedBy || "—"}</td>
                       <td className="px-3 py-2 align-top">
                         <div className="flex flex-wrap items-center gap-2">
                           <Badge
                             variant={
                               log.has_corrections && !log.corrects_id
                                 ? "destructive"
-                                : log.corrects_id
-                                ? "warning"
                                 : getStatusBadgeVariant(log.status)
                             }
                             className="w-fit text-xs"
                           >
                             {log.has_corrections && !log.corrects_id
                               ? "Rejected"
-                              : log.corrects_id
-                              ? "Pending"
                               : getStatusLabel(log.status)}
                           </Badge>
                           {log.corrects_id && (
-                            <span className="text-[10px] text-amber-700 whitespace-nowrap">
-                              Correction entry
+                            <span
+                              className={
+                                log.status === "approved"
+                                  ? "text-[10px] text-emerald-700 whitespace-nowrap"
+                                  : "text-[10px] text-amber-700 whitespace-nowrap"
+                              }
+                            >
+                              {log.status === "approved" ? "Approved correction entry" : "Correction entry"}
                             </span>
                           )}
                           {log.has_corrections && !log.corrects_id && (
@@ -2126,28 +2216,32 @@ const FilterLogBookPage: React.FC = () => {
                                 variant="ghost"
                                 className={cn(
                                   "h-7 w-7",
-                                  log.status === "rejected" ||
-                                    log.status === "pending_secondary_approval"
+                                  (log.status === "rejected" &&
+                                    log.operator_id === user?.id &&
+                                    !(log.has_corrections && !log.corrects_id))
                                     ? ""
                                     : "opacity-40 cursor-not-allowed",
                                 )}
                                 title={
-                                  log.status === "rejected" ||
-                                  log.status === "pending_secondary_approval"
+                                  log.status === "rejected" &&
+                                  log.operator_id === user?.id &&
+                                  !(log.has_corrections && !log.corrects_id)
                                     ? "Edit entry"
                                     : "Edit only available after reject"
                                 }
                                 onClick={() => {
                                   if (
-                                    log.status === "rejected" ||
-                                    log.status === "pending_secondary_approval"
+                                    log.status === "rejected" &&
+                                    log.operator_id === user?.id &&
+                                    !(log.has_corrections && !log.corrects_id)
                                   ) {
                                     handleEditLog(log);
                                   }
                                 }}
                                 disabled={
-                                  log.status !== "rejected" &&
-                                  log.status !== "pending_secondary_approval"
+                                  log.status !== "rejected" ||
+                                  log.operator_id !== user?.id ||
+                                  (log.has_corrections && !log.corrects_id)
                                 }
                               >
                                 <Edit className="w-4 h-4" />
@@ -2168,6 +2262,20 @@ const FilterLogBookPage: React.FC = () => {
                               </Button>
                             </>
                           )}
+                          {user?.role === "operator" &&
+                            log.status === "rejected" &&
+                            log.operator_id === user?.id &&
+                            !(log.has_corrections && !log.corrects_id) && (
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="h-7 w-7"
+                                title="Edit entry"
+                                onClick={() => handleEditLog(log)}
+                              >
+                                <Edit className="w-4 h-4" />
+                              </Button>
+                            )}
 
                           {user?.role === "super_admin" && (
                             <Button

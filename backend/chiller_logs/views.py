@@ -15,6 +15,8 @@ from datetime import datetime, date, timedelta
 from collections import defaultdict
 import calendar
 
+CREATOR_ONLY_REJECTED_EDIT_MESSAGE = "Only the original creator can edit/correct a rejected entry."
+
 # For dashboard_series actual = manual + log (same as Consumption module)
 try:
     from reports.models import ManualChillerConsumption
@@ -409,6 +411,12 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         """Validate daily limits before saving update."""
         instance = serializer.instance
+        if (
+            instance.status in ("rejected", "pending_secondary_approval")
+            and instance.operator_id
+            and instance.operator_id != self.request.user.id
+        ):
+            raise ValidationError({"detail": [CREATOR_ONLY_REJECTED_EDIT_MESSAGE]})
         validated = serializer.validated_data
         activity_type = validated.get('activity_type') if 'activity_type' in validated else getattr(instance, 'activity_type', 'operation')
         log_date = (instance.timestamp or timezone.now()).date()
@@ -538,6 +546,15 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
         if instance.status == 'rejected':
             updated.status = 'pending_secondary_approval'
             updated.save(update_fields=['status'])
+            log_audit_event(
+                user=request.user,
+                event_type="log_corrected",
+                object_type="chiller_log",
+                object_id=str(updated.id),
+                field_name="status",
+                old_value="rejected",
+                new_value="pending_secondary_approval",
+            )
 
         return response
 
@@ -955,6 +972,8 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
                 {'error': 'Only rejected or pending secondary approval entries can be corrected as new entries.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if original.operator_id and original.operator_id != request.user.id:
+            raise ValidationError({"detail": [CREATOR_ONLY_REJECTED_EDIT_MESSAGE]})
 
         data = request.data.copy()
         # Let the serializer handle timestamp parsing; we'll pull it from validated_data
@@ -968,8 +987,8 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
         payload = {
             **validated,
             'corrects': original,
-            'operator': request.user,
-            'operator_name': request.user.name or request.user.email,
+            'operator': original.operator,
+            'operator_name': original.operator_name or (original.operator.email if original.operator else request.user.email),
             'equipment_id': original.equipment_id,
             'site_id': original.site_id,
             'status': 'pending_secondary_approval',
@@ -981,16 +1000,35 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
         check_ts = payload.get('timestamp') or timezone.now()
         interval, shift_hours = get_interval_for_equipment(original.equipment_id or '', 'chiller')
         slot_start, slot_end = get_slot_range(check_ts, interval, shift_hours)
-        if ChillerLog.objects.filter(
+        slot_qs = ChillerLog.objects.filter(
             equipment_id=original.equipment_id,
             timestamp__gte=slot_start,
             timestamp__lt=slot_end,
-        ).exclude(pk=original.pk).exists():
+        )
+        chain_root_id = original.corrects_id or original.pk
+        conflict_exists = (
+            slot_qs
+            .exclude(pk=original.pk)
+            .exclude(pk=chain_root_id)
+            .exclude(corrects_id=original.pk)
+            .exclude(corrects_id=chain_root_id)
+            .exists()
+        )
+        if conflict_exists:
             raise ValidationError(
                 {'detail': ['An entry for this equipment already exists for this time slot.']}
             )
 
         new_log = ChillerLog.objects.create(**payload)
+        log_audit_event(
+            user=request.user,
+            event_type="log_corrected",
+            object_type="chiller_log",
+            object_id=str(new_log.id),
+            field_name="corrects_id",
+            old_value=str(original.id),
+            new_value=str(new_log.id),
+        )
 
         # Record field-by-field diffs in audit trail
         tracked_fields = [
@@ -1098,9 +1136,19 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
                     {'error': 'Only pending, draft, or pending secondary approval entries can be rejected.'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
+            previous_status = log.status
             log.status = 'rejected'
             log.secondary_approved_by = None
             log.secondary_approved_at = None
+            log_audit_event(
+                user=request.user,
+                event_type="log_rejected",
+                object_type="chiller_log",
+                object_id=str(log.id),
+                field_name="status",
+                old_value=previous_status,
+                new_value="rejected",
+            )
         else:
             return Response(
                 {'error': 'Invalid action. Use "approve" or "reject".'},

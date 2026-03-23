@@ -420,8 +420,34 @@ export const equipmentAPI = {
     await api.delete(`/equipment/${id}/`);
   },
 
-  approve: async (id: string, action: "approve" | "reject") => {
-    const response = await api.post(`/equipment/${id}/approve/`, { action });
+  approve: async (
+    id: string,
+    action: "approve" | "reject",
+    remarks: string,
+  ) => {
+    const response = await api.post(`/equipment/${id}/approve/`, {
+      action,
+      remarks,
+    });
+    return response.data;
+  },
+  correct: async (
+    id: string,
+    data: {
+      equipment_number?: string;
+      name?: string;
+      capacity?: string | null;
+      department?: string;
+      category?: string;
+      site_id?: string | null;
+      client_id?: string;
+      is_active?: boolean;
+      log_entry_interval?: "hourly" | "shift" | "daily" | null;
+      shift_duration_hours?: number | null;
+      tolerance_minutes?: number | null;
+    },
+  ) => {
+    const response = await api.post(`/equipment/${id}/correct/`, data);
     return response.data;
   },
 };

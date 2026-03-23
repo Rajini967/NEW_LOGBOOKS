@@ -1,4 +1,5 @@
 from django.db.models.deletion import ProtectedError
+from django.db import transaction
 from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -15,6 +16,8 @@ from .serializers import (
     EquipmentCategorySerializer,
     EquipmentSerializer,
 )
+
+CREATOR_ONLY_REJECTED_EDIT_MESSAGE = "Only the original creator can edit/correct a rejected entry."
 
 
 class DepartmentViewSet(viewsets.ModelViewSet):
@@ -116,7 +119,14 @@ class EquipmentViewSet(viewsets.ModelViewSet):
     queryset = Equipment.objects.filter(is_active=True).order_by("equipment_number")
 
     def get_queryset(self):
-        qs = super().get_queryset()
+        qs = super().get_queryset().select_related(
+            "created_by",
+            "approved_by",
+            "secondary_approved_by",
+            "corrects",
+            "department",
+            "category",
+        ).prefetch_related("corrections")
         department_id = self.request.query_params.get("department")
         category_id = self.request.query_params.get("category")
         status_param = self.request.query_params.get("status")
@@ -131,7 +141,7 @@ class EquipmentViewSet(viewsets.ModelViewSet):
         return qs
 
     def get_permissions(self):
-        if self.action in ["create", "update", "partial_update", "destroy", "approve"]:
+        if self.action in ["create", "update", "partial_update", "destroy", "approve", "correct"]:
             return [IsAuthenticated(), IsManagerOrSuperAdmin()]
         return [IsAuthenticated()]
 
@@ -174,6 +184,16 @@ class EquipmentViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         log_entity_update_changes(serializer, self.request, "equipment")
 
+    def update(self, request, *args, **kwargs):
+        instance = self.get_object()
+        if (
+            instance.status in ("rejected", "pending_secondary_approval")
+            and instance.created_by_id
+            and instance.created_by_id != request.user.id
+        ):
+            raise ValidationError({"detail": [CREATOR_ONLY_REJECTED_EDIT_MESSAGE]})
+        return super().update(request, *args, **kwargs)
+
     def perform_destroy(self, instance):
         log_audit_event(
             user=self.request.user,
@@ -189,44 +209,147 @@ class EquipmentViewSet(viewsets.ModelViewSet):
         """
         Approve or reject an equipment master record.
 
-        Body: { "action": "approve" | "reject" }
-        Rule: approver must be different from the user who created the record.
+        Body: { "action": "approve" | "reject", "remarks": "..." }
+        Rule: approver must be different from the user who created the row.
+        Correction rows require a different approver than:
+        - correction creator
+        - original row creator
+        - original row rejector (stored in original approved_by during reject)
         """
         equipment = self.get_object()
         action_type = (request.data.get("action") or "approve").strip().lower()
+        remarks = (request.data.get("remarks") or request.data.get("comment") or "").strip()
 
         if action_type not in ("approve", "reject"):
             raise ValidationError({"action": ["Invalid action. Use 'approve' or 'reject'."]})
 
-        # Enforce different user for approval/rejection vs creator
+        if action_type == "reject" and not remarks:
+            raise ValidationError({"remarks": ["Comment is required when rejecting."]})
+
         creator_id = getattr(equipment.created_by, "id", None)
-        if creator_id and creator_id == request.user.id:
-            raise ValidationError(
-                {
-                    "detail": [
-                        "Equipment must be approved or rejected by a different user than the one who created it."
-                    ]
-                }
+        if action_type == "approve":
+            if creator_id and creator_id == request.user.id:
+                raise ValidationError(
+                    {"detail": ["The equipment entry must be approved by a different user than the creator."]}
+                )
+            if equipment.status == "pending_secondary_approval":
+                if equipment.approved_by_id and equipment.approved_by_id == request.user.id:
+                    raise ValidationError(
+                        {"detail": ["A different person must perform secondary approval. The person who rejected cannot approve the corrected entry."]}
+                    )
+                equipment.status = "approved"
+                equipment.secondary_approved_by = request.user
+                equipment.secondary_approved_at = timezone.now()
+            elif equipment.status in ("pending", "draft"):
+                equipment.status = "approved"
+            else:
+                raise ValidationError(
+                    {"detail": ["Only pending, draft, or pending secondary approval entries can be approved."]}
+                )
+            equipment.approval_comment = remarks
+            equipment.rejection_comment = ""
+        elif action_type == "reject":
+            if creator_id and creator_id == request.user.id:
+                raise ValidationError(
+                    {"detail": ["The equipment entry must be rejected by a different user than the creator."]}
+                )
+            if equipment.status not in ("pending", "draft", "pending_secondary_approval"):
+                raise ValidationError(
+                    {"detail": ["Only pending, draft, or pending secondary approval entries can be rejected."]}
+                )
+            previous_status = equipment.status
+            equipment.status = "rejected"
+            equipment.rejection_comment = remarks
+            equipment.secondary_approved_by = None
+            equipment.secondary_approved_at = None
+            log_audit_event(
+                user=request.user,
+                event_type="entity_rejected",
+                object_type="equipment",
+                object_id=str(equipment.id),
+                field_name="status",
+                old_value=previous_status,
+                new_value="rejected",
             )
 
-        if action_type == "approve":
-            equipment.status = "approved"
-        else:
-            equipment.status = "rejected"
-
-        equipment.approved_by = request.user
-        equipment.approved_at = timezone.now()
-        equipment.save(update_fields=["status", "approved_by", "approved_at", "updated_at"])
-
-        log_audit_event(
-            user=request.user,
-            event_type="entity_approved" if action_type == "approve" else "entity_rejected",
-            object_type="equipment",
-            object_id=str(equipment.id),
-            field_name="status",
-            new_value=equipment.status,
+        if action_type == "reject" or (action_type == "approve" and equipment.status == "approved"):
+            equipment.approved_by = request.user
+            equipment.approved_at = timezone.now()
+        equipment.save(
+            update_fields=[
+                "status",
+                "approval_comment",
+                "rejection_comment",
+                "approved_by",
+                "approved_at",
+                "secondary_approved_by",
+                "secondary_approved_at",
+                "updated_at",
+            ]
         )
+
+        if action_type == "approve":
+            log_audit_event(
+                user=request.user,
+                event_type="entity_approved",
+                object_type="equipment",
+                object_id=str(equipment.id),
+                field_name="status",
+                new_value=equipment.status,
+            )
 
         serializer = self.get_serializer(equipment)
         return Response(serializer.data)
+
+    @action(detail=True, methods=["post"])
+    def correct(self, request, pk=None):
+        """
+        Create a correction row from a rejected equipment record.
+        Source row remains rejected; new row is pending_correction_entry.
+        """
+        source = self.get_object()
+        if source.status not in ("rejected", "pending_secondary_approval"):
+            raise ValidationError({"detail": ["Only rejected or pending secondary approval entries can be corrected."]})
+        if source.created_by_id and source.created_by_id != request.user.id:
+            raise ValidationError({"detail": [CREATOR_ONLY_REJECTED_EDIT_MESSAGE]})
+
+        payload = {
+            "equipment_number": request.data.get("equipment_number", source.equipment_number),
+            "name": request.data.get("name", source.name),
+            "capacity": request.data.get("capacity", source.capacity),
+            "department_id": request.data.get("department", source.department_id),
+            "category_id": request.data.get("category", source.category_id),
+            "site_id": request.data.get("site_id", source.site_id),
+            "client_id": request.data.get("client_id", source.client_id),
+            "is_active": request.data.get("is_active", source.is_active),
+            "log_entry_interval": request.data.get("log_entry_interval", source.log_entry_interval),
+            "shift_duration_hours": request.data.get("shift_duration_hours", source.shift_duration_hours),
+            "tolerance_minutes": request.data.get("tolerance_minutes", source.tolerance_minutes),
+        }
+
+        with transaction.atomic():
+            corrected = Equipment.objects.create(
+                **payload,
+                status="pending_secondary_approval",
+                corrects=source,
+                created_by=source.created_by,
+                approved_by=None,
+                approved_at=None,
+                secondary_approved_by=None,
+                secondary_approved_at=None,
+                approval_comment="",
+                rejection_comment="",
+            )
+            log_audit_event(
+                user=request.user,
+                event_type="entity_corrected",
+                object_type="equipment",
+                object_id=str(corrected.id),
+                field_name="corrects_id",
+                old_value=str(source.id),
+                new_value=str(corrected.id),
+            )
+
+        serializer = self.get_serializer(corrected)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 

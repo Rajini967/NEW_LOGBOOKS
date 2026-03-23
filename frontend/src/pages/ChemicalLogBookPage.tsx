@@ -41,7 +41,10 @@ import {
 } from "@/components/ui/alert-dialog";
 import { EntryIntervalBadge } from "@/components/logbook/EntryIntervalBadge";
 import { MissedReadingPopup } from "@/components/logbook/MissedReadingPopup";
-import { getNextDueAndMissed } from "@/lib/missed-reading";
+import {
+  computeMissedByEquipment,
+  type EquipmentMissInfo,
+} from "@/lib/missed-reading";
 import { MaintenanceTimingsSection } from "@/components/logbook/MaintenanceTimingsSection";
 import type { MaintenanceTimingsValue } from "@/types/maintenance-timings";
 
@@ -62,6 +65,8 @@ interface ChemicalPrepLog {
   remarks: string;
   comment?: string;
   checkedBy: string;
+  approvedBy?: string;
+  rejectedBy?: string;
   timestamp: Date;
   status: "pending" | "approved" | "rejected" | "draft" | "pending_secondary_approval";
   /** User who approved or rejected (rejector for rejected / pending_secondary_approval entries) */
@@ -72,11 +77,14 @@ interface ChemicalPrepLog {
   tolerance_status?: "none" | "within" | "outside";
 }
 
+const CREATOR_ONLY_REJECTED_EDIT_MESSAGE = "Only the original creator can edit/correct a rejected entry.";
+
 const ChemicalLogBookPage: React.FC = () => {
   const { user, sessionSettings } = useAuth();
   const [logs, setLogs] = useState<ChemicalPrepLog[]>([]);
   const [showMissedReadingPopup, setShowMissedReadingPopup] = useState(false);
   const [missedReadingNextDue, setMissedReadingNextDue] = useState<Date | null>(null);
+  const [missedEquipments, setMissedEquipments] = useState<EquipmentMissInfo[] | null>(null);
   const [filteredLogs, setFilteredLogs] = useState<ChemicalPrepLog[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -177,6 +185,11 @@ const ChemicalLogBookPage: React.FC = () => {
           remarks: prep.remarks || "",
           comment: prep.comment || "",
           checkedBy: prep.checked_by || prep.operator_name,
+          approvedBy: prep.status === "approved" ? (prep.approved_by_name || "") : "",
+          rejectedBy:
+            prep.status === "rejected" || prep.status === "pending_secondary_approval"
+              ? (prep.approved_by_name || "")
+              : "",
           timestamp,
           status: prep.status as ChemicalPrepLog["status"],
           operator_id: prep.operator_id,
@@ -233,6 +246,11 @@ const ChemicalLogBookPage: React.FC = () => {
             remarks: prep.remarks || "",
             comment: prep.comment,
             checkedBy: prep.checked_by || prep.operator_name,
+            approvedBy: prep.status === "approved" ? (prep.approved_by_name || "") : "",
+            rejectedBy:
+              prep.status === "rejected" || prep.status === "pending_secondary_approval"
+                ? (prep.approved_by_name || "")
+                : "",
             timestamp,
             status: prep.status,
             operator_id: prep.operator_id,
@@ -255,33 +273,75 @@ const ChemicalLogBookPage: React.FC = () => {
   }, [formData.equipmentName]);
 
   useEffect(() => {
-    if (!sessionSettings?.log_entry_interval || logs.length === 0) return;
-    const latest = logs[0];
-    const lastTs = latest?.timestamp
-      ? latest.timestamp instanceof Date
-        ? latest.timestamp
-        : new Date(latest.timestamp)
-      : null;
-    const equipmentName = latest?.equipmentName || "";
-    const partBeforeDash = equipmentName.split(" – ")[0]?.trim() || equipmentName;
-    const eq = equipmentWithIntervals.find(
-      (e) =>
-        e.equipment_number === partBeforeDash ||
-        e.equipment_number === equipmentName ||
-        e.name === equipmentName ||
-        `${e.equipment_number} – ${e.name}` === equipmentName,
+    if (!sessionSettings?.log_entry_interval || logs.length === 0) {
+      setMissedEquipments(null);
+      setShowMissedReadingPopup(false);
+      setMissedReadingNextDue(null);
+      return;
+    }
+    const defaultInterval = sessionSettings.log_entry_interval as "hourly" | "shift" | "daily";
+    const defaultShift = sessionSettings.shift_duration_hours ?? 8;
+    const findEquipmentMeta = (equipmentIdOrName?: string, equipmentName?: string) => {
+      const primary = (equipmentIdOrName || "").trim();
+      const secondary = (equipmentName || "").trim();
+      const primaryBeforeDash = primary.split(" – ")[0]?.trim() || primary;
+      const secondaryBeforeDash = secondary.split(" – ")[0]?.trim() || secondary;
+      return equipmentWithIntervals.find(
+        (e) =>
+          e.equipment_number === primary ||
+          e.equipment_number === primaryBeforeDash ||
+          e.name === primary ||
+          `${e.equipment_number} – ${e.name}` === primary ||
+          e.equipment_number === secondary ||
+          e.equipment_number === secondaryBeforeDash ||
+          e.name === secondary ||
+          `${e.equipment_number} – ${e.name}` === secondary,
+      );
+    };
+    const resolveInterval = (equipmentIdOrName?: string, equipmentName?: string): "hourly" | "shift" | "daily" => {
+      const eq = findEquipmentMeta(equipmentIdOrName, equipmentName);
+      return (
+        (eq?.log_entry_interval as "hourly" | "shift" | "daily") ||
+        defaultInterval ||
+        "daily"
+      );
+    };
+    const resolveShiftHours = (equipmentIdOrName?: string, equipmentName?: string): number => {
+      const eq = findEquipmentMeta(equipmentIdOrName, equipmentName);
+      return eq?.shift_duration_hours ?? defaultShift;
+    };
+
+    const perEquipment = computeMissedByEquipment(
+      logs.map((log) => ({
+        equipment_id: (log.equipmentName || "").split(" – ")[0]?.trim() || log.equipmentName,
+        equipment_name: log.equipmentName,
+        timestamp: log.timestamp,
+      })),
+      {
+        resolveInterval: (eqId, eqName) => resolveInterval(eqId, eqName),
+        resolveShiftHours: (eqId, eqName) => resolveShiftHours(eqId, eqName),
+      },
     );
-    const interval = (eq?.log_entry_interval || sessionSettings.log_entry_interval) as "hourly" | "shift" | "daily";
-    const shiftHours = eq?.shift_duration_hours ?? sessionSettings.shift_duration_hours ?? 8;
-    const { nextDue, isMissed } = getNextDueAndMissed(lastTs, interval, shiftHours);
-    if (isMissed && nextDue) {
-      setMissedReadingNextDue(nextDue);
-      setShowMissedReadingPopup(true);
+
+    const missedOnly = perEquipment.filter((m) => m.isMissed);
+    if (missedOnly.length > 0) {
+      setMissedEquipments(missedOnly);
+      const firstNext =
+        missedOnly
+          .map((m) => m.nextDue)
+          .filter((d): d is Date => !!d)
+          .sort((a, b) => a.getTime() - b.getTime())[0] || null;
+      setMissedReadingNextDue(firstNext);
     } else {
+      setMissedEquipments(null);
       setShowMissedReadingPopup(false);
       setMissedReadingNextDue(null);
     }
   }, [logs, sessionSettings, equipmentWithIntervals]);
+
+  const hasMissedReadings =
+    !!missedReadingNextDue || (missedEquipments?.length ?? 0) > 0;
+  const missedReadingsCount = missedEquipments?.length ?? (hasMissedReadings ? 1 : 0);
 
   // Load chemical names and full master list (for resolving chemical ID when assignment has no link)
   useEffect(() => {
@@ -545,6 +605,9 @@ const ChemicalLogBookPage: React.FC = () => {
     return Array.from(new Set(logs.map((log) => log.checkedBy).filter(Boolean))).sort();
   }, [logs]);
 
+  // Chemical logbook currently has no numeric limit rules configured for row-level out-of-limit detection.
+  const hasOutOfLimitReadings = (_log: ChemicalPrepLog): boolean => false;
+
   const applyFilters = () => {
     let result = [...logs];
     if (filters.fromDate) {
@@ -686,8 +749,11 @@ const ChemicalLogBookPage: React.FC = () => {
         }
         if (editingLogId && editingChemicalLog) {
           const isCorrection =
-            (editingChemicalLog.status === "rejected" || editingChemicalLog.status === "pending_secondary_approval") &&
-            user?.role !== "operator";
+            editingChemicalLog.status === "rejected" || editingChemicalLog.status === "pending_secondary_approval";
+          if (isCorrection && editingChemicalLog.operator_id !== user?.id) {
+            toast.error(CREATOR_ONLY_REJECTED_EDIT_MESSAGE);
+            return;
+          }
           if (isCorrection) {
             await chemicalPrepAPI.correct(editingLogId, prepData as any);
             toast.success("Chemical entry corrected as new entry.");
@@ -798,8 +864,11 @@ const ChemicalLogBookPage: React.FC = () => {
 
       if (editingLogId && editingChemicalLog) {
         const isCorrection =
-          (editingChemicalLog.status === "rejected" || editingChemicalLog.status === "pending_secondary_approval") &&
-          user?.role !== "operator";
+          editingChemicalLog.status === "rejected" || editingChemicalLog.status === "pending_secondary_approval";
+        if (isCorrection && editingChemicalLog.operator_id !== user?.id) {
+          toast.error(CREATOR_ONLY_REJECTED_EDIT_MESSAGE);
+          return;
+        }
         if (isCorrection) {
           await chemicalPrepAPI.correct(editingLogId, prepData as any);
           toast.success("Chemical entry corrected as new entry.");
@@ -866,6 +935,14 @@ const ChemicalLogBookPage: React.FC = () => {
   };
 
   const handleEditLog = (log: ChemicalPrepLog) => {
+    if (
+      log.status !== "rejected" ||
+      log.operator_id !== user?.id ||
+      (log.has_corrections && !log.corrects_id)
+    ) {
+      toast.error(CREATOR_ONLY_REJECTED_EDIT_MESSAGE);
+      return;
+    }
     setEditingLogId(log.id);
     setFormData({
       equipmentName: log.equipmentName ?? "",
@@ -958,7 +1035,7 @@ const ChemicalLogBookPage: React.FC = () => {
       <div className="px-4 pt-0">
         <EntryIntervalBadge />
       </div>
-      {showMissedReadingPopup && missedReadingNextDue && (
+      {showMissedReadingPopup && hasMissedReadings && (
         <MissedReadingPopup
           open={showMissedReadingPopup}
           onClose={() => {
@@ -967,6 +1044,7 @@ const ChemicalLogBookPage: React.FC = () => {
           }}
           logTypeLabel="Chemical"
           nextDue={missedReadingNextDue}
+          equipmentList={missedEquipments ?? undefined}
         />
       )}
       <main className="p-4 space-y-4">
@@ -991,6 +1069,22 @@ const ChemicalLogBookPage: React.FC = () => {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={!hasMissedReadings}
+              onClick={() => setShowMissedReadingPopup(true)}
+              title={!hasMissedReadings ? "No missed readings" : "Show missing readings"}
+            >
+              <Clock className="w-4 h-4 mr-2" />
+              Missing Readings
+              {missedReadingsCount > 0 && (
+                <span className="ml-2 px-1.5 py-0.5 text-xs font-semibold bg-primary text-primary-foreground rounded-full">
+                  {missedReadingsCount}
+                </span>
+              )}
+            </Button>
             {/* Filter Button - dialog like Chiller */}
             <Dialog open={isFilterOpen} onOpenChange={setIsFilterOpen}>
               <DialogTrigger asChild>
@@ -1556,7 +1650,9 @@ const ChemicalLogBookPage: React.FC = () => {
                   <th className="px-4 py-2 text-left font-semibold w-[100px] whitespace-nowrap">Batch No</th>
                   <th className="px-4 py-2 text-center font-semibold min-w-[140px]">Remarks</th>
                   <th className="px-4 py-2 text-left font-semibold min-w-[170px]">Comment</th>
-                  <th className="px-4 py-2 text-left font-semibold w-[140px]">Checked By</th>
+                  <th className="px-4 py-2 text-left font-semibold w-[140px]">Done By</th>
+                  <th className="px-4 py-2 text-left font-semibold w-[160px]">Approved By</th>
+                  <th className="px-4 py-2 text-left font-semibold w-[160px]">Rejected By</th>
                   <th className="px-4 py-2 text-left font-semibold w-[110px]">Status</th>
                   <th className="px-4 py-2 text-left font-semibold w-[140px]">Actions</th>
                 </tr>
@@ -1565,7 +1661,7 @@ const ChemicalLogBookPage: React.FC = () => {
                 {filteredLogs.length === 0 && !isLoading && (
                   <tr>
                     <td
-                      colSpan={13}
+                      colSpan={15}
                       className="px-3 py-6 text-center text-muted-foreground"
                     >
                       No Chemical Log Book entries found.
@@ -1608,7 +1704,11 @@ const ChemicalLogBookPage: React.FC = () => {
                         type="button"
                         variant="outline"
                         size="sm"
-                        className="text-xs"
+                        className={cn(
+                          "text-xs",
+                          hasOutOfLimitReadings(log) &&
+                            "text-destructive border-destructive/50 hover:bg-destructive/10"
+                        )}
                         onClick={() => handleViewReadingsClick(log.id)}
                       >
                         <Eye className="w-3.5 h-3.5 mr-1.5" />
@@ -1652,13 +1752,17 @@ const ChemicalLogBookPage: React.FC = () => {
                       <span className="text-sm text-foreground">{log.checkedBy}</span>
                     </td>
                     <td className="px-4 py-3">
+                      <span className="text-sm text-foreground">{log.approvedBy || "—"}</span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className="text-sm text-foreground">{log.rejectedBy || "—"}</span>
+                    </td>
+                    <td className="px-4 py-3">
                       <div className="flex flex-wrap items-center gap-2">
                         <Badge
                           variant={
                             log.has_corrections && !log.corrects_id
                               ? "destructive"
-                              : log.corrects_id
-                              ? "warning"
                               : log.status === "approved"
                               ? "success"
                               : log.status === "rejected"
@@ -1670,20 +1774,26 @@ const ChemicalLogBookPage: React.FC = () => {
                         >
                           {log.has_corrections && !log.corrects_id
                             ? "Rejected"
-                            : log.corrects_id
-                            ? "Pending"
+                            : log.status === "approved"
+                            ? "Approved"
                             : log.status === "pending_secondary_approval" || log.status === "pending"
                             ? "Pending"
                             : log.status === "rejected"
                             ? "Rejected"
-                            : log.status === "approved"
-                            ? "Approved"
                             : log.status === "draft"
                             ? "Draft"
                             : log.status}
                         </Badge>
                         {log.corrects_id && (
-                          <span className="text-[10px] text-amber-700 whitespace-nowrap">Correction entry</span>
+                          <span
+                            className={
+                              log.status === "approved"
+                                ? "text-[10px] text-emerald-700 whitespace-nowrap"
+                                : "text-[10px] text-amber-700 whitespace-nowrap"
+                            }
+                          >
+                            {log.status === "approved" ? "Approved correction entry" : "Correction entry"}
+                          </span>
                         )}
                         {log.has_corrections && !log.corrects_id && (
                           <span className="text-[10px] text-emerald-700 whitespace-nowrap">Has corrections</span>
@@ -1765,15 +1875,33 @@ const ChemicalLogBookPage: React.FC = () => {
                               size="icon"
                               className={cn(
                                 "h-7 w-7",
-                                (log.status === "rejected" || log.status === "pending_secondary_approval")
+                                (log.status === "rejected" &&
+                                  log.operator_id === user?.id &&
+                                  !(log.has_corrections && !log.corrects_id))
                                   ? ""
                                   : "opacity-40 cursor-not-allowed"
                               )}
-                              title={log.status === "rejected" || log.status === "pending_secondary_approval" ? "Edit entry" : "Edit only available after reject"}
+                              title={
+                                log.status === "rejected" &&
+                                log.operator_id === user?.id &&
+                                !(log.has_corrections && !log.corrects_id)
+                                  ? "Edit entry"
+                                  : "Edit only available after reject"
+                              }
                               onClick={() => {
-                                if (log.status === "rejected" || log.status === "pending_secondary_approval") handleEditLog(log);
+                                if (
+                                  log.status === "rejected" &&
+                                  log.operator_id === user?.id &&
+                                  !(log.has_corrections && !log.corrects_id)
+                                ) {
+                                  handleEditLog(log);
+                                }
                               }}
-                              disabled={log.status !== "rejected" && log.status !== "pending_secondary_approval"}
+                              disabled={
+                                log.status !== "rejected" ||
+                                log.operator_id !== user?.id ||
+                                (log.has_corrections && !log.corrects_id)
+                              }
                             >
                               <Edit className="w-4 h-4" />
                             </Button>
@@ -1792,6 +1920,20 @@ const ChemicalLogBookPage: React.FC = () => {
                             </Button>
                           </>
                         )}
+                        {user?.role === "operator" &&
+                          log.status === "rejected" &&
+                          log.operator_id === user?.id &&
+                          !(log.has_corrections && !log.corrects_id) && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7"
+                              title="Edit entry"
+                              onClick={() => handleEditLog(log)}
+                            >
+                              <Edit className="w-4 h-4" />
+                            </Button>
+                          )}
                         {user?.role === "super_admin" && (
                           <Button
                             variant="ghost"

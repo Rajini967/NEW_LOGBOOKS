@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -25,6 +26,7 @@ import {
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -59,7 +61,16 @@ interface Equipment {
   equipment_number: string;
   name: string;
   capacity?: string | null;
-  created_by?: string | null;
+  created_by?: string | null | { id: string };
+  approval_comment?: string | null;
+  rejection_comment?: string | null;
+  created_by_name?: string | null;
+  approved_by_name?: string | null;
+  approved_by_id?: string | null;
+  secondary_approved_by_id?: string | null;
+  secondary_approved_by_name?: string | null;
+  corrects_id?: string | null;
+  has_corrections?: boolean;
   department: string;
   department_name?: string;
   category: string;
@@ -67,7 +78,7 @@ interface Equipment {
   site_id?: string | null;
   client_id?: string;
   is_active: boolean;
-  status?: "pending" | "approved" | "rejected";
+  status?: "draft" | "pending" | "approved" | "rejected" | "pending_secondary_approval";
   log_entry_interval?: LogEntryIntervalType | null;
   shift_duration_hours?: number | null;
   tolerance_minutes?: number | null;
@@ -98,10 +109,17 @@ export default function EquipmentListPage() {
     tolerance_minutes: "" as "" | number,
   });
 
+  /** Step 1: confirm approve/reject (same flow as E Log Book / Boiler) */
   const [confirmAction, setConfirmAction] = useState<{
     id: string;
     action: "approve" | "reject";
   } | null>(null);
+  /** Step 2: required comment */
+  const [actionCommentDialog, setActionCommentDialog] = useState<{
+    id: string;
+    action: "approve" | "reject";
+  } | null>(null);
+  const [actionCommentText, setActionCommentText] = useState("");
 
   const canApprove =
     user?.role === "super_admin" || user?.role === "manager";
@@ -166,6 +184,18 @@ export default function EquipmentListPage() {
   };
 
   const handleEdit = (item: Equipment) => {
+    const status = String(item.status || "").toLowerCase();
+    const isCorrectionEntry = Boolean(item.corrects_id);
+    const isRejectedSourceWithCorrections =
+      status === "rejected" && !isCorrectionEntry && Boolean(item.has_corrections);
+    const canEditRejectedRow =
+      status === "rejected" && (isCorrectionEntry || !isRejectedSourceWithCorrections);
+    if (!canEditRejectedRow) {
+      toast.error(
+        "Only rejected equipment entries can be edited for correction."
+      );
+      return;
+    }
     setEditingId(item.id);
     setIsEditMode(true);
     setFormData({
@@ -276,11 +306,25 @@ export default function EquipmentListPage() {
       }
 
       if (isEditMode && editingId) {
-        const updated = await equipmentAPI.update(editingId, payload as any);
-        setEquipment((prev) =>
-          prev.map((e) => (e.id === editingId ? updated : e))
-        );
-        toast.success("Equipment updated successfully");
+        // Correction flow: editing a rejected source creates a new pending correction row.
+        const source = equipment.find((e) => e.id === editingId);
+        const sourceStatus = String(source?.status || "").toLowerCase();
+        const isCorrectionEntry = Boolean(source?.corrects_id);
+        const isRejectedSourceWithCorrections =
+          sourceStatus === "rejected" &&
+          !isCorrectionEntry &&
+          Boolean(source?.has_corrections);
+        const canCorrectFromSource =
+          sourceStatus === "rejected" &&
+          (isCorrectionEntry || !isRejectedSourceWithCorrections);
+        if (!canCorrectFromSource) {
+          toast.error("Only rejected equipment entries can be corrected.");
+          return;
+        }
+
+        const corrected = await equipmentAPI.correct(editingId, payload as any);
+        setEquipment((prev) => [corrected, ...prev]);
+        toast.success("Correction entry created with Pending secondary approval status.");
       } else {
         const created = await equipmentAPI.create(payload as any);
         setEquipment((prev) => [created, ...prev]);
@@ -316,6 +360,7 @@ export default function EquipmentListPage() {
   const handleApproveAction = async (
     action: "approve" | "reject",
     id: string,
+    remarks: string,
   ) => {
     if (!canApprove) {
       toast.error(
@@ -326,7 +371,7 @@ export default function EquipmentListPage() {
       return;
     }
     try {
-      const updated = await equipmentAPI.approve(id, action);
+      const updated = await equipmentAPI.approve(id, action, remarks);
       setEquipment((prev) =>
         prev.map((e) => (e.id === id ? updated : e)),
       );
@@ -336,11 +381,16 @@ export default function EquipmentListPage() {
           : "Equipment rejected.",
       );
     } catch (error: any) {
+      const data = error?.data || error?.response?.data;
+      const remarksErr = data?.remarks?.[0];
       const message =
+        remarksErr ||
         error?.message ||
-        error?.data?.detail ||
+        data?.detail ||
         "Failed to update equipment status";
-      toast.error(message);
+      toast.error(
+        typeof message === "string" ? message : JSON.stringify(message),
+      );
     }
   };
 
@@ -687,26 +737,32 @@ export default function EquipmentListPage() {
         </div>
 
         <div className="bg-card rounded-lg border border-border overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full">
+          <div className="w-full overflow-x-auto overflow-y-visible">
+            <table className="w-full min-w-[1200px] text-sm">
               <thead>
                 <tr className="bg-muted/50 border-b border-border">
-                  <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                  <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap min-w-[140px]">
                     Equipment
                   </th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                  <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap min-w-[100px]">
                     Department
                   </th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                  <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap min-w-[100px]">
                     Category
                   </th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                  <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap min-w-[80px]">
                     Capacity
                   </th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                  <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider min-w-[220px]">
+                    Comment
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider min-w-[180px]">
+                    Done by
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap min-w-[100px]">
                     Status
                   </th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                  <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap min-w-[120px]">
                     Actions
                   </th>
                 </tr>
@@ -715,7 +771,7 @@ export default function EquipmentListPage() {
                 {equipment.length === 0 ? (
                   <tr>
                     <td
-                      colSpan={6}
+                      colSpan={8}
                       className="px-4 py-10 text-center text-muted-foreground"
                     >
                       No equipment found. Use &quot;Add Equipment&quot; to
@@ -723,10 +779,28 @@ export default function EquipmentListPage() {
                     </td>
                   </tr>
                 ) : (
-                  equipment.map((item) => (
+                  equipment.map((item) => {
+                    const statusLower = String(item.status || "").toLowerCase();
+                    const isCorrectionEntry = !!item.corrects_id;
+                    const isRejectedSourceWithCorrections =
+                      statusLower === "rejected" &&
+                      !isCorrectionEntry &&
+                      !!item.has_corrections;
+                    const showEditIcon = true;
+                    const canEditSourceRejectedEntry =
+                      statusLower === "rejected" &&
+                      (isCorrectionEntry || !isRejectedSourceWithCorrections);
+
+                    return (
                     <tr
                       key={item.id}
-                      className="hover:bg-muted/30 transition-colors"
+                      className={[
+                        "transition-colors",
+                        isRejectedSourceWithCorrections ? "bg-red-50/40 hover:bg-red-50/60" : "",
+                        !isRejectedSourceWithCorrections
+                          ? "hover:bg-muted/30"
+                          : "",
+                      ].join(" ")}
                     >
                       <td className="px-4 py-3">
                         <div>
@@ -747,54 +821,182 @@ export default function EquipmentListPage() {
                       <td className="px-4 py-3 text-sm">
                         {item.capacity || "—"}
                       </td>
+                      <td className="px-4 py-3 text-sm align-middle">
+                        {(() => {
+                          const statusLower = item.status
+                            ? String(item.status).toLowerCase()
+                            : "";
+                          const text =
+                            statusLower === "approved"
+                              ? item.approval_comment?.trim()
+                              : statusLower === "rejected"
+                                ? item.rejection_comment?.trim()
+                                : null;
+                          const display = text || "—";
+                          return (
+                            <p
+                              className="text-xs text-foreground line-clamp-4 break-words"
+                              title={display !== "—" ? display : undefined}
+                            >
+                              {display}
+                            </p>
+                          );
+                        })()}
+                      </td>
+                      <td className="px-4 py-3 text-sm align-top">
+                        <div className="space-y-1.5 min-w-0">
+                          <div>
+                            <span className="text-[10px] uppercase tracking-wide text-muted-foreground block mb-0.5">
+                              Created
+                            </span>
+                            <span
+                              className="text-xs line-clamp-2 break-words"
+                              title={item.created_by_name || undefined}
+                            >
+                              {item.created_by_name || "—"}
+                            </span>
+                          </div>
+                          {(item.status === "approved" ||
+                            item.status === "rejected") && (
+                            <div>
+                              <span className="text-[10px] uppercase tracking-wide text-muted-foreground block mb-0.5">
+                                {item.status === "rejected"
+                                  ? "Rejected by"
+                                  : "Approved by"}
+                              </span>
+                              <span
+                                className="text-xs line-clamp-2 break-words"
+                                title={item.approved_by_name || undefined}
+                              >
+                                {item.approved_by_name || "—"}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      </td>
                       <td className="px-4 py-3">
-                        <Badge
-                          variant={
-                            item.status === "approved"
+                        {(() => {
+                          const isCorrection = isCorrectionEntry;
+
+                          const badgeVariant: "success" | "destructive" | "pending" =
+                            statusLower === "approved"
                               ? "success"
-                              : item.status === "rejected"
-                              ? "destructive"
-                              : "pending"
-                          }
-                        >
-                          {item.status
-                            ? item.status.charAt(0).toUpperCase() +
-                              item.status.slice(1)
-                            : "Approved"}
-                        </Badge>
+                              : statusLower === "rejected"
+                                ? "destructive"
+                                : "pending";
+
+                          const badgeText =
+                            statusLower === "pending_secondary_approval"
+                              ? "Pending"
+                              : item.status
+                                ? item.status.charAt(0).toUpperCase() + item.status.slice(1)
+                                : "Pending";
+
+                          const helperText =
+                            isRejectedSourceWithCorrections
+                              ? "Has corrections"
+                              : isCorrection && statusLower === "approved"
+                                ? "Approved correction entry"
+                                : isCorrection
+                                  ? "Correction entry"
+                                  : null;
+
+                          return (
+                            <div className="space-y-1">
+                              <Badge variant={badgeVariant}>{badgeText}</Badge>
+                              {helperText && (
+                                <p
+                                  className={[
+                                    "text-[11px] whitespace-nowrap",
+                                    isRejectedSourceWithCorrections
+                                      ? "text-red-600 font-medium"
+                                      : isCorrection && statusLower === "approved"
+                                        ? "text-emerald-600 font-medium"
+                                      : isCorrection
+                                        ? "text-amber-600 font-medium"
+                                        : "text-muted-foreground",
+                                  ].join(" ")}
+                                >
+                                  {helperText}
+                                </p>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1">
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => handleEdit(item)}
-                          >
-                            <Edit className="w-4 h-4" />
-                          </Button>
+                          {showEditIcon && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              disabled={!canEditSourceRejectedEntry}
+                              className={
+                                !canEditSourceRejectedEntry
+                                  ? "opacity-70 cursor-not-allowed text-muted-foreground"
+                                  : "text-foreground"
+                              }
+                              onClick={() => {
+                                if (!canEditSourceRejectedEntry) return;
+                                handleEdit(item);
+                              }}
+                              title={
+                                canEditSourceRejectedEntry
+                                  ? "Edit rejected entry (create correction row)"
+                                  : "Edit is disabled for original rejected rows that already have corrections"
+                              }
+                            >
+                              <Edit className="w-4 h-4" />
+                            </Button>
+                          )}
                           {canApprove && (
                             <>
                               {(() => {
+                                const statusNorm = item.status
+                                  ? String(item.status).toLowerCase()
+                                  : "";
                                 const isPending =
-                                  !item.status || item.status === "pending";
+                                  !statusNorm ||
+                                  statusNorm === "pending" ||
+                                  statusNorm === "draft" ||
+                                  statusNorm === "pending_secondary_approval";
                                 const canChangeStatus = isPending;
+                                const createdById =
+                                  item.created_by == null
+                                    ? ""
+                                    : typeof item.created_by === "object"
+                                      ? String(
+                                          (item.created_by as { id: string }).id,
+                                        )
+                                      : String(item.created_by);
+                                const isCreator =
+                                  !!createdById &&
+                                  createdById === String(user?.id || "");
+                                // Creator and approver/rejector must be different users (all roles).
+                                const cannotApproveOwnRecord = isCreator;
+                                const isBlockedSecondaryApprover =
+                                  statusNorm === "pending_secondary_approval" &&
+                                  !!item.approved_by_id &&
+                                  item.approved_by_id === String(user?.id || "");
 
                                 const handleClick = (
                                   action: "approve" | "reject",
                                 ) => {
                                   if (!canChangeStatus) return;
-
-                                  // If current user is the creator, call API directly.
-                                  if (
-                                    item.created_by &&
-                                    String(item.created_by) ===
-                                      String(user?.id || "")
-                                  ) {
-                                    void handleApproveAction(action, item.id);
+                                  if (cannotApproveOwnRecord) {
+                                    toast.error(
+                                      action === "approve"
+                                        ? "The equipment entry must be approved by a different user than the creator."
+                                        : "The equipment entry must be rejected by a different user than the creator.",
+                                    );
                                     return;
                                   }
-
-                                  // For a different user, open confirmation popup.
+                                  if (action === "approve" && isBlockedSecondaryApprover) {
+                                    toast.error(
+                                      "A different person must perform secondary approval. The person who rejected cannot approve the corrected entry.",
+                                    );
+                                    return;
+                                  }
                                   setConfirmAction({ id: item.id, action });
                                 };
 
@@ -803,14 +1005,18 @@ export default function EquipmentListPage() {
                                     <Button
                                       variant="ghost"
                                       size="icon"
-                                      disabled={!canChangeStatus}
+                                      disabled={!canChangeStatus || isBlockedSecondaryApprover}
                                       className={
-                                        !canChangeStatus
+                                        !canChangeStatus || isBlockedSecondaryApprover
                                           ? "opacity-40 cursor-not-allowed"
                                           : ""
                                       }
                                       onClick={() => handleClick("approve")}
-                                      title="Approve equipment"
+                                      title={
+                                        isBlockedSecondaryApprover
+                                          ? "A different person must approve this corrected entry."
+                                          : "Approve equipment"
+                                      }
                                     >
                                       <CheckCircle className="w-4 h-4 text-green-600" />
                                     </Button>
@@ -845,14 +1051,14 @@ export default function EquipmentListPage() {
                         </div>
                       </td>
                     </tr>
-                  ))
+                  )})
                 )}
               </tbody>
             </table>
           </div>
         </div>
       </div>
-      {/* Approval / rejection confirmation for non-creator users */}
+      {/* Step 1: Confirm (matches E Log Book — then comment dialog) */}
       <AlertDialog
         open={!!confirmAction}
         onOpenChange={(open) => {
@@ -863,44 +1069,125 @@ export default function EquipmentListPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>
               {confirmAction?.action === "reject"
-                ? "Reject equipment"
-                : "Approve equipment"}
+                ? "Confirm Rejection"
+                : "Confirm Approval"}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {confirmAction?.action === "reject"
-                ? "Are you sure you want to mark this equipment as Rejected? The record will stay in the list but with status \"Rejected\"."
-                : "Are you sure you want to approve this equipment record? It will be marked as Approved in the equipment list."}
+                ? "Are you sure you want to reject this equipment? This action cannot be undone."
+                : "Are you sure you want to approve this equipment? This action cannot be undone."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel
-              onClick={() => {
-                setConfirmAction(null);
-              }}
-            >
-              Cancel
-            </AlertDialogCancel>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               className={
                 confirmAction?.action === "reject"
                   ? "bg-red-600 hover:bg-red-700 text-white"
                   : "bg-green-600 hover:bg-green-700 text-white"
               }
-              onClick={async () => {
-                if (confirmAction) {
-                  await handleApproveAction(
-                    confirmAction.action,
-                    confirmAction.id,
-                  );
-                  setConfirmAction(null);
-                }
+              onClick={() => {
+                const next = confirmAction;
+                if (!next) return;
+                setConfirmAction(null);
+                setActionCommentDialog({
+                  id: next.id,
+                  action: next.action,
+                });
+                setActionCommentText("");
               }}
             >
-              {confirmAction?.action === "reject" ? "Reject" : "Approve"}
+              {confirmAction?.action === "reject" ? "Reject" : "OK"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Step 2: Required approval / rejection comment */}
+      <Dialog
+        open={!!actionCommentDialog}
+        onOpenChange={(open) => {
+          if (!open) {
+            setActionCommentDialog(null);
+            setActionCommentText("");
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>
+              {actionCommentDialog?.action === "reject"
+                ? "Rejection Comment (Required)"
+                : "Approval Comment (Required)"}
+            </DialogTitle>
+            <DialogDescription>
+              {actionCommentDialog?.action === "reject"
+                ? "Please enter a comment for this rejection."
+                : "Please enter a comment for this approval."}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="equipment-action-comment">
+                Comment <span className="text-destructive">*</span>
+              </Label>
+              <Textarea
+                id="equipment-action-comment"
+                value={actionCommentText}
+                onChange={(e) => setActionCommentText(e.target.value)}
+                placeholder={
+                  actionCommentDialog?.action === "reject"
+                    ? "Enter rejection comment..."
+                    : "Enter approval comment..."
+                }
+                rows={3}
+                className="resize-none"
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setActionCommentDialog(null);
+                  setActionCommentText("");
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                className={
+                  actionCommentDialog?.action === "reject"
+                    ? "bg-red-600 hover:bg-red-700 text-white"
+                    : "bg-green-600 hover:bg-green-700 text-white"
+                }
+                onClick={async () => {
+                  const comment = actionCommentText.trim();
+                  if (!comment) {
+                    toast.error(
+                      actionCommentDialog?.action === "reject"
+                        ? "Comment is required for rejection"
+                        : "Comment is required for approval",
+                    );
+                    return;
+                  }
+                  if (!actionCommentDialog) return;
+                  await handleApproveAction(
+                    actionCommentDialog.action,
+                    actionCommentDialog.id,
+                    comment,
+                  );
+                  setActionCommentDialog(null);
+                  setActionCommentText("");
+                }}
+              >
+                {actionCommentDialog?.action === "reject" ? "Reject" : "Approve"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

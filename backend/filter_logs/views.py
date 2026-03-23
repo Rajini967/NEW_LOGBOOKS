@@ -12,6 +12,8 @@ from reports.utils import log_limit_change, log_audit_event, create_report_entry
 from .models import FilterLog
 from .serializers import FilterLogSerializer
 
+CREATOR_ONLY_REJECTED_EDIT_MESSAGE = "Only the original creator can edit/correct a rejected entry."
+
 
 class FilterLogViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
@@ -109,6 +111,12 @@ class FilterLogViewSet(viewsets.ModelViewSet):
 
     def update(self, request, *args, **kwargs):
         instance = self.get_object()
+        if (
+            instance.status in ("rejected", "pending_secondary_approval")
+            and instance.operator_id
+            and instance.operator_id != request.user.id
+        ):
+            raise ValidationError({"detail": [CREATOR_ONLY_REJECTED_EDIT_MESSAGE]})
 
         tracked_fields = [
             'equipment_id',
@@ -154,6 +162,18 @@ class FilterLogViewSet(viewsets.ModelViewSet):
                 extra=extra,
                 event_type="log_update",
             )
+        if instance.status == "rejected":
+            updated.status = "pending_secondary_approval"
+            updated.save(update_fields=["status"])
+            log_audit_event(
+                user=request.user,
+                event_type="log_corrected",
+                object_type="filter_log",
+                object_id=str(updated.id),
+                field_name="status",
+                old_value="rejected",
+                new_value="pending_secondary_approval",
+            )
 
         return response
 
@@ -168,6 +188,8 @@ class FilterLogViewSet(viewsets.ModelViewSet):
                 {'error': 'Only rejected or pending secondary approval entries can be corrected as new entries.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if original.operator_id and original.operator_id != request.user.id:
+            raise ValidationError({"detail": [CREATOR_ONLY_REJECTED_EDIT_MESSAGE]})
 
         data = request.data.copy()
 
@@ -180,15 +202,46 @@ class FilterLogViewSet(viewsets.ModelViewSet):
         payload = {
             **validated,
             'corrects': original,
-            'operator': request.user,
-            'operator_name': request.user.name or request.user.email,
+            'operator': original.operator,
+            'operator_name': original.operator_name or (original.operator.email if original.operator else request.user.email),
             'equipment_id': original.equipment_id,
             'status': 'pending_secondary_approval',
         }
         if timestamp is not None:
             payload['timestamp'] = timestamp
 
+        check_ts = payload.get('timestamp') or timezone.now()
+        interval, shift_hours = get_interval_for_equipment(original.equipment_id or '', 'filter')
+        slot_start, slot_end = get_slot_range(check_ts, interval, shift_hours)
+        slot_qs = FilterLog.objects.filter(
+            equipment_id=original.equipment_id,
+            timestamp__gte=slot_start,
+            timestamp__lt=slot_end,
+        )
+        chain_root_id = original.corrects_id or original.pk
+        conflict_exists = (
+            slot_qs
+            .exclude(pk=original.pk)
+            .exclude(pk=chain_root_id)
+            .exclude(corrects_id=original.pk)
+            .exclude(corrects_id=chain_root_id)
+            .exists()
+        )
+        if conflict_exists:
+            raise ValidationError(
+                {'detail': ['An entry for this equipment already exists for this time slot.']}
+            )
+
         new_log = FilterLog.objects.create(**payload)
+        log_audit_event(
+            user=request.user,
+            event_type="log_corrected",
+            object_type="filter_log",
+            object_id=str(new_log.id),
+            field_name="corrects_id",
+            old_value=str(original.id),
+            new_value=str(new_log.id),
+        )
 
         tracked_fields = [
             'equipment_id',
@@ -253,6 +306,11 @@ class FilterLogViewSet(viewsets.ModelViewSet):
                 raise ValidationError(
                     {'detail': ['Log Book Done By and Approved By users must be different.']}
                 )
+        elif action_type != 'reject':
+            return Response(
+                {'error': 'Invalid action. Use "approve" or "reject".'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         if log.status not in ('draft', 'pending', 'pending_secondary_approval'):
             raise ValidationError(
@@ -267,9 +325,19 @@ class FilterLogViewSet(viewsets.ModelViewSet):
                 raise ValidationError(
                     {'detail': ['Log Book Done By and Rejected By users must be different.']}
                 )
+            previous_status = log.status
             log.status = 'rejected'
             log.approved_by = request.user
             log.approved_at = now
+            log_audit_event(
+                user=request.user,
+                event_type="log_rejected",
+                object_type="filter_log",
+                object_id=str(log.id),
+                field_name="status",
+                old_value=previous_status,
+                new_value="rejected",
+            )
         else:
             if log.status == 'pending_secondary_approval':
                 if log.approved_by and log.approved_by_id == request.user.id:

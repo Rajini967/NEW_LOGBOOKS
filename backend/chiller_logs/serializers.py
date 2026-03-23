@@ -6,6 +6,7 @@ from reports.utils import log_limit_change
 class ChillerLogSerializer(serializers.ModelSerializer):
     operator_id = serializers.UUIDField(source='operator.id', read_only=True)
     approved_by_id = serializers.UUIDField(source='approved_by.id', read_only=True, allow_null=True)
+    approved_by_name = serializers.SerializerMethodField()
     secondary_approved_by_id = serializers.UUIDField(source='secondary_approved_by.id', read_only=True, allow_null=True)
     corrects_id = serializers.UUIDField(source='corrects.id', read_only=True, allow_null=True)
     has_corrections = serializers.SerializerMethodField()
@@ -31,12 +32,12 @@ class ChillerLogSerializer(serializers.ModelSerializer):
             'daily_water_consumption_ct3_liters',
             'recording_frequency', 'operator_sign', 'verified_by',
             'remarks', 'comment', 'operator_id', 'operator_name', 'status',
-            'approved_by_id', 'approved_at', 'secondary_approved_by_id', 'secondary_approved_at',
+            'approved_by_id', 'approved_by_name', 'approved_at', 'secondary_approved_by_id', 'secondary_approved_at',
             'corrects_id', 'has_corrections', 'tolerance_status',
             'timestamp', 'created_at', 'updated_at'
         ]
         read_only_fields = [
-            'id', 'operator_id', 'operator_name', 'approved_by_id', 'approved_at',
+            'id', 'operator_id', 'operator_name', 'approved_by_id', 'approved_by_name', 'approved_at',
             'secondary_approved_by_id', 'secondary_approved_at',
             'corrects_id', 'has_corrections', 'tolerance_status',
             'created_at', 'updated_at'
@@ -53,6 +54,13 @@ class ChillerLogSerializer(serializers.ModelSerializer):
 
     def get_has_corrections(self, obj: ChillerLog) -> bool:
         return obj.corrections.exists()
+
+    def get_approved_by_name(self, obj: ChillerLog):
+        user = obj.approved_by
+        if user is None:
+            return None
+        name = (getattr(user, "name", None) or "").strip()
+        return name or getattr(user, "email", None)
 
     def get_tolerance_status(self, obj: ChillerLog) -> str:
         try:

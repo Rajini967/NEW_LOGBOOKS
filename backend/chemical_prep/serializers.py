@@ -184,6 +184,7 @@ class ChemicalAssignmentSerializer(serializers.ModelSerializer):
 class ChemicalPreparationSerializer(serializers.ModelSerializer):
     operator_id = serializers.UUIDField(source='operator.id', read_only=True)
     approved_by_id = serializers.UUIDField(source='approved_by.id', read_only=True, allow_null=True)
+    approved_by_name = serializers.SerializerMethodField()
     secondary_approved_by_id = serializers.UUIDField(source='secondary_approved_by.id', read_only=True, allow_null=True)
     corrects_id = serializers.UUIDField(source='corrects.id', read_only=True, allow_null=True)
     has_corrections = serializers.SerializerMethodField()
@@ -197,11 +198,11 @@ class ChemicalPreparationSerializer(serializers.ModelSerializer):
             'batch_no', 'done_by',
             'activity_type', 'activity_from_date', 'activity_to_date', 'activity_from_time', 'activity_to_time',
             'remarks', 'comment', 'checked_by', 'operator_id', 'operator_name', 'status',
-            'approved_by_id', 'approved_at', 'secondary_approved_by_id', 'secondary_approved_at',
+            'approved_by_id', 'approved_by_name', 'approved_at', 'secondary_approved_by_id', 'secondary_approved_at',
             'corrects_id', 'has_corrections', 'tolerance_status', 'timestamp', 'created_at', 'updated_at'
         ]
         read_only_fields = [
-            'id', 'operator_id', 'operator_name', 'approved_by_id', 'approved_at',
+            'id', 'operator_id', 'operator_name', 'approved_by_id', 'approved_by_name', 'approved_at',
             'secondary_approved_by_id', 'secondary_approved_at',
             'corrects_id', 'has_corrections', 'tolerance_status',
             'created_at', 'updated_at'
@@ -223,6 +224,13 @@ class ChemicalPreparationSerializer(serializers.ModelSerializer):
 
     def get_has_corrections(self, obj: ChemicalPreparation) -> bool:
         return obj.corrections.exists()
+
+    def get_approved_by_name(self, obj: ChemicalPreparation):
+        user = obj.approved_by
+        if user is None:
+            return None
+        name = (getattr(user, "name", None) or "").strip()
+        return name or getattr(user, "email", None)
 
     def get_tolerance_status(self, obj: ChemicalPreparation) -> str:
         try:

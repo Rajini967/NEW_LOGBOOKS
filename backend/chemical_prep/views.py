@@ -20,6 +20,8 @@ from accounts.permissions import CanLogEntries, CanApproveReports, IsSuperAdminO
 from reports.utils import log_limit_change, log_audit_event
 from collections import defaultdict
 
+CREATOR_ONLY_REJECTED_EDIT_MESSAGE = "Only the original creator can edit/correct a rejected entry."
+
 
 def _resolve_chemical_for_cost(chemical_name):
     """
@@ -520,6 +522,12 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
         Record chemical preparation field changes in the audit trail on update.
         """
         instance = self.get_object()
+        if (
+            instance.status in ("rejected", "pending_secondary_approval")
+            and instance.operator_id
+            and instance.operator_id != request.user.id
+        ):
+            raise ValidationError({"detail": [CREATOR_ONLY_REJECTED_EDIT_MESSAGE]})
         tracked_fields = [
             'equipment_name',
             'chemical_name',
@@ -572,6 +580,15 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
         if instance.status == 'rejected':
             updated.status = 'pending_secondary_approval'
             updated.save(update_fields=['status'])
+            log_audit_event(
+                user=request.user,
+                event_type="log_corrected",
+                object_type="chemical_log",
+                object_id=str(updated.id),
+                field_name="status",
+                old_value="rejected",
+                new_value="pending_secondary_approval",
+            )
 
         return response
 
@@ -895,6 +912,8 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
                 {'error': 'Only rejected or pending secondary approval entries can be corrected as new entries.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if original.operator_id and original.operator_id != request.user.id:
+            raise ValidationError({"detail": [CREATOR_ONLY_REJECTED_EDIT_MESSAGE]})
 
         data = request.data.copy()
 
@@ -907,8 +926,8 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
         payload = {
             **validated,
             'corrects': original,
-            'operator': request.user,
-            'operator_name': request.user.name or request.user.email,
+            'operator': original.operator,
+            'operator_name': original.operator_name or (original.operator.email if original.operator else request.user.email),
             'equipment_name': original.equipment_name,
             'chemical_name': original.chemical_name,
             'status': 'pending_secondary_approval',
@@ -916,7 +935,38 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
         if timestamp is not None:
             payload['timestamp'] = timestamp
 
+        check_ts = payload.get('timestamp') or timezone.now()
+        interval, shift_hours = get_interval_for_equipment(original.equipment_name or '', 'chemical')
+        slot_start, slot_end = get_slot_range(check_ts, interval, shift_hours)
+        slot_qs = ChemicalPreparation.objects.filter(
+            equipment_name=original.equipment_name,
+            timestamp__gte=slot_start,
+            timestamp__lt=slot_end,
+        )
+        chain_root_id = original.corrects_id or original.pk
+        conflict_exists = (
+            slot_qs
+            .exclude(pk=original.pk)
+            .exclude(pk=chain_root_id)
+            .exclude(corrects_id=original.pk)
+            .exclude(corrects_id=chain_root_id)
+            .exists()
+        )
+        if conflict_exists:
+            raise ValidationError(
+                {'detail': ['An entry for this equipment already exists for this time slot.']}
+            )
+
         new_prep = ChemicalPreparation.objects.create(**payload)
+        log_audit_event(
+            user=request.user,
+            event_type="log_corrected",
+            object_type="chemical_log",
+            object_id=str(new_prep.id),
+            field_name="corrects_id",
+            old_value=str(original.id),
+            new_value=str(new_prep.id),
+        )
 
         tracked_fields = [
             'equipment_name',
@@ -1009,9 +1059,19 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
                     {'error': 'Only pending, draft, or pending secondary approval entries can be rejected.'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
+            previous_status = prep.status
             prep.status = 'rejected'
             prep.secondary_approved_by = None
             prep.secondary_approved_at = None
+            log_audit_event(
+                user=request.user,
+                event_type="log_rejected",
+                object_type="chemical_log",
+                object_id=str(prep.id),
+                field_name="status",
+                old_value=previous_status,
+                new_value="rejected",
+            )
         else:
             return Response(
                 {'error': 'Invalid action. Use "approve" or "reject".'},

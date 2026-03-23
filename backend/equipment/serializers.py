@@ -1,3 +1,5 @@
+from typing import Optional
+
 from rest_framework import serializers
 
 from .models import Department, EquipmentCategory, Equipment
@@ -34,8 +36,36 @@ class EquipmentCategorySerializer(serializers.ModelSerializer):
 class EquipmentSerializer(serializers.ModelSerializer):
     department_name = serializers.CharField(source="department.name", read_only=True)
     category_name = serializers.CharField(source="category.name", read_only=True)
-    created_by_name = serializers.CharField(source="created_by.name", read_only=True, allow_null=True)
-    approved_by_name = serializers.CharField(source="approved_by.name", read_only=True, allow_null=True)
+    created_by_name = serializers.SerializerMethodField()
+    approved_by_name = serializers.SerializerMethodField()
+    secondary_approved_by_name = serializers.SerializerMethodField()
+    approved_by_id = serializers.UUIDField(source="approved_by.id", read_only=True, allow_null=True)
+    secondary_approved_by_id = serializers.UUIDField(source="secondary_approved_by.id", read_only=True, allow_null=True)
+    corrects_id = serializers.UUIDField(source="corrects.id", read_only=True)
+    has_corrections = serializers.SerializerMethodField()
+
+    @staticmethod
+    def _user_display_name(user) -> Optional[str]:
+        """Prefer full name; fall back to email when name is blank (matches list UI elsewhere)."""
+        if user is None:
+            return None
+        name = (getattr(user, "name", None) or "").strip()
+        if name:
+            return name
+        email = getattr(user, "email", None)
+        return email.strip() if email else None
+
+    def get_created_by_name(self, obj):
+        return self._user_display_name(obj.created_by)
+
+    def get_approved_by_name(self, obj):
+        return self._user_display_name(obj.approved_by)
+
+    def get_secondary_approved_by_name(self, obj):
+        return self._user_display_name(obj.secondary_approved_by)
+
+    def get_has_corrections(self, obj):
+        return obj.corrections.exists()
 
     class Meta:
         model = Equipment
@@ -58,8 +88,16 @@ class EquipmentSerializer(serializers.ModelSerializer):
             "created_by",
             "created_by_name",
             "approved_by",
+            "approved_by_id",
             "approved_by_name",
             "approved_at",
+            "secondary_approved_by_id",
+            "secondary_approved_by_name",
+            "secondary_approved_at",
+            "corrects_id",
+            "has_corrections",
+            "approval_comment",
+            "rejection_comment",
             "created_at",
             "updated_at",
         ]
@@ -69,8 +107,16 @@ class EquipmentSerializer(serializers.ModelSerializer):
             "created_by",
             "created_by_name",
             "approved_by",
+            "approved_by_id",
             "approved_by_name",
             "approved_at",
+            "secondary_approved_by_id",
+            "secondary_approved_by_name",
+            "secondary_approved_at",
+            "corrects_id",
+            "has_corrections",
+            "approval_comment",
+            "rejection_comment",
             "created_at",
             "updated_at",
         ]

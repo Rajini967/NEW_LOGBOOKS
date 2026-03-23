@@ -111,6 +111,8 @@ interface ELogBook {
   remarks: string;
   comment?: string;
   checkedBy: string;
+  approvedBy?: string;
+  rejectedBy?: string;
   timestamp: Date;
   status: 'pending' | 'approved' | 'rejected' | 'draft' | 'pending_secondary_approval';
   /** User who approved or rejected (rejector for rejected / pending_secondary_approval entries) */
@@ -120,6 +122,8 @@ interface ELogBook {
   has_corrections?: boolean;
   tolerance_status?: 'none' | 'within' | 'outside';
 }
+
+const CREATOR_ONLY_REJECTED_EDIT_MESSAGE = "Only the original creator can edit/correct a rejected entry.";
 
 type PumpStatus = 'ON' | 'OFF';
 
@@ -521,6 +525,11 @@ export default function ELogBookPage() {
             compressorReturnTemp: log.compressor_return_temp,
             remarks: log.remarks || '',
             checkedBy: log.operator_name,
+            approvedBy: log.status === 'approved' ? (log.approved_by_name || '') : '',
+            rejectedBy:
+              log.status === 'rejected' || log.status === 'pending_secondary_approval'
+                ? (log.approved_by_name || '')
+                : '',
             timestamp,
             status: log.status,
           } as ELogBook;
@@ -592,13 +601,14 @@ export default function ELogBookPage() {
           .filter((d): d is Date => !!d)
           .sort((a, b) => a.getTime() - b.getTime())[0] || null;
       setMissedReadingNextDue(firstNext);
-      setShowMissedReadingPopup(true);
     } else {
       setMissedEquipments(null);
       setShowMissedReadingPopup(false);
       setMissedReadingNextDue(null);
     }
   }, [logs, sessionSettings, equipmentByType]);
+
+  const hasMissedReadings = !!missedReadingNextDue || (missedEquipments?.length ?? 0) > 0;
 
   // Refresh logs from API
   const refreshLogs = async () => {
@@ -674,6 +684,11 @@ export default function ELogBookPage() {
           remarks: log.remarks || '',
           comment: log.comment || '',
           checkedBy: log.operator_name,
+          approvedBy: log.status === 'approved' ? (log.approved_by_name || '') : '',
+          rejectedBy:
+            log.status === 'rejected' || log.status === 'pending_secondary_approval'
+              ? (log.approved_by_name || '')
+              : '',
           timestamp: timestamp,
           status: log.status as 'pending' | 'approved' | 'rejected' | 'draft' | 'pending_secondary_approval',
           operator_id: log.operator_id,
@@ -696,6 +711,11 @@ export default function ELogBookPage() {
           remarks: log.remarks || '',
           comment: log.comment || '',
           checkedBy: log.operator_name,
+          approvedBy: log.status === 'approved' ? (log.approved_by_name || '') : '',
+          rejectedBy:
+            log.status === 'rejected' || log.status === 'pending_secondary_approval'
+              ? (log.approved_by_name || '')
+              : '',
           timestamp,
           status: log.status as 'pending' | 'approved' | 'rejected' | 'draft' | 'pending_secondary_approval',
           operator_id: log.operator_id,
@@ -718,6 +738,11 @@ export default function ELogBookPage() {
           remarks: log.remarks || '',
           comment: log.comment || '',
           checkedBy: log.operator_name,
+          approvedBy: log.status === 'approved' ? (log.approved_by_name || '') : '',
+          rejectedBy:
+            log.status === 'rejected' || log.status === 'pending_secondary_approval'
+              ? (log.approved_by_name || '')
+              : '',
           timestamp,
           status: log.status as 'pending' | 'approved' | 'rejected' | 'draft' | 'pending_secondary_approval',
           operator_id: log.operator_id,
@@ -740,6 +765,11 @@ export default function ELogBookPage() {
           remarks: log.remarks || '',
           comment: log.comment || '',
           checkedBy: log.operator_name,
+          approvedBy: log.status === 'approved' ? (log.approved_by_name || '') : '',
+          rejectedBy:
+            log.status === 'rejected' || log.status === 'pending_secondary_approval'
+              ? (log.approved_by_name || '')
+              : '',
           timestamp,
           status: log.status as 'pending' | 'approved' | 'rejected' | 'draft' | 'pending_secondary_approval',
           operator_id: log.operator_id,
@@ -1073,8 +1103,11 @@ export default function ELogBookPage() {
         }
         if (editingLogId && editingChillerLog) {
           const isCorrection =
-            (editingChillerLog.status === 'rejected' || editingChillerLog.status === 'pending_secondary_approval') &&
-            user?.role !== 'operator';
+            editingChillerLog.status === 'rejected' || editingChillerLog.status === 'pending_secondary_approval';
+          if (isCorrection && editingChillerLog.operator_id !== user?.id) {
+            toast.error(CREATOR_ONLY_REJECTED_EDIT_MESSAGE);
+            return;
+          }
           if (isCorrection) {
             await chillerLogAPI.correct(editingLogId, logData);
             toast.success('Chiller entry corrected as new entry');
@@ -1325,7 +1358,16 @@ export default function ELogBookPage() {
     setRejectConfirmOpen(true);
   };
 
+  const canEditRejectedRow = (log: ELogBook) =>
+    log.status === 'rejected' &&
+    log.operator_id === user?.id &&
+    (!log.has_corrections || Boolean(log.corrects_id));
+
   const handleEditLog = (log: ELogBook) => {
+    if (!canEditRejectedRow(log)) {
+      toast.error(CREATOR_ONLY_REJECTED_EDIT_MESSAGE);
+      return;
+    }
     // Only chiller entries are shown on this page
     setEditingLogId(log.id);
 
@@ -1444,6 +1486,19 @@ export default function ELogBookPage() {
       return value < limit.min;
     }
     return false;
+  };
+
+  const hasOutOfLimitReadings = (log: ELogBook): boolean => {
+    const limits = equipmentLimits[log.equipmentType as keyof typeof equipmentLimits];
+    if (!limits) return false;
+
+    return Object.keys(limits).some((field) => {
+      const raw = (log as any)[field];
+      if (raw === undefined || raw === null || raw === "") return false;
+      const value = Number(raw);
+      if (Number.isNaN(value)) return false;
+      return isValueOutOfLimit(log, field, value);
+    });
   };
 
   const isFormValueOutOfLimit = (
@@ -1636,6 +1691,20 @@ export default function ELogBookPage() {
           </div>
 
           <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              disabled={!hasMissedReadings}
+              onClick={() => setShowMissedReadingPopup(true)}
+              title={!hasMissedReadings ? "No missed readings" : "Show missing readings"}
+            >
+              <Clock className="w-4 h-4 mr-2" />
+              Missing Readings
+              {!!missedEquipments?.length && (
+                <span className="ml-2 px-1.5 py-0.5 text-xs font-semibold bg-primary text-primary-foreground rounded-full">
+                  {missedEquipments.length}
+                </span>
+              )}
+            </Button>
             {/* Filter Button */}
             <Dialog open={isFilterOpen} onOpenChange={setIsFilterOpen}>
               <DialogTrigger asChild>
@@ -3254,7 +3323,9 @@ export default function ELogBookPage() {
                   <th className="px-3 py-2 text-left font-semibold min-w-[140px]">Readings</th>
                   <th className="px-3 py-2 text-center font-semibold min-w-[140px]">Remarks</th>
                   <th className="px-3 py-2 text-left font-semibold min-w-[170px]">Comment</th>
-                  <th className="px-3 py-2 text-left font-semibold w-[140px]">Checked By</th>
+                  <th className="px-3 py-2 text-left font-semibold w-[140px]">Done By</th>
+                  <th className="px-3 py-2 text-left font-semibold w-[160px]">Approved By</th>
+                  <th className="px-3 py-2 text-left font-semibold w-[160px]">Rejected By</th>
                   <th className="px-3 py-2 text-left font-semibold w-[110px]">Status</th>
                   <th className="px-3 py-2 text-left font-semibold w-[140px]">Actions</th>
                 </tr>
@@ -3262,13 +3333,13 @@ export default function ELogBookPage() {
               <tbody className="divide-y divide-border">
                 {isLoading ? (
                   <tr>
-                    <td colSpan={10} className="px-4 py-12 text-center text-muted-foreground">
+                    <td colSpan={12} className="px-4 py-12 text-center text-muted-foreground">
                       <p className="text-sm">Loading entries...</p>
                     </td>
                   </tr>
                 ) : filteredLogs.filter((log) => log.equipmentType === 'chiller').length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="px-4 py-12 text-center text-muted-foreground">
+                    <td colSpan={12} className="px-4 py-12 text-center text-muted-foreground">
                       <p className="text-sm">
                         {activeFilterCount > 0 
                           ? 'No records found matching the selected filters'
@@ -3324,7 +3395,11 @@ export default function ELogBookPage() {
                           type="button"
                           variant="outline"
                           size="sm"
-                          className="text-xs"
+                          className={cn(
+                            "text-xs",
+                            hasOutOfLimitReadings(log) &&
+                              "text-destructive border-destructive/50 hover:bg-destructive/10"
+                          )}
                           onClick={() => handleViewReadingsClick(log.id)}
                         >
                           <Eye className="w-3.5 h-3.5 mr-1.5" />
@@ -3363,6 +3438,12 @@ export default function ELogBookPage() {
                       </td>
                       <td className="px-4 py-3">
                         <span className="text-sm text-foreground">{log.checkedBy}</span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="text-sm text-foreground">{log.approvedBy || '—'}</span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="text-sm text-foreground">{log.rejectedBy || '—'}</span>
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex flex-wrap items-center gap-2">
@@ -3464,15 +3545,17 @@ export default function ELogBookPage() {
                                 size="icon"
                                 className={cn(
                                   'h-7 w-7',
-                                  (log.status === 'rejected' || log.status === 'pending_secondary_approval')
+                                  canEditRejectedRow(log)
                                     ? ''
                                     : 'opacity-40 cursor-not-allowed'
                                 )}
-                                title={log.status === 'rejected' || log.status === 'pending_secondary_approval' ? 'Edit entry' : 'Edit only available after reject'}
+                                title={canEditRejectedRow(log) ? 'Edit entry' : 'Edit only available after reject'}
                                 onClick={() => {
-                                  if (log.status === 'rejected' || log.status === 'pending_secondary_approval') handleEditLog(log);
+                                  if (canEditRejectedRow(log)) {
+                                    handleEditLog(log);
+                                  }
                                 }}
-                                disabled={log.status !== 'rejected' && log.status !== 'pending_secondary_approval'}
+                                disabled={!canEditRejectedRow(log)}
                               >
                                 <Edit className="w-4 h-4" />
                               </Button>
@@ -3490,6 +3573,17 @@ export default function ELogBookPage() {
                                 </Link>
                               </Button>
                             </>
+                          )}
+                          {user?.role === 'operator' && canEditRejectedRow(log) && (
+                            <Button
+                              variant='ghost'
+                              size='icon'
+                              className='h-7 w-7'
+                              title='Edit entry'
+                              onClick={() => handleEditLog(log)}
+                            >
+                              <Edit className='w-4 h-4' />
+                            </Button>
                           )}
                           {user?.role === 'super_admin' && (
                             <Button

@@ -59,9 +59,8 @@ class Equipment(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     equipment_number = models.CharField(
         max_length=100,
-        unique=True,
         db_index=True,
-        help_text="Unique equipment identifier used in log entries.",
+        help_text="Equipment identifier used in log entries.",
     )
     name = models.CharField(max_length=255)
     capacity = models.CharField(
@@ -99,12 +98,14 @@ class Equipment(models.Model):
     )
     # Approval workflow fields
     STATUS_CHOICES = [
+        ("draft", "Draft"),
         ("pending", "Pending"),
         ("approved", "Approved"),
         ("rejected", "Rejected"),
+        ("pending_secondary_approval", "Pending secondary approval"),
     ]
     status = models.CharField(
-        max_length=20,
+        max_length=30,
         choices=STATUS_CHOICES,
         default="pending",
         help_text="Approval status for this equipment master record.",
@@ -117,6 +118,32 @@ class Equipment(models.Model):
         related_name="approved_equipment",
     )
     approved_at = models.DateTimeField(blank=True, null=True)
+    secondary_approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="secondary_approved_equipment",
+    )
+    secondary_approved_at = models.DateTimeField(blank=True, null=True)
+    corrects = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="corrections",
+        help_text="Original rejected equipment record that this row corrects.",
+    )
+    approval_comment = models.TextField(
+        blank=True,
+        default="",
+        help_text="Comment provided when this equipment was approved.",
+    )
+    rejection_comment = models.TextField(
+        blank=True,
+        default="",
+        help_text="Comment provided when this equipment was rejected.",
+    )
     log_entry_interval = models.CharField(
         max_length=10,
         choices=LogEntryInterval.choices,

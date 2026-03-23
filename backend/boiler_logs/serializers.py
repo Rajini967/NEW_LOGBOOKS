@@ -6,6 +6,7 @@ from reports.utils import log_limit_change
 class BoilerLogSerializer(serializers.ModelSerializer):
     operator_id = serializers.UUIDField(source='operator.id', read_only=True)
     approved_by_id = serializers.UUIDField(source='approved_by.id', read_only=True, allow_null=True)
+    approved_by_name = serializers.SerializerMethodField()
     secondary_approved_by_id = serializers.UUIDField(source='secondary_approved_by.id', read_only=True, allow_null=True)
     corrects_id = serializers.UUIDField(source='corrects.id', read_only=True, allow_null=True)
     has_corrections = serializers.SerializerMethodField()
@@ -27,12 +28,12 @@ class BoilerLogSerializer(serializers.ModelSerializer):
             'daily_diesel_consumption_liters', 'daily_furnace_oil_consumption_liters', 'daily_brigade_consumption_kg',
             'steam_consumption_kg_hr',
             'remarks', 'comment', 'operator_id', 'operator_name', 'status',
-            'approved_by_id', 'approved_at', 'secondary_approved_by_id', 'secondary_approved_at',
+            'approved_by_id', 'approved_by_name', 'approved_at', 'secondary_approved_by_id', 'secondary_approved_at',
             'corrects_id', 'has_corrections', 'tolerance_status',
             'timestamp', 'created_at', 'updated_at'
         ]
         read_only_fields = [
-            'id', 'operator_id', 'operator_name', 'approved_by_id', 'approved_at',
+            'id', 'operator_id', 'operator_name', 'approved_by_id', 'approved_by_name', 'approved_at',
             'secondary_approved_by_id', 'secondary_approved_at',
             'corrects_id', 'has_corrections', 'tolerance_status',
             'created_at', 'updated_at'
@@ -40,6 +41,13 @@ class BoilerLogSerializer(serializers.ModelSerializer):
 
     def get_has_corrections(self, obj: BoilerLog) -> bool:
         return obj.corrections.exists()
+
+    def get_approved_by_name(self, obj: BoilerLog):
+        user = obj.approved_by
+        if user is None:
+            return None
+        name = (getattr(user, "name", None) or "").strip()
+        return name or getattr(user, "email", None)
 
     def get_tolerance_status(self, obj: BoilerLog) -> str:
         try:

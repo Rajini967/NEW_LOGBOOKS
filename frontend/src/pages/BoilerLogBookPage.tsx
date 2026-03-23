@@ -41,7 +41,10 @@ import {
 } from "@/components/ui/alert-dialog";
 import { EntryIntervalBadge } from "@/components/logbook/EntryIntervalBadge";
 import { MissedReadingPopup } from "@/components/logbook/MissedReadingPopup";
-import { getNextDueAndMissed } from "@/lib/missed-reading";
+import {
+  computeMissedByEquipment,
+  type EquipmentMissInfo,
+} from "@/lib/missed-reading";
 import { MaintenanceTimingsSection } from "@/components/logbook/MaintenanceTimingsSection";
 import type { MaintenanceTimingsValue } from "@/types/maintenance-timings";
 
@@ -122,6 +125,8 @@ interface BoilerLog {
   remarks: string;
   comment?: string;
   checkedBy: string;
+  approvedBy?: string;
+  rejectedBy?: string;
   timestamp: Date;
   status: "pending" | "approved" | "rejected" | "draft" | "pending_secondary_approval";
   /** User who approved or rejected (rejector for rejected / pending_secondary_approval entries) */
@@ -132,11 +137,14 @@ interface BoilerLog {
   tolerance_status?: "none" | "within" | "outside";
 }
 
+const CREATOR_ONLY_REJECTED_EDIT_MESSAGE = "Only the original creator can edit/correct a rejected entry.";
+
 const BoilerLogBookPage: React.FC = () => {
   const { user, sessionSettings } = useAuth();
   const [logs, setLogs] = useState<BoilerLog[]>([]);
   const [showMissedReadingPopup, setShowMissedReadingPopup] = useState(false);
   const [missedReadingNextDue, setMissedReadingNextDue] = useState<Date | null>(null);
+  const [missedEquipments, setMissedEquipments] = useState<EquipmentMissInfo[] | null>(null);
   const [filteredLogs, setFilteredLogs] = useState<BoilerLog[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -254,6 +262,17 @@ const BoilerLogBookPage: React.FC = () => {
     return false;
   };
 
+  const hasOutOfLimitReadings = (log: BoilerLog): boolean => {
+    const fields = Object.keys(boilerLimits) as BoilerLimitField[];
+    return fields.some((field) => {
+      const raw = (log as any)[field];
+      if (raw === undefined || raw === null || raw === "") return false;
+      const value = Number(raw);
+      if (Number.isNaN(value)) return false;
+      return isValueOutOfLimit(log, field, value);
+    });
+  };
+
   const [filters, setFilters] = useState({
     fromDate: "",
     toDate: "",
@@ -341,6 +360,11 @@ const BoilerLogBookPage: React.FC = () => {
           remarks: log.remarks || "",
           comment: log.comment || "",
           checkedBy: log.operator_name,
+          approvedBy: log.status === "approved" ? (log.approved_by_name || "") : "",
+          rejectedBy:
+            log.status === "rejected" || log.status === "pending_secondary_approval"
+              ? (log.approved_by_name || "")
+              : "",
           timestamp,
           status: log.status as BoilerLog["status"],
           operator_id: log.operator_id,
@@ -393,6 +417,11 @@ const BoilerLogBookPage: React.FC = () => {
             remarks: log.remarks || "",
             comment: log.comment,
             checkedBy: log.operator_name,
+            approvedBy: log.status === "approved" ? (log.approved_by_name || "") : "",
+            rejectedBy:
+              log.status === "rejected" || log.status === "pending_secondary_approval"
+                ? (log.approved_by_name || "")
+                : "",
             timestamp,
             status: log.status,
             operator_id: log.operator_id,
@@ -415,25 +444,62 @@ const BoilerLogBookPage: React.FC = () => {
   }, [formData.equipmentId]);
 
   useEffect(() => {
-    if (!sessionSettings?.log_entry_interval || logs.length === 0) return;
-    const latest = logs[0];
-    const lastTs = latest?.timestamp
-      ? latest.timestamp instanceof Date
-        ? latest.timestamp
-        : new Date(latest.timestamp)
-      : null;
-    const eq = equipmentOptions.find((e) => e.equipment_number === latest?.equipmentId);
-    const interval = (eq?.log_entry_interval || sessionSettings.log_entry_interval) as "hourly" | "shift" | "daily";
-    const shiftHours = eq?.shift_duration_hours ?? sessionSettings.shift_duration_hours ?? 8;
-    const { nextDue, isMissed } = getNextDueAndMissed(lastTs, interval, shiftHours);
-    if (isMissed && nextDue) {
-      setMissedReadingNextDue(nextDue);
-      setShowMissedReadingPopup(true);
+    if (!sessionSettings?.log_entry_interval || logs.length === 0) {
+      setMissedEquipments(null);
+      setShowMissedReadingPopup(false);
+      setMissedReadingNextDue(null);
+      return;
+    }
+    const defaultInterval = sessionSettings.log_entry_interval as "hourly" | "shift" | "daily";
+    const defaultShift = sessionSettings.shift_duration_hours ?? 8;
+    const resolveInterval = (equipmentId?: string): "hourly" | "shift" | "daily" => {
+      const eq = equipmentId
+        ? equipmentOptions.find((e) => e.equipment_number === equipmentId)
+        : undefined;
+      return (
+        (eq?.log_entry_interval as "hourly" | "shift" | "daily") ||
+        defaultInterval ||
+        "daily"
+      );
+    };
+    const resolveShiftHours = (equipmentId?: string): number => {
+      const eq = equipmentId
+        ? equipmentOptions.find((e) => e.equipment_number === equipmentId)
+        : undefined;
+      return eq?.shift_duration_hours ?? defaultShift;
+    };
+
+    const perEquipment = computeMissedByEquipment(
+      logs.map((log) => ({
+        equipment_id: log.equipmentId,
+        equipment_name: log.equipmentId,
+        timestamp: log.timestamp,
+      })),
+      {
+        resolveInterval: (eqId) => resolveInterval(eqId),
+        resolveShiftHours: (eqId) => resolveShiftHours(eqId),
+      },
+    );
+
+    const missedOnly = perEquipment.filter((m) => m.isMissed);
+    if (missedOnly.length > 0) {
+      setMissedEquipments(missedOnly);
+      const firstNext =
+        missedOnly
+          .map((m) => m.nextDue)
+          .filter((d): d is Date => !!d)
+          .sort((a, b) => a.getTime() - b.getTime())[0] || null;
+      setMissedReadingNextDue(firstNext);
     } else {
+      setMissedEquipments(null);
       setShowMissedReadingPopup(false);
       setMissedReadingNextDue(null);
     }
   }, [logs, sessionSettings, equipmentOptions]);
+
+  const hasMissedReadings =
+    !!missedReadingNextDue || (missedEquipments?.length ?? 0) > 0;
+  const missedReadingsCount = missedEquipments?.length ?? (hasMissedReadings ? 1 : 0);
 
   const uniqueCheckedBy = useMemo(() => {
     if (!logs.length) return [];
@@ -572,8 +638,11 @@ const BoilerLogBookPage: React.FC = () => {
         }
         if (editingLogId && editingBoilerLog) {
           const isCorrection =
-            (editingBoilerLog.status === "rejected" || editingBoilerLog.status === "pending_secondary_approval") &&
-            user?.role !== "operator";
+            editingBoilerLog.status === "rejected" || editingBoilerLog.status === "pending_secondary_approval";
+          if (isCorrection && editingBoilerLog.operator_id !== user?.id) {
+            toast.error(CREATOR_ONLY_REJECTED_EDIT_MESSAGE);
+            return;
+          }
           if (isCorrection) {
             await boilerLogAPI.correct(editingLogId, logData as any);
             toast.success("Boiler entry corrected as new entry.");
@@ -694,8 +763,11 @@ const BoilerLogBookPage: React.FC = () => {
       }
       if (editingLogId && editingBoilerLog) {
         const isCorrection =
-          (editingBoilerLog.status === "rejected" || editingBoilerLog.status === "pending_secondary_approval") &&
-          user?.role !== "operator";
+          editingBoilerLog.status === "rejected" || editingBoilerLog.status === "pending_secondary_approval";
+        if (isCorrection && editingBoilerLog.operator_id !== user?.id) {
+          toast.error(CREATOR_ONLY_REJECTED_EDIT_MESSAGE);
+          return;
+        }
         if (isCorrection) {
           await boilerLogAPI.correct(editingLogId, logData as any);
           toast.success("Boiler entry corrected as new entry.");
@@ -814,6 +886,14 @@ const BoilerLogBookPage: React.FC = () => {
   };
 
   const handleEditLog = (log: BoilerLog) => {
+    if (
+      log.status !== "rejected" ||
+      log.operator_id !== user?.id ||
+      (log.has_corrections && !log.corrects_id)
+    ) {
+      toast.error(CREATOR_ONLY_REJECTED_EDIT_MESSAGE);
+      return;
+    }
     setEditingLogId(log.id);
     setFormData({
       equipmentId: log.equipmentId ?? "",
@@ -897,7 +977,12 @@ const BoilerLogBookPage: React.FC = () => {
       await refreshLogs();
     } catch (error: any) {
       console.error("Error rejecting boiler entry:", error);
-      toast.error(error?.response?.data?.remarks?.[0] || error?.message || "Failed to reject boiler entry");
+      const data = error?.response?.data;
+      const detail =
+        (Array.isArray(data?.detail) ? data.detail.join(" ") : data?.detail) ||
+        data?.error ||
+        (Array.isArray(data?.remarks) ? data.remarks.join(" ") : data?.remarks);
+      toast.error(detail || error?.message || "Failed to reject boiler entry");
     }
   };
 
@@ -924,7 +1009,7 @@ const BoilerLogBookPage: React.FC = () => {
       <div className="px-4 pt-0">
         <EntryIntervalBadge />
       </div>
-      {showMissedReadingPopup && missedReadingNextDue && (
+      {showMissedReadingPopup && hasMissedReadings && (
         <MissedReadingPopup
           open={showMissedReadingPopup}
           onClose={() => {
@@ -933,6 +1018,7 @@ const BoilerLogBookPage: React.FC = () => {
           }}
           logTypeLabel="Boiler"
           nextDue={missedReadingNextDue}
+          equipmentList={missedEquipments ?? undefined}
         />
       )}
       <main className="p-4 space-y-4">
@@ -957,6 +1043,22 @@ const BoilerLogBookPage: React.FC = () => {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={!hasMissedReadings}
+              onClick={() => setShowMissedReadingPopup(true)}
+              title={!hasMissedReadings ? "No missed readings" : "Show missing readings"}
+            >
+              <Clock className="w-4 h-4 mr-2" />
+              Missing Readings
+              {missedReadingsCount > 0 && (
+                <span className="ml-2 px-1.5 py-0.5 text-xs font-semibold bg-primary text-primary-foreground rounded-full">
+                  {missedReadingsCount}
+                </span>
+              )}
+            </Button>
             {/* Filter Button - dialog like Chiller */}
             <Dialog open={isFilterOpen} onOpenChange={setIsFilterOpen}>
               <DialogTrigger asChild>
@@ -1460,7 +1562,9 @@ const BoilerLogBookPage: React.FC = () => {
                   <th className="px-4 py-2 text-left font-semibold min-w-[140px]">Readings</th>
                   <th className="px-4 py-2 text-center font-semibold min-w-[140px]">Remarks</th>
                   <th className="px-4 py-2 text-left font-semibold min-w-[170px]">Comment</th>
-                  <th className="px-4 py-2 text-left font-semibold w-[140px]">Checked By</th>
+                  <th className="px-4 py-2 text-left font-semibold w-[140px]">Done By</th>
+                  <th className="px-4 py-2 text-left font-semibold w-[160px]">Approved By</th>
+                  <th className="px-4 py-2 text-left font-semibold w-[160px]">Rejected By</th>
                   <th className="px-4 py-2 text-left font-semibold w-[110px]">Status</th>
                   <th className="px-4 py-2 text-left font-semibold w-[140px]">Actions</th>
                 </tr>
@@ -1469,7 +1573,7 @@ const BoilerLogBookPage: React.FC = () => {
                 {filteredLogs.length === 0 && !isLoading && (
                   <tr>
                     <td
-                      colSpan={10}
+                      colSpan={12}
                       className="px-3 py-6 text-center text-muted-foreground"
                     >
                       No Boiler Log Book entries found.
@@ -1509,7 +1613,11 @@ const BoilerLogBookPage: React.FC = () => {
                         type="button"
                         variant="outline"
                         size="sm"
-                        className="text-xs"
+                        className={cn(
+                          "text-xs",
+                          hasOutOfLimitReadings(log) &&
+                            "text-destructive border-destructive/50 hover:bg-destructive/10"
+                        )}
                         onClick={() => handleViewReadingsClick(log.id)}
                       >
                         <Eye className="w-3.5 h-3.5 mr-1.5" />
@@ -1550,13 +1658,17 @@ const BoilerLogBookPage: React.FC = () => {
                       <span className="text-sm text-foreground">{log.checkedBy}</span>
                     </td>
                     <td className="px-4 py-3">
+                      <span className="text-sm text-foreground">{log.approvedBy || "—"}</span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className="text-sm text-foreground">{log.rejectedBy || "—"}</span>
+                    </td>
+                    <td className="px-4 py-3">
                       <div className="flex flex-wrap items-center gap-2">
                         <Badge
                           variant={
                             log.has_corrections && !log.corrects_id
                               ? "destructive"
-                              : log.corrects_id
-                              ? "warning"
                               : log.status === "approved"
                               ? "success"
                               : log.status === "rejected"
@@ -1568,20 +1680,26 @@ const BoilerLogBookPage: React.FC = () => {
                         >
                           {log.has_corrections && !log.corrects_id
                             ? "Rejected"
-                            : log.corrects_id
-                            ? "Pending"
+                            : log.status === "approved"
+                            ? "Approved"
                             : log.status === "pending_secondary_approval" || log.status === "pending"
                             ? "Pending"
                             : log.status === "rejected"
                             ? "Rejected"
-                            : log.status === "approved"
-                            ? "Approved"
                             : log.status === "draft"
                             ? "Draft"
                             : log.status}
                         </Badge>
                         {log.corrects_id && (
-                          <span className="text-[10px] text-amber-700 whitespace-nowrap">Correction entry</span>
+                          <span
+                            className={
+                              log.status === "approved"
+                                ? "text-[10px] text-emerald-700 whitespace-nowrap"
+                                : "text-[10px] text-amber-700 whitespace-nowrap"
+                            }
+                          >
+                            {log.status === "approved" ? "Approved correction entry" : "Correction entry"}
+                          </span>
                         )}
                         {log.has_corrections && !log.corrects_id && (
                           <span className="text-[10px] text-emerald-700 whitespace-nowrap">Has corrections</span>
@@ -1646,6 +1764,10 @@ const BoilerLogBookPage: React.FC = () => {
                               title={log.status === "pending" || log.status === "draft" || log.status === "pending_secondary_approval" ? "Reject" : "Rejected"}
                               onClick={() => {
                                 if (log.status === "pending" || log.status === "draft" || log.status === "pending_secondary_approval") {
+                                  if (log.operator_id === user?.id) {
+                                    toast.error("The log book entry must be rejected by a different user than the operator (Log Book Done By).");
+                                    return;
+                                  }
                                   setSelectedLogId(log.id);
                                   setRejectConfirmOpen(true);
                                 }
@@ -1659,15 +1781,33 @@ const BoilerLogBookPage: React.FC = () => {
                               size="icon"
                               className={cn(
                                 "h-7 w-7",
-                                (log.status === "rejected" || log.status === "pending_secondary_approval")
+                                (log.status === "rejected" &&
+                                  log.operator_id === user?.id &&
+                                  !(log.has_corrections && !log.corrects_id))
                                   ? ""
                                   : "opacity-40 cursor-not-allowed"
                               )}
-                              title={log.status === "rejected" || log.status === "pending_secondary_approval" ? "Edit entry" : "Edit only available after reject"}
+                              title={
+                                log.status === "rejected" &&
+                                log.operator_id === user?.id &&
+                                !(log.has_corrections && !log.corrects_id)
+                                  ? "Edit entry"
+                                  : "Edit only available after reject"
+                              }
                               onClick={() => {
-                                if (log.status === "rejected" || log.status === "pending_secondary_approval") handleEditLog(log);
+                                if (
+                                  log.status === "rejected" &&
+                                  log.operator_id === user?.id &&
+                                  !(log.has_corrections && !log.corrects_id)
+                                ) {
+                                  handleEditLog(log);
+                                }
                               }}
-                              disabled={log.status !== "rejected" && log.status !== "pending_secondary_approval"}
+                              disabled={
+                                log.status !== "rejected" ||
+                                log.operator_id !== user?.id ||
+                                (log.has_corrections && !log.corrects_id)
+                              }
                             >
                               <Edit className="w-4 h-4" />
                             </Button>
@@ -1686,6 +1826,20 @@ const BoilerLogBookPage: React.FC = () => {
                             </Button>
                           </>
                         )}
+                        {user?.role === "operator" &&
+                          log.status === "rejected" &&
+                          log.operator_id === user?.id &&
+                          !(log.has_corrections && !log.corrects_id) && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7"
+                              title="Edit entry"
+                              onClick={() => handleEditLog(log)}
+                            >
+                              <Edit className="w-4 h-4" />
+                            </Button>
+                          )}
                         {user?.role === "super_admin" && (
                           <Button
                             variant="ghost"

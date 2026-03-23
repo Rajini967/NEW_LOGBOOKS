@@ -12,6 +12,7 @@ class CompressorLog(models.Model):
         ('pending', 'Pending'),
         ('approved', 'Approved'),
         ('rejected', 'Rejected'),
+        ('pending_secondary_approval', 'Pending secondary approval'),
     ]
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -41,6 +42,7 @@ class CompressorLog(models.Model):
     compressor_flow = models.FloatField(validators=[MinValueValidator(0)], blank=True, null=True, help_text="Compressor flow (L/min)")
     
     remarks = models.TextField(blank=True, null=True)
+    comment = models.TextField(blank=True, null=True)
     operator = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -48,7 +50,7 @@ class CompressorLog(models.Model):
         related_name='compressor_logs'
     )
     operator_name = models.CharField(max_length=255)
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
+    status = models.CharField(max_length=30, choices=STATUS_CHOICES, default='draft')
     approved_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -57,6 +59,22 @@ class CompressorLog(models.Model):
         related_name='approved_compressor_logs'
     )
     approved_at = models.DateTimeField(blank=True, null=True)
+    secondary_approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='secondary_approved_compressor_logs'
+    )
+    secondary_approved_at = models.DateTimeField(blank=True, null=True)
+    corrects = models.ForeignKey(
+        'self',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='corrections',
+        help_text="If this is a correction, points to the original log entry.",
+    )
     timestamp = models.DateTimeField(auto_now_add=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

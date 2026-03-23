@@ -6,11 +6,13 @@ from .models import FilterLog
 class FilterLogSerializer(serializers.ModelSerializer):
     operator_id = serializers.UUIDField(source='operator.id', read_only=True)
     approved_by_id = serializers.UUIDField(source='approved_by.id', read_only=True, allow_null=True)
+    approved_by_name = serializers.SerializerMethodField()
     secondary_approved_by_id = serializers.UUIDField(
         source='secondary_approved_by.id',
         read_only=True,
         allow_null=True,
     )
+    secondary_approved_by_name = serializers.SerializerMethodField()
     corrects_id = serializers.UUIDField(source='corrects.id', read_only=True, allow_null=True)
     has_corrections = serializers.SerializerMethodField()
     tolerance_status = serializers.SerializerMethodField()
@@ -38,8 +40,10 @@ class FilterLogSerializer(serializers.ModelSerializer):
             'operator_name',
             'status',
             'approved_by_id',
+            'approved_by_name',
             'approved_at',
             'secondary_approved_by_id',
+            'secondary_approved_by_name',
             'secondary_approved_at',
             'corrects_id',
             'has_corrections',
@@ -53,8 +57,10 @@ class FilterLogSerializer(serializers.ModelSerializer):
             'operator_id',
             'operator_name',
             'approved_by_id',
+            'approved_by_name',
             'approved_at',
             'secondary_approved_by_id',
+            'secondary_approved_by_name',
             'secondary_approved_at',
             'corrects_id',
             'has_corrections',
@@ -74,6 +80,20 @@ class FilterLogSerializer(serializers.ModelSerializer):
 
     def get_has_corrections(self, obj: FilterLog) -> bool:
         return obj.corrections.exists()
+
+    def get_approved_by_name(self, obj: FilterLog):
+        user = obj.approved_by
+        if user is None:
+            return None
+        name = (getattr(user, "name", None) or "").strip()
+        return name or getattr(user, "email", None)
+
+    def get_secondary_approved_by_name(self, obj: FilterLog):
+        user = obj.secondary_approved_by
+        if user is None:
+            return None
+        name = (getattr(user, "name", None) or "").strip()
+        return name or getattr(user, "email", None)
 
     def get_tolerance_status(self, obj: FilterLog) -> str:
         try:
