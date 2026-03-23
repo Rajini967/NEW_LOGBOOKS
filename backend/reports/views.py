@@ -1,3 +1,5 @@
+from django.contrib.auth import get_user_model
+from django.db.models import Q
 from rest_framework import viewsets, permissions, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -38,6 +40,16 @@ class ReportViewSet(viewsets.ReadOnlyModelViewSet):
                     'nvpc',
                 ]
             )
+
+        # Non-super-admin users should not see super-admin details.
+        if self.request.user.role != "super_admin":
+            User = get_user_model()
+            super_admin_emails = list(
+                User.all_objects.filter(role="super_admin", is_deleted=False).values_list("email", flat=True)
+            )
+            queryset = queryset.exclude(approved_by__role="super_admin")
+            if super_admin_emails:
+                queryset = queryset.exclude(created_by__in=super_admin_emails)
         
         return queryset.order_by('-approved_at')
 
@@ -60,6 +72,17 @@ class AuditReportViewSet(viewsets.ReadOnlyModelViewSet):
             return AuditEvent.objects.none()
 
         qs = AuditEvent.objects.select_related("user").all()
+
+        # Non-super-admin users should not see super-admin details.
+        if user.role != "super_admin":
+            User = get_user_model()
+            super_admin_user_ids = [
+                str(uid)
+                for uid in User.all_objects.filter(role="super_admin", is_deleted=False).values_list("id", flat=True)
+            ]
+            qs = qs.exclude(user__role="super_admin")
+            if super_admin_user_ids:
+                qs = qs.exclude(Q(object_type="user") & Q(object_id__in=super_admin_user_ids))
 
         # Filters
         from_date = self.request.query_params.get("from_date")

@@ -1508,7 +1508,10 @@ export default function ELogBookPage() {
       { key: 'avgMotorCurrent', label: 'Average motor current', limitField: 'avgMotorCurrent', numeric: true },
       { key: 'compressorRunningTimeMin', label: 'Compressor running time', limitField: 'compressorRunningTimeMin', numeric: true },
       { key: 'starterEnergyKwh', label: 'Starter energy consumption', limitField: 'starterEnergyKwh', numeric: true },
-      { key: 'coolingTowerBlowdownTimeMin', label: 'Cooling tower blow down time (minutes)', numeric: true },
+      // Blowdown is only editable on the day's first entry; don't block subsequent saves.
+      ...(canEditRunningSection
+        ? [{ key: 'coolingTowerBlowdownTimeMin', label: 'Cooling tower blow down time (minutes)', numeric: true } as const]
+        : []),
       { key: 'recordingFrequency', label: 'Recording frequency' },
       { key: 'operatorSign', label: 'Operator Sign & Date' },
       { key: 'verifiedBy', label: 'Verified By (Sign & Date)' },

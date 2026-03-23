@@ -557,6 +557,10 @@ class UserReportViewSet(viewsets.ReadOnlyModelViewSet):
         if is_active in ("true", "false"):
             qs = qs.filter(is_active=(is_active == "true"))
 
+        # Non-super-admin users should not see super-admin details.
+        if user.role != UserRole.SUPER_ADMIN:
+            qs = qs.exclude(role=UserRole.SUPER_ADMIN)
+
         return qs.order_by("-created_at")
 
 
@@ -577,10 +581,10 @@ class UserActivityReportViewSet(viewsets.ReadOnlyModelViewSet):
         if user.role not in [UserRole.SUPERVISOR, UserRole.MANAGER, UserRole.SUPER_ADMIN]:
             return UserActivityLog.objects.none()
 
-        # Exclude Super Admin activity from the report
-        qs = UserActivityLog.objects.select_related("user").exclude(
-            user__role=UserRole.SUPER_ADMIN
-        )
+        qs = UserActivityLog.objects.select_related("user")
+        if user.role != UserRole.SUPER_ADMIN:
+            # Non-super-admin users should not see super-admin activity.
+            qs = qs.exclude(user__role=UserRole.SUPER_ADMIN)
 
         # Filters
         from_date = self.request.query_params.get("from_date")
