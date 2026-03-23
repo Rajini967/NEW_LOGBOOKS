@@ -1575,7 +1575,7 @@ const ChemicalLogBookPage: React.FC = () => {
                 {filteredLogs.map((log) => {
                   const tolClass =
                     log.tolerance_status === "outside"
-                      ? "bg-red-50/80"
+                      ? "bg-red-100"
                       : "";
                   return (
                   <tr key={log.id} className={cn(tolClass, "hover:bg-muted/30 transition-colors")}>
