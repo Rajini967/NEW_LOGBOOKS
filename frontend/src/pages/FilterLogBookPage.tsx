@@ -1956,7 +1956,7 @@ const FilterLogBookPage: React.FC = () => {
                   const isSelected = selectedLogIds.includes(log.id);
                   const tolClass =
                     log.tolerance_status === "outside"
-                      ? "bg-red-50/80"
+                      ? "bg-red-100"
                       : "";
 
                   return (
