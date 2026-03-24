@@ -13,11 +13,20 @@ export interface NextDueResult {
 export interface EquipmentMissInfo {
   equipmentId: string;
   equipmentName?: string;
+  equipmentTypeLabel?: string;
   lastTimestamp: Date | null;
   nextDue: Date | null;
   isMissed: boolean;
   interval: LogEntryIntervalType;
   shiftHours: number;
+  expectedSlotCount?: number;
+  presentSlotCount?: number;
+  missingSlotCount?: number;
+  missingSlotRanges?: {
+    slotStart: Date;
+    slotEnd: Date;
+    label: string;
+  }[];
 }
 
 /**
@@ -117,4 +126,9 @@ export function computeMissedByEquipment(
   });
 
   return result;
+}
+
+export function getTotalMissingSlots(equipmentList: EquipmentMissInfo[] | null | undefined): number {
+  if (!equipmentList || equipmentList.length === 0) return 0;
+  return equipmentList.reduce((sum, item) => sum + (item.missingSlotCount ?? (item.isMissed ? 1 : 0)), 0);
 }

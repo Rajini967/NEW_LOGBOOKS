@@ -6,8 +6,16 @@ from rest_framework.exceptions import ValidationError
 from datetime import datetime, timedelta, date
 import calendar
 from django.db import models
+from django.db.models import Q
 from django.utils import timezone
-from core.log_slot_utils import get_interval_for_equipment, get_slot_range, compute_slot_status
+from core.log_slot_utils import (
+    get_interval_for_equipment,
+    get_slot_range,
+    compute_slot_status,
+    compute_missing_slots_for_day,
+    get_slot_day_bounds,
+    get_slot_timezone,
+)
 from equipment.models import EquipmentCategory
 from .models import Chemical, ChemicalStock, ChemicalPreparation, ChemicalAssignment, ChemicalDashboardConfig
 from .serializers import (
@@ -431,6 +439,14 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
         elif self.action == 'approve':
             return [IsAuthenticated(), CanApproveReports()]
         return [IsAuthenticated()]
+
+    def _chemical_scope_filter(self, chemical_id=None, chemical_name=None):
+        if chemical_id:
+            return Q(chemical_id=chemical_id)
+        chemical_name = (chemical_name or "").strip()
+        if chemical_name:
+            return Q(chemical__isnull=True) & Q(chemical_name__iexact=chemical_name)
+        return Q(chemical__isnull=True) & (Q(chemical_name__isnull=True) | Q(chemical_name=""))
     
     def perform_create(self, serializer):
         """
@@ -444,24 +460,17 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
         timestamp = validated.get("timestamp") or timezone.now()
         if equipment_name is not None:
             base_qs = ChemicalPreparation.objects.filter(equipment_name=equipment_name)
-            last_log = base_qs.order_by('-timestamp').first()
-            last_time = last_log.timestamp if last_log is not None else None
-            slot_info = compute_slot_status(equipment_name or "", "chemical", timestamp, last_time=last_time)
-            slot_start = slot_info["slot_start"]
-            slot_end = slot_info["slot_end"]
-            tolerance_end = slot_info["tolerance_end"]
-            status = slot_info["status"]
-
-            if status == "interval":
-                if base_qs.filter(timestamp__gte=slot_start, timestamp__lt=slot_end).exists():
-                    raise ValidationError(
-                        {"detail": ["An entry for this equipment already exists for this time slot."]}
-                    )
-            elif status == "tolerance" and tolerance_end is not None:
-                if base_qs.filter(timestamp__gte=slot_end, timestamp__lte=tolerance_end).exists():
-                    raise ValidationError(
-                        {"detail": ["An entry for this equipment already exists for this time slot."]}
-                    )
+            chemical_obj = validated.get("chemical")
+            chemical_filter = self._chemical_scope_filter(
+                chemical_id=(str(chemical_obj.id) if chemical_obj else None),
+                chemical_name=validated.get("chemical_name"),
+            )
+            interval, shift_hours = get_interval_for_equipment(equipment_name or "", "chemical")
+            slot_start, slot_end = get_slot_range(timestamp, interval, shift_hours)
+            if base_qs.filter(chemical_filter, timestamp__gte=slot_start, timestamp__lt=slot_end).exists():
+                raise ValidationError(
+                    {"detail": ["An entry for this equipment and chemical already exists for this time slot."]}
+                )
         chemical = validated.get("chemical")
         chemical_name = validated.get("chemical_name")
         requested_qty_g = validated.get("chemical_qty")
@@ -528,6 +537,42 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
             and instance.operator_id != request.user.id
         ):
             raise ValidationError({"detail": [CREATOR_ONLY_REJECTED_EDIT_MESSAGE]})
+        incoming_timestamp = request.data.get("timestamp")
+        if incoming_timestamp:
+            try:
+                parsed_timestamp = datetime.fromisoformat(str(incoming_timestamp).replace("Z", "+00:00"))
+                if timezone.is_naive(parsed_timestamp):
+                    parsed_timestamp = timezone.make_aware(parsed_timestamp, timezone.get_current_timezone())
+            except ValueError:
+                parsed_timestamp = instance.timestamp
+        else:
+            parsed_timestamp = instance.timestamp
+        next_equipment_name = request.data.get("equipment_name") or instance.equipment_name
+        next_chemical_id = request.data.get("chemical")
+        next_chemical_name = request.data.get("chemical_name")
+        if next_chemical_id in (None, ""):
+            next_chemical_id = str(instance.chemical_id) if instance.chemical_id else None
+        if next_chemical_name in (None, ""):
+            next_chemical_name = instance.chemical_name
+        interval, shift_hours = get_interval_for_equipment(next_equipment_name or "", "chemical")
+        slot_start, slot_end = get_slot_range(parsed_timestamp, interval, shift_hours)
+        duplicate_exists = (
+            ChemicalPreparation.objects.filter(
+                equipment_name=next_equipment_name,
+            )
+            .filter(
+                self._chemical_scope_filter(
+                    chemical_id=next_chemical_id,
+                    chemical_name=next_chemical_name,
+                ),
+                timestamp__gte=slot_start,
+                timestamp__lt=slot_end,
+            )
+            .exclude(pk=instance.pk)
+            .exists()
+        )
+        if duplicate_exists:
+            raise ValidationError({"detail": ["An entry for this equipment and chemical already exists for this time slot."]})
         tracked_fields = [
             'equipment_name',
             'chemical_name',
@@ -591,6 +636,145 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
             )
 
         return response
+
+    @action(detail=False, methods=['get'], url_path='missing-slots')
+    def missing_slots(self, request):
+        date_str = (request.query_params.get("date") or "").strip()
+        equipment_name_filter = (request.query_params.get("equipment_name") or "").strip()
+        if date_str:
+            try:
+                day = datetime.strptime(date_str[:10], "%Y-%m-%d").date()
+            except ValueError:
+                return Response({"error": "date must be YYYY-MM-DD"}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            day = timezone.localdate()
+
+        day_start, day_end = get_slot_day_bounds(day)
+        slot_tz = get_slot_timezone()
+        base_qs = ChemicalPreparation.objects.filter(timestamp__gte=day_start, timestamp__lt=day_end)
+        if equipment_name_filter:
+            base_qs = base_qs.filter(equipment_name=equipment_name_filter)
+
+        suppressed_equipment_names = set(
+            ChemicalPreparation.objects.filter(
+                timestamp__gte=day_start,
+                timestamp__lt=day_end,
+                activity_type__in=["maintenance", "shutdown"],
+                status__in=["draft", "pending", "pending_secondary_approval"],
+            )
+            .exclude(equipment_name__isnull=True)
+            .exclude(equipment_name="")
+            .values_list("equipment_name", flat=True)
+            .distinct()
+        )
+        if equipment_name_filter:
+            suppressed_equipment_names = {
+                equipment_name for equipment_name in suppressed_equipment_names if equipment_name == equipment_name_filter
+            }
+
+        timestamps_by_equipment = defaultdict(list)
+        timestamps_qs = base_qs.exclude(activity_type__in=["maintenance", "shutdown"])
+        for row in timestamps_qs.values("equipment_name", "timestamp"):
+            equipment_name = (row.get("equipment_name") or "").strip()
+            if not equipment_name:
+                continue
+            timestamps_by_equipment[equipment_name].append(row.get("timestamp"))
+
+        equipment_names = set(timestamps_by_equipment.keys())
+        historical_names = set(
+            ChemicalPreparation.objects.exclude(equipment_name__isnull=True)
+            .exclude(equipment_name="")
+            .values_list("equipment_name", flat=True)
+            .distinct()
+        )
+        equipment_names.update(historical_names)
+        if equipment_name_filter:
+            equipment_names.add(equipment_name_filter)
+
+        equipments_payload = []
+        total_expected_slots = 0
+        total_present_slots = 0
+        total_missing_slots = 0
+        for equipment_name in sorted(equipment_names):
+            if not equipment_name_filter and equipment_name in suppressed_equipment_names:
+                continue
+            interval, shift_hours = get_interval_for_equipment(equipment_name, "chemical")
+            stats = compute_missing_slots_for_day(
+                day_value=day,
+                timestamps=timestamps_by_equipment.get(equipment_name, []),
+                interval=interval,
+                shift_duration_hours=shift_hours,
+                equipment_identifier=equipment_name,
+                log_type="chemical",
+            )
+            expected_count = stats["expected_slot_count"]
+            present_count = stats["present_slot_count"]
+            missing_count = stats["missing_slot_count"]
+            total_expected_slots += expected_count
+            total_present_slots += present_count
+            total_missing_slots += missing_count
+            missing_ranges = [
+                {
+                    "slot_start": timezone.localtime(slot["slot_start"], slot_tz).isoformat(),
+                    "slot_end": timezone.localtime(slot["slot_end"], slot_tz).isoformat(),
+                    "label": (
+                        f'{timezone.localtime(slot["slot_start"], slot_tz).strftime("%H:%M")}'
+                        f' - {timezone.localtime(slot["slot_end"], slot_tz).strftime("%H:%M")}'
+                    ),
+                }
+                for slot in stats["missing_slots"]
+            ]
+            last_reading_ts = (
+                ChemicalPreparation.objects.filter(
+                    equipment_name=equipment_name,
+                    timestamp__gte=day_start,
+                    timestamp__lt=day_end,
+                )
+                .order_by("-timestamp")
+                .values_list("timestamp", flat=True)
+                .first()
+            )
+            if last_reading_ts is None:
+                last_reading_ts = (
+                    ChemicalPreparation.objects.filter(equipment_name=equipment_name)
+                    .order_by("-timestamp")
+                    .values_list("timestamp", flat=True)
+                    .first()
+                )
+            equipments_payload.append(
+                {
+                    "equipment_id": equipment_name.split(" – ")[0].strip() if " – " in equipment_name else equipment_name,
+                    "equipment_name": equipment_name,
+                    "interval": interval,
+                    "shift_duration_hours": shift_hours,
+                    "expected_slot_count": expected_count,
+                    "present_slot_count": present_count,
+                    "missing_slot_count": missing_count,
+                    "next_due": (
+                        timezone.localtime(stats["next_due"]).isoformat()
+                        if stats["next_due"] is not None
+                        else None
+                    ),
+                    "last_reading_timestamp": (
+                        timezone.localtime(last_reading_ts).isoformat()
+                        if last_reading_ts is not None
+                        else None
+                    ),
+                    "missing_slots": missing_ranges,
+                }
+            )
+        return Response(
+            {
+                "date": day.isoformat(),
+                "log_type": "chemical",
+                "total_expected_slots": total_expected_slots,
+                "total_present_slots": total_present_slots,
+                "total_missing_slots": total_missing_slots,
+                "equipment_count": len(equipments_payload),
+                "affected_equipment_count": len([e for e in equipments_payload if e["missing_slot_count"] > 0]),
+                "equipments": equipments_payload,
+            }
+        )
 
     def partial_update(self, request, *args, **kwargs):
         """
@@ -942,6 +1126,11 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
             equipment_name=original.equipment_name,
             timestamp__gte=slot_start,
             timestamp__lt=slot_end,
+        ).filter(
+            self._chemical_scope_filter(
+                chemical_id=(str(payload.get("chemical").id) if payload.get("chemical") else None),
+                chemical_name=payload.get("chemical_name"),
+            )
         )
         chain_root_id = original.corrects_id or original.pk
         conflict_exists = (
@@ -954,7 +1143,7 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
         )
         if conflict_exists:
             raise ValidationError(
-                {'detail': ['An entry for this equipment already exists for this time slot.']}
+                {'detail': ['An entry for this equipment and chemical already exists for this time slot.']}
             )
 
         new_prep = ChemicalPreparation.objects.create(**payload)

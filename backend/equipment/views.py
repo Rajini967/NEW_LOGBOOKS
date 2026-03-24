@@ -1,4 +1,5 @@
-from django.db.models.deletion import ProtectedError
+from django.db.models import Q
+from django.db.models.deletion import ProtectedError, Collector
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import status, viewsets
@@ -151,6 +152,152 @@ class EquipmentViewSet(viewsets.ModelViewSet):
         Return a clear 400 error instead of a 500 traceback.
         """
         instance = self.get_object()
+
+        # Hard block: text-based references in log tables (non-FK) must be removed first.
+        # Many log modules store equipment as CharField, so DB FK constraints do not catch them.
+        def _or_iexact(field_name: str, values):
+            q = Q()
+            for v in values:
+                q |= Q(**{f"{field_name}__iexact": v})
+            return q
+
+        equipment_number = (instance.equipment_number or "").strip()
+        equipment_name = (instance.name or "").strip()
+        equipment_labels = {
+            v
+            for v in [
+                equipment_number,
+                equipment_name,
+                f"{equipment_number} – {equipment_name}".strip(" –"),
+                f"{equipment_number} - {equipment_name}".strip(" -"),
+            ]
+            if v
+        }
+        text_blockers = []
+        try:
+            from chiller_logs.models import ChillerLog
+            count = ChillerLog.objects.filter(_or_iexact("equipment_id", equipment_labels)).count()
+            if count:
+                text_blockers.append({"relation": "ChillerLog", "count": count})
+        except Exception:
+            pass
+        try:
+            from boiler_logs.models import BoilerLog
+            count = BoilerLog.objects.filter(_or_iexact("equipment_id", equipment_labels)).count()
+            if count:
+                text_blockers.append({"relation": "BoilerLog", "count": count})
+        except Exception:
+            pass
+        try:
+            from filter_logs.models import FilterLog
+            count = FilterLog.objects.filter(_or_iexact("equipment_id", equipment_labels)).count()
+            if count:
+                text_blockers.append({"relation": "FilterLog", "count": count})
+        except Exception:
+            pass
+        try:
+            from compressor_logs.models import CompressorLog
+            count = CompressorLog.objects.filter(_or_iexact("equipment_id", equipment_labels)).count()
+            if count:
+                text_blockers.append({"relation": "CompressorLog", "count": count})
+        except Exception:
+            pass
+        try:
+            from briquette_logs.models import BriquetteLog
+            count = BriquetteLog.objects.filter(_or_iexact("equipment_id", equipment_labels)).count()
+            if count:
+                text_blockers.append({"relation": "BriquetteLog", "count": count})
+        except Exception:
+            pass
+        try:
+            from chemical_prep.models import ChemicalPreparation, ChemicalAssignment
+            count_prep = ChemicalPreparation.objects.filter(_or_iexact("equipment_name", equipment_labels)).count()
+            if count_prep:
+                text_blockers.append({"relation": "ChemicalPreparation", "count": count_prep})
+            count_assign = ChemicalAssignment.objects.filter(_or_iexact("equipment_name", equipment_labels)).count()
+            if count_assign:
+                text_blockers.append({"relation": "ChemicalAssignment", "count": count_assign})
+        except Exception:
+            pass
+
+        if text_blockers:
+            return Response(
+                {
+                    "detail": (
+                        "This equipment cannot be deleted because log/assignment records still reference it. "
+                        "Delete those related rows first, then delete equipment."
+                    ),
+                    "related_records": text_blockers,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Hard block if deleting this equipment would cascade into any dependent rows.
+        collector = Collector(using=instance._state.db)
+        collector.collect([instance])
+        cascade_blockers = []
+        for model, objs in collector.data.items():
+            if model == instance.__class__:
+                continue
+            count = len(objs)
+            if count > 0:
+                cascade_blockers.append(
+                    {
+                        "relation": model.__name__,
+                        "count": count,
+                    }
+                )
+        if cascade_blockers:
+            return Response(
+                {
+                    "detail": (
+                        "This equipment cannot be deleted because foreign-key related records exist. "
+                        "Delete those related rows first, then delete equipment."
+                    ),
+                    "related_records": cascade_blockers,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Safety gate: never allow implicit cascade-style deletes from Equipment.
+        # User must explicitly remove dependent records first.
+        related_blockers = []
+        for rel in instance._meta.related_objects:
+            accessor = rel.get_accessor_name()
+            if not accessor:
+                continue
+            try:
+                manager_or_obj = getattr(instance, accessor)
+            except Exception:
+                continue
+            related_count = 0
+            try:
+                if hasattr(manager_or_obj, "all"):
+                    related_count = manager_or_obj.all().count()
+                else:
+                    related_count = 1 if manager_or_obj is not None else 0
+            except Exception:
+                related_count = 0
+            if related_count > 0:
+                related_blockers.append(
+                    {
+                        "relation": rel.related_model.__name__,
+                        "count": related_count,
+                    }
+                )
+
+        if related_blockers:
+            return Response(
+                {
+                    "detail": (
+                        "This equipment cannot be deleted because related records exist. "
+                        "Please delete related records first, then try again."
+                    ),
+                    "related_records": related_blockers,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         try:
             return super().destroy(request, *args, **kwargs)
         except ProtectedError as e:

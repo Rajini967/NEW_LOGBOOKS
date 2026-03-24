@@ -88,6 +88,34 @@ api.interceptors.response.use(
   }
 );
 
+export type MissingSlotsEquipment = {
+  equipment_id: string;
+  equipment_name: string;
+  interval: 'hourly' | 'shift' | 'daily';
+  shift_duration_hours: number;
+  expected_slot_count: number;
+  present_slot_count: number;
+  missing_slot_count: number;
+  next_due: string | null;
+  last_reading_timestamp?: string | null;
+  missing_slots: {
+    slot_start: string;
+    slot_end: string;
+    label: string;
+  }[];
+};
+
+export type MissingSlotsResponse = {
+  date: string;
+  log_type: string;
+  total_expected_slots: number;
+  total_present_slots: number;
+  total_missing_slots: number;
+  equipment_count: number;
+  affected_equipment_count: number;
+  equipments: MissingSlotsEquipment[];
+};
+
 // Auth API functions
 export const authAPI = {
   login: async (email: string, password: string) => {
@@ -415,6 +443,10 @@ export const equipmentAPI = {
     const response = await api.put(`/equipment/${id}/`, data);
     return response.data;
   },
+  patch: async (id: string, data: any) => {
+    const response = await api.patch(`/equipment/${id}/`, data);
+    return response.data;
+  },
 
   delete: async (id: string) => {
     await api.delete(`/equipment/${id}/`);
@@ -672,6 +704,10 @@ export const chemicalPrepAPI = {
     }
     return Array.isArray(response.data) ? response.data : [];
   },
+  missingSlots: async (params?: { date?: string; equipment_name?: string }) => {
+    const response = await api.get<MissingSlotsResponse>('/chemical-preps/missing-slots/', { params });
+    return response.data;
+  },
 
   get: async (id: string) => {
     const response = await api.get(`/chemical-preps/${id}/`);
@@ -807,6 +843,10 @@ export const chillerLogAPI = {
       return response.data.results;
     }
     return Array.isArray(response.data) ? response.data : [];
+  },
+  missingSlots: async (params?: { date?: string; equipment_id?: string }) => {
+    const response = await api.get<MissingSlotsResponse>('/chiller-logs/missing-slots/', { params });
+    return response.data;
   },
 
   get: async (id: string) => {
@@ -1061,6 +1101,10 @@ export const boilerLogAPI = {
     }
     return Array.isArray(response.data) ? response.data : [];
   },
+  missingSlots: async (params?: { date?: string; equipment_id?: string }) => {
+    const response = await api.get<MissingSlotsResponse>('/boiler-logs/missing-slots/', { params });
+    return response.data;
+  },
 
   get: async (id: string) => {
     const response = await api.get(`/boiler-logs/${id}/`);
@@ -1130,6 +1174,45 @@ export const boilerLogAPI = {
   },
   correct: async (id: string, data: any) => {
     const response = await api.post(`/boiler-logs/${id}/correct/`, data);
+    return response.data;
+  },
+};
+
+export const briquetteLogAPI = {
+  list: async (params?: { date_from?: string; date_to?: string; equipment_id?: string }) => {
+    const response = await api.get('/briquette-logs/', { params });
+    if (response.data.results) return response.data.results;
+    return Array.isArray(response.data) ? response.data : [];
+  },
+  missingSlots: async (params?: { date?: string; equipment_id?: string }) => {
+    const response = await api.get<MissingSlotsResponse>('/briquette-logs/missing-slots/', { params });
+    return response.data;
+  },
+  get: async (id: string) => {
+    const response = await api.get(`/briquette-logs/${id}/`);
+    return response.data;
+  },
+  create: async (data: any) => {
+    const response = await api.post('/briquette-logs/', data);
+    return response.data;
+  },
+  update: async (id: string, data: any) => {
+    const response = await api.put(`/briquette-logs/${id}/`, data);
+    return response.data;
+  },
+  patch: async (id: string, data: any) => {
+    const response = await api.patch(`/briquette-logs/${id}/`, data);
+    return response.data;
+  },
+  approve: async (id: string, action: 'approve' | 'reject', remarks?: string) => {
+    const response = await api.post(`/briquette-logs/${id}/approve/`, { action, remarks });
+    return response.data;
+  },
+  delete: async (id: string) => {
+    await api.delete(`/briquette-logs/${id}/`);
+  },
+  correct: async (id: string, data: any) => {
+    const response = await api.post(`/briquette-logs/${id}/correct/`, data);
     return response.data;
   },
 };
@@ -1270,6 +1353,10 @@ export const filterLogAPI = {
       return response.data.results;
     }
     return Array.isArray(response.data) ? response.data : [];
+  },
+  missingSlots: async (params?: { date?: string; equipment_id?: string }) => {
+    const response = await api.get<MissingSlotsResponse>('/filter-logs/missing-slots/', { params });
+    return response.data;
   },
 
   get: async (id: string) => {

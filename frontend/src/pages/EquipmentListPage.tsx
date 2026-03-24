@@ -353,6 +353,27 @@ export default function EquipmentListPage() {
     } catch (error: any) {
       console.error("Delete equipment error:", error);
       const message = extractErrorMessage(error, "Failed to delete equipment");
+      const relatedRecords = error?.data?.related_records || error?.response?.data?.related_records;
+      const lowerMessage = String(message).toLowerCase();
+      if (
+        (Array.isArray(relatedRecords) && relatedRecords.length > 0) ||
+        lowerMessage.includes("assigned to one or more filters") ||
+        lowerMessage.includes("referenced by other records") ||
+        lowerMessage.includes("remove the filter assignments first") ||
+        lowerMessage.includes("foreign-key related records exist")
+      ) {
+        const details =
+          Array.isArray(relatedRecords) && relatedRecords.length > 0
+            ? relatedRecords.map((r: any) => `${r.relation} (${r.count})`).join(", ")
+            : "Unknown";
+        toast.error(
+          `Cannot delete equipment now.\n1) Delete related records first.\n2) Related: ${details}\n3) Then delete this equipment from Equipment List.`
+        );
+        if (Array.isArray(relatedRecords) && relatedRecords.length > 0) {
+          // already included in single combined toast above
+        }
+        return;
+      }
       toast.error(message);
     }
   };
@@ -596,94 +617,6 @@ export default function EquipmentListPage() {
                         }
                         placeholder='e.g. "1000 TR" or "5 TPH"'
                       />
-                    </div>
-
-                    <div className="space-y-2 pt-2 border-t border-border">
-                      <Label>Log entry interval</Label>
-                      <Select
-                        value={formData.log_entry_interval || "__none__"}
-                        onValueChange={(v) =>
-                          setFormData((prev) => ({
-                            ...prev,
-                            log_entry_interval:
-                              v === "__none__" ? "" : (v as LogEntryIntervalType),
-                            shift_duration_hours:
-                              v === "shift" ? prev.shift_duration_hours : "",
-                          }))
-                        }
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Use global default" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="__none__">Use global default</SelectItem>
-                          <SelectItem value="hourly">Hourly</SelectItem>
-                          <SelectItem value="shift">Shift</SelectItem>
-                          <SelectItem value="daily">Daily</SelectItem>
-                        </SelectContent>
-                      </Select>
-                      <p className="text-xs text-muted-foreground">
-                        Override the global log entry interval for this equipment.
-                        Empty = use Settings default.
-                      </p>
-                      {formData.log_entry_interval === "shift" && (
-                        <div className="space-y-1 pt-2">
-                          <Label htmlFor="shift_duration_hours">
-                            Shift duration (hours)
-                          </Label>
-                          <Input
-                            id="shift_duration_hours"
-                            type="number"
-                            min={1}
-                            max={24}
-                            value={
-                              formData.shift_duration_hours === ""
-                                ? ""
-                                : formData.shift_duration_hours
-                            }
-                            onChange={(e) => {
-                              const v = e.target.value;
-                              setFormData((prev) => ({
-                                ...prev,
-                                shift_duration_hours:
-                                  v === "" ? "" : parseInt(v, 10) || 8,
-                              }));
-                            }}
-                            placeholder="e.g. 8"
-                          />
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="space-y-2 pt-2 border-t border-border">
-                      <Label htmlFor="tolerance_minutes">
-                        Log entry tolerance (minutes)
-                      </Label>
-                      <Input
-                        id="tolerance_minutes"
-                        type="number"
-                        min={0}
-                        value={
-                          formData.tolerance_minutes === ""
-                            ? ""
-                            : formData.tolerance_minutes
-                        }
-                        onChange={(e) => {
-                          const v = e.target.value;
-                          setFormData((prev) => ({
-                            ...prev,
-                            tolerance_minutes:
-                              v === "" ? "" : Math.max(0, parseInt(v, 10) || 0),
-                          }));
-                        }}
-                        placeholder="e.g. 15 (±15 minutes around scheduled time)"
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        Within this tolerance window, new log rows will be shown in
-                        yellow; after the tolerance window they will be shown in
-                        red. Leave blank or 0 to disable tolerance highlighting for
-                        this equipment.
-                      </p>
                     </div>
 
                     <div className="space-y-2 pt-2 border-t border-border">

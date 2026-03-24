@@ -4,9 +4,18 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from datetime import datetime, timedelta
+from collections import defaultdict
 
 from accounts.permissions import CanApproveReports, CanLogEntries
-from core.log_slot_utils import get_interval_for_equipment, get_slot_range, compute_slot_status
+from core.log_slot_utils import (
+    get_interval_for_equipment,
+    get_slot_range,
+    compute_slot_status,
+    compute_missing_slots_for_day,
+    get_slot_day_bounds,
+    get_slot_timezone,
+)
 from reports.utils import log_limit_change, log_audit_event, create_report_entry, delete_report_entry
 
 from .models import FilterLog
@@ -64,25 +73,12 @@ class FilterLogViewSet(viewsets.ModelViewSet):
         equipment_id = validated.get('equipment_id')
         timestamp = validated.get('timestamp') or timezone.now()
         base_qs = FilterLog.objects.filter(equipment_id=equipment_id)
-        last_log = base_qs.order_by('-timestamp').first()
-        last_time = last_log.timestamp if last_log is not None else None
-
-        slot_info = compute_slot_status(equipment_id or '', 'filter', timestamp, last_time=last_time)
-        slot_start = slot_info["slot_start"]
-        slot_end = slot_info["slot_end"]
-        tolerance_end = slot_info["tolerance_end"]
-        status = slot_info["status"]
-
-        if status == "interval":
-            if base_qs.filter(timestamp__gte=slot_start, timestamp__lt=slot_end).exists():
-                raise ValidationError(
-                    {'detail': ['An entry for this equipment already exists for this time slot.']}
-                )
-        elif status == "tolerance" and tolerance_end is not None:
-            if base_qs.filter(timestamp__gte=slot_end, timestamp__lte=tolerance_end).exists():
-                raise ValidationError(
-                    {'detail': ['An entry for this equipment already exists for this time slot.']}
-                )
+        interval, shift_hours = get_interval_for_equipment(equipment_id or "", "filter")
+        slot_start, slot_end = get_slot_range(timestamp, interval, shift_hours)
+        if base_qs.filter(timestamp__gte=slot_start, timestamp__lt=slot_end).exists():
+            raise ValidationError(
+                {'detail': ['An entry for this equipment already exists for this time slot.']}
+            )
         log = serializer.save(
             operator=self.request.user,
             operator_name=self.request.user.name or self.request.user.email,
@@ -117,6 +113,30 @@ class FilterLogViewSet(viewsets.ModelViewSet):
             and instance.operator_id != request.user.id
         ):
             raise ValidationError({"detail": [CREATOR_ONLY_REJECTED_EDIT_MESSAGE]})
+        incoming_timestamp = request.data.get("timestamp")
+        if incoming_timestamp:
+            try:
+                parsed_timestamp = datetime.fromisoformat(str(incoming_timestamp).replace("Z", "+00:00"))
+                if timezone.is_naive(parsed_timestamp):
+                    parsed_timestamp = timezone.make_aware(parsed_timestamp, timezone.get_current_timezone())
+            except ValueError:
+                parsed_timestamp = instance.timestamp
+        else:
+            parsed_timestamp = instance.timestamp
+        next_equipment_id = request.data.get("equipment_id") or instance.equipment_id
+        interval, shift_hours = get_interval_for_equipment(next_equipment_id or "", "filter")
+        slot_start, slot_end = get_slot_range(parsed_timestamp, interval, shift_hours)
+        duplicate_exists = (
+            FilterLog.objects.filter(
+                equipment_id=next_equipment_id,
+                timestamp__gte=slot_start,
+                timestamp__lt=slot_end,
+            )
+            .exclude(pk=instance.pk)
+            .exists()
+        )
+        if duplicate_exists:
+            raise ValidationError({"detail": ["An entry for this equipment already exists for this time slot."]})
 
         tracked_fields = [
             'equipment_id',
@@ -176,6 +196,145 @@ class FilterLogViewSet(viewsets.ModelViewSet):
             )
 
         return response
+
+    @action(detail=False, methods=['get'], url_path='missing-slots')
+    def missing_slots(self, request):
+        date_str = (request.query_params.get("date") or "").strip()
+        equipment_id_filter = (request.query_params.get("equipment_id") or "").strip()
+        if date_str:
+            try:
+                day = datetime.strptime(date_str[:10], "%Y-%m-%d").date()
+            except ValueError:
+                return Response({"error": "date must be YYYY-MM-DD"}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            day = timezone.localdate()
+
+        day_start, day_end = get_slot_day_bounds(day)
+        slot_tz = get_slot_timezone()
+        base_qs = FilterLog.objects.filter(timestamp__gte=day_start, timestamp__lt=day_end)
+        if equipment_id_filter:
+            base_qs = base_qs.filter(equipment_id=equipment_id_filter)
+
+        suppressed_equipment_ids = set(
+            FilterLog.objects.filter(
+                timestamp__gte=day_start,
+                timestamp__lt=day_end,
+                activity_type__in=["maintenance", "shutdown"],
+                status__in=["draft", "pending", "pending_secondary_approval"],
+            )
+            .exclude(equipment_id__isnull=True)
+            .exclude(equipment_id="")
+            .values_list("equipment_id", flat=True)
+            .distinct()
+        )
+        if equipment_id_filter:
+            suppressed_equipment_ids = {
+                equipment_id for equipment_id in suppressed_equipment_ids if equipment_id == equipment_id_filter
+            }
+
+        timestamps_by_equipment = defaultdict(list)
+        timestamps_qs = base_qs.exclude(activity_type__in=["maintenance", "shutdown"])
+        for row in timestamps_qs.values("equipment_id", "timestamp"):
+            equipment_id = row.get("equipment_id") or ""
+            if not equipment_id:
+                continue
+            timestamps_by_equipment[equipment_id].append(row.get("timestamp"))
+
+        equipment_ids = set(timestamps_by_equipment.keys())
+        historical_filter_ids = set(
+            FilterLog.objects.exclude(equipment_id__isnull=True)
+            .exclude(equipment_id="")
+            .values_list("equipment_id", flat=True)
+            .distinct()
+        )
+        equipment_ids.update(historical_filter_ids)
+        if equipment_id_filter:
+            equipment_ids.add(equipment_id_filter)
+
+        equipments_payload = []
+        total_expected_slots = 0
+        total_present_slots = 0
+        total_missing_slots = 0
+        for equipment_id in sorted(equipment_ids):
+            if not equipment_id_filter and equipment_id in suppressed_equipment_ids:
+                continue
+            interval, shift_hours = get_interval_for_equipment(equipment_id, "filter")
+            stats = compute_missing_slots_for_day(
+                day_value=day,
+                timestamps=timestamps_by_equipment.get(equipment_id, []),
+                interval=interval,
+                shift_duration_hours=shift_hours,
+                equipment_identifier=equipment_id,
+                log_type="filter",
+            )
+            expected_count = stats["expected_slot_count"]
+            present_count = stats["present_slot_count"]
+            missing_count = stats["missing_slot_count"]
+            total_expected_slots += expected_count
+            total_present_slots += present_count
+            total_missing_slots += missing_count
+            missing_ranges = [
+                {
+                    "slot_start": timezone.localtime(slot["slot_start"], slot_tz).isoformat(),
+                    "slot_end": timezone.localtime(slot["slot_end"], slot_tz).isoformat(),
+                    "label": (
+                        f'{timezone.localtime(slot["slot_start"], slot_tz).strftime("%H:%M")}'
+                        f' - {timezone.localtime(slot["slot_end"], slot_tz).strftime("%H:%M")}'
+                    ),
+                }
+                for slot in stats["missing_slots"]
+            ]
+            last_reading_ts = (
+                FilterLog.objects.filter(
+                    equipment_id=equipment_id,
+                    timestamp__gte=day_start,
+                    timestamp__lt=day_end,
+                )
+                .order_by("-timestamp")
+                .values_list("timestamp", flat=True)
+                .first()
+            )
+            if last_reading_ts is None:
+                last_reading_ts = (
+                    FilterLog.objects.filter(equipment_id=equipment_id)
+                    .order_by("-timestamp")
+                    .values_list("timestamp", flat=True)
+                    .first()
+                )
+            equipments_payload.append(
+                {
+                    "equipment_id": equipment_id,
+                    "equipment_name": equipment_id,
+                    "interval": interval,
+                    "shift_duration_hours": shift_hours,
+                    "expected_slot_count": expected_count,
+                    "present_slot_count": present_count,
+                    "missing_slot_count": missing_count,
+                    "next_due": (
+                        timezone.localtime(stats["next_due"]).isoformat()
+                        if stats["next_due"] is not None
+                        else None
+                    ),
+                    "last_reading_timestamp": (
+                        timezone.localtime(last_reading_ts).isoformat()
+                        if last_reading_ts is not None
+                        else None
+                    ),
+                    "missing_slots": missing_ranges,
+                }
+            )
+        return Response(
+            {
+                "date": day.isoformat(),
+                "log_type": "filter",
+                "total_expected_slots": total_expected_slots,
+                "total_present_slots": total_present_slots,
+                "total_missing_slots": total_missing_slots,
+                "equipment_count": len(equipments_payload),
+                "affected_equipment_count": len([e for e in equipments_payload if e["missing_slot_count"] > 0]),
+                "equipments": equipments_payload,
+            }
+        )
 
     @action(detail=True, methods=['post'])
     def correct(self, request, pk=None):

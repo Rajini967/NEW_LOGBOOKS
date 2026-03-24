@@ -2,10 +2,12 @@
 Utilities for computing log entry time slots from SessionSetting (hourly / shift / daily).
 Used to enforce one entry per equipment per slot and prevent duplicates.
 """
-from datetime import timedelta
-from typing import Tuple, Literal, TypedDict, Optional
+from datetime import timedelta, datetime, time
+from typing import Tuple, Literal, TypedDict, Optional, List, Dict, Any
+from zoneinfo import ZoneInfo
 
 from django.utils import timezone
+from django.conf import settings
 
 from accounts.models import SessionSetting
 from equipment.models import Equipment
@@ -17,6 +19,73 @@ class SlotStatus(TypedDict):
     slot_end: timezone.datetime
     tolerance_end: Optional[timezone.datetime]
     status: Literal["interval", "tolerance", "late"]
+
+
+class DaySlot(TypedDict):
+    slot_index: int
+    slot_start: timezone.datetime
+    slot_end: timezone.datetime
+    slot_key: str
+
+
+def get_slot_timezone():
+    """
+    Operational timezone used for slot/day calculations.
+    Uses LOG_SLOT_TIMEZONE if present; otherwise TIME_ZONE; falls back to Asia/Kolkata.
+    """
+    explicit_slot_tz = getattr(settings, "LOG_SLOT_TIMEZONE", None)
+    if explicit_slot_tz:
+        tz_name = explicit_slot_tz
+    else:
+        base_tz = getattr(settings, "TIME_ZONE", None) or "Asia/Kolkata"
+        # If project timezone is UTC, keep slot scheduling in IST by default
+        # to match pharma shift/hourly operational usage and UI expectations.
+        tz_name = "Asia/Kolkata" if str(base_tz).upper() == "UTC" else base_tz
+    try:
+        return ZoneInfo(str(tz_name))
+    except Exception:
+        return ZoneInfo("Asia/Kolkata")
+
+
+def get_slot_day_bounds(day_value):
+    """
+    Return timezone-aware (day_start, day_end) in slot timezone for a given date/datetime.
+    """
+    if isinstance(day_value, datetime):
+        day = day_value.date()
+    else:
+        day = day_value
+    tz = get_slot_timezone()
+    day_start = timezone.make_aware(datetime.combine(day, time.min), tz)
+    day_end = day_start + timedelta(days=1)
+    return day_start, day_end
+
+
+def _resolve_equipment_for_log_type(equipment_identifier: str, log_type: str):
+    if not equipment_identifier or not isinstance(equipment_identifier, str):
+        return None
+    identifier = equipment_identifier.strip()
+    equipment = None
+    if log_type in ("chiller", "boiler"):
+        equipment = Equipment.objects.filter(equipment_number=identifier).first()
+    elif log_type == "filter":
+        fm = FilterMaster.objects.filter(filter_id=identifier).first()
+        if fm:
+            assignment = (
+                FilterAssignment.objects.filter(filter=fm, is_active=True)
+                .select_related("equipment")
+                .first()
+            )
+            if assignment:
+                equipment = assignment.equipment
+    elif log_type == "chemical":
+        part_before_dash = identifier.split(" – ")[0].strip() if " – " in identifier else identifier
+        equipment = Equipment.objects.filter(equipment_number=part_before_dash).first()
+        if not equipment:
+            equipment = Equipment.objects.filter(equipment_number=identifier).first()
+        if not equipment:
+            equipment = Equipment.objects.filter(name__iexact=identifier).first()
+    return equipment
 
 
 def get_slot_range(timestamp, interval, shift_duration_hours):
@@ -64,6 +133,173 @@ def get_slot_range(timestamp, interval, shift_duration_hours):
     return slot_start, slot_end
 
 
+def build_expected_slots_for_day(
+    day_value,
+    interval: str,
+    shift_duration_hours: Optional[int] = None,
+) -> List[DaySlot]:
+    """
+    Build deterministic expected slots for one local day.
+    """
+    day_start, _ = get_slot_day_bounds(day_value)
+    normalized_interval = (interval or "").strip().lower() or "hourly"
+    shift_hours = shift_duration_hours if shift_duration_hours is not None else 8
+    if shift_hours < 1:
+        shift_hours = 8
+
+    slots: List[DaySlot] = []
+    if normalized_interval == "daily":
+        slot_start = day_start
+        slot_end = day_start + timedelta(days=1)
+        slots.append(
+            {
+                "slot_index": 0,
+                "slot_start": slot_start,
+                "slot_end": slot_end,
+                "slot_key": f"{slot_start.isoformat()}|{slot_end.isoformat()}",
+            }
+        )
+        return slots
+
+    if normalized_interval == "shift":
+        total_slots = max(1, (24 + shift_hours - 1) // shift_hours)
+        for idx in range(total_slots):
+            slot_start = day_start + timedelta(hours=idx * shift_hours)
+            slot_end = min(day_start + timedelta(days=1), slot_start + timedelta(hours=shift_hours))
+            slots.append(
+                {
+                    "slot_index": idx,
+                    "slot_start": slot_start,
+                    "slot_end": slot_end,
+                    "slot_key": f"{slot_start.isoformat()}|{slot_end.isoformat()}",
+                }
+            )
+        return slots
+
+    # hourly default
+    for idx in range(24):
+        slot_start = day_start + timedelta(hours=idx)
+        slot_end = slot_start + timedelta(hours=1)
+        slots.append(
+            {
+                "slot_index": idx,
+                "slot_start": slot_start,
+                "slot_end": slot_end,
+                "slot_key": f"{slot_start.isoformat()}|{slot_end.isoformat()}",
+            }
+        )
+    return slots
+
+
+def map_timestamp_to_slot_key(
+    value,
+    interval: str,
+    shift_duration_hours: Optional[int] = None,
+) -> Optional[str]:
+    if value is None:
+        return None
+    slot_tz = get_slot_timezone()
+    ts = value
+    if timezone.is_naive(ts):
+        ts = timezone.make_aware(ts, slot_tz)
+    ts = timezone.localtime(ts, slot_tz)
+    slot_start, slot_end = get_slot_range(ts, interval, shift_duration_hours)
+    return f"{slot_start.isoformat()}|{slot_end.isoformat()}"
+
+
+def compute_missing_slots_for_day(
+    day_value,
+    timestamps: List[timezone.datetime],
+    interval: str,
+    shift_duration_hours: Optional[int] = None,
+    *,
+    equipment_identifier: Optional[str] = None,
+    log_type: Optional[str] = None,
+    tolerance_minutes: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Compute expected/present/missing slot details for a single day and equipment.
+    """
+    expected_slots = build_expected_slots_for_day(day_value, interval, shift_duration_hours)
+    if tolerance_minutes is None:
+        tol = 0
+        if equipment_identifier and log_type:
+            try:
+                equipment = _resolve_equipment_for_log_type(equipment_identifier, log_type)
+                tol = int((equipment.tolerance_minutes or 0) if equipment else 0)
+            except Exception:
+                tol = 0
+        tolerance_minutes = max(0, tol)
+
+    slot_tz = get_slot_timezone()
+    normalized_timestamps: List[datetime] = []
+    for raw_ts in timestamps or []:
+        if raw_ts is None:
+            continue
+        ts = raw_ts
+        if timezone.is_naive(ts):
+            ts = timezone.make_aware(ts, slot_tz)
+        normalized_timestamps.append(timezone.localtime(ts, slot_tz))
+    normalized_timestamps.sort()
+
+    tolerance_delta = timedelta(minutes=max(0, int(tolerance_minutes or 0)))
+    filled_slot_keys = set()
+    used_timestamp_indexes = set()
+    for slot in expected_slots:
+        # Tolerance anchor is slot start (business rule):
+        # for 10:00-11:00 with ±15 => valid range 09:45-10:15.
+        slot_anchor = slot["slot_start"]
+        window_start = slot_anchor - tolerance_delta
+        window_end = slot_anchor + tolerance_delta
+        for idx, ts in enumerate(normalized_timestamps):
+            if idx in used_timestamp_indexes:
+                continue
+            in_slot_range = slot["slot_start"] <= ts < slot["slot_end"]
+            in_tolerance_window = window_start <= ts <= window_end
+            if in_slot_range or in_tolerance_window:
+                filled_slot_keys.add(slot["slot_key"])
+                used_timestamp_indexes.add(idx)
+                break
+
+    missing_slots_all = [slot for slot in expected_slots if slot["slot_key"] not in filled_slot_keys]
+    now = timezone.localtime(timezone.now(), slot_tz)
+    if isinstance(day_value, datetime):
+        target_day = day_value.date()
+    else:
+        target_day = day_value
+    today = now.date()
+    if target_day < today:
+        missing_slots = missing_slots_all
+    elif target_day > today:
+        missing_slots = []
+    else:
+        missing_slots = [slot for slot in missing_slots_all if slot["slot_end"] <= now]
+
+    next_due = None
+    for slot in missing_slots_all:
+        if slot["slot_start"] >= now:
+            next_due = slot["slot_start"]
+            break
+    if next_due is None and missing_slots_all:
+        # If we are already inside a missing slot window, next due is that slot start.
+        in_progress = next((s for s in missing_slots_all if s["slot_start"] <= now < s["slot_end"]), None)
+        if in_progress is not None:
+            next_due = in_progress["slot_start"]
+        else:
+            next_due = missing_slots_all[0]["slot_start"]
+
+    return {
+        "expected_slots": expected_slots,
+        "expected_slot_count": len(expected_slots),
+        "present_slot_count": len(filled_slot_keys),
+        "used_entry_count": len(used_timestamp_indexes),
+        "missing_slots": missing_slots,
+        "missing_slot_count": len(missing_slots),
+        "next_due": next_due,
+        "has_missing": len(missing_slots) > 0,
+    }
+
+
 def get_interval_for_equipment(equipment_identifier: str, log_type: str) -> Tuple[str, int]:
     """
     Resolve (interval, shift_hours) for a given equipment identifier.
@@ -81,26 +317,7 @@ def get_interval_for_equipment(equipment_identifier: str, log_type: str) -> Tupl
         shift_hours = getattr(setting, "shift_duration_hours", None) or 8
         return interval, shift_hours
 
-    identifier = equipment_identifier.strip()
-    equipment = None
-
-    if log_type in ("chiller", "boiler"):
-        equipment = Equipment.objects.filter(equipment_number=identifier).first()
-    elif log_type == "filter":
-        # Filter log stores filter_id in equipment_id; resolve via FilterAssignment
-        fm = FilterMaster.objects.filter(filter_id=identifier).first()
-        if fm:
-            assignment = FilterAssignment.objects.filter(filter=fm, is_active=True).select_related("equipment").first()
-            if assignment:
-                equipment = assignment.equipment
-    elif log_type == "chemical":
-        # equipment_name may be "C-001 – chemical-1" or "C-001"; try equipment_number first
-        part_before_dash = identifier.split(" – ")[0].strip() if " – " in identifier else identifier
-        equipment = Equipment.objects.filter(equipment_number=part_before_dash).first()
-        if not equipment:
-            equipment = Equipment.objects.filter(equipment_number=identifier).first()
-        if not equipment:
-            equipment = Equipment.objects.filter(name__iexact=identifier).first()
+    equipment = _resolve_equipment_for_log_type(equipment_identifier, log_type)
 
     if equipment and equipment.log_entry_interval:
         interval = equipment.log_entry_interval

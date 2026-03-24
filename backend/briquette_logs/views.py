@@ -1,0 +1,295 @@
+from collections import defaultdict
+from datetime import datetime
+from django.utils import timezone
+from rest_framework import status, viewsets
+from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+
+from accounts.permissions import CanApproveReports, CanLogEntries
+from core.log_slot_utils import (
+    compute_missing_slots_for_day,
+    get_interval_for_equipment,
+    get_slot_day_bounds,
+    get_slot_range,
+    get_slot_timezone,
+)
+from reports.utils import log_audit_event
+from .models import BriquetteLog
+from .serializers import BriquetteLogSerializer
+
+CREATOR_ONLY_REJECTED_EDIT_MESSAGE = "Only the original creator can edit/correct a rejected entry."
+
+
+def _signature_text(user):
+    actor = (getattr(user, "name", None) or getattr(user, "email", None) or "Unknown").strip()
+    now_str = timezone.localtime(timezone.now()).strftime("%d/%m/%Y %H:%M:%S")
+    return f"{actor} - {now_str}"
+
+
+class BriquetteLogViewSet(viewsets.ModelViewSet):
+    permission_classes = [IsAuthenticated]
+    serializer_class = BriquetteLogSerializer
+    queryset = BriquetteLog.objects.all()
+
+    def get_permissions(self):
+        if self.action in ["create", "update", "partial_update"]:
+            return [IsAuthenticated(), CanLogEntries()]
+        if self.action == "approve":
+            return [IsAuthenticated(), CanApproveReports()]
+        return [IsAuthenticated()]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if self.action != "list":
+            return qs
+        equipment_id = self.request.query_params.get("equipment_id")
+        if equipment_id:
+            qs = qs.filter(equipment_id=equipment_id)
+        return qs.order_by("timestamp")
+
+    def perform_create(self, serializer):
+        validated = serializer.validated_data
+        equipment_id = validated.get("equipment_id")
+        timestamp = validated.get("timestamp") or timezone.now()
+        interval, shift_hours = get_interval_for_equipment(equipment_id or "", "boiler")
+        slot_start, slot_end = get_slot_range(timestamp, interval, shift_hours)
+        if BriquetteLog.objects.filter(
+            equipment_id=equipment_id, timestamp__gte=slot_start, timestamp__lt=slot_end
+        ).exists():
+            raise ValidationError({"detail": ["An entry for this equipment already exists for this time slot."]})
+        signature = _signature_text(self.request.user)
+        log = serializer.save(
+            operator=self.request.user,
+            operator_name=self.request.user.name or self.request.user.email,
+            operator_sign_date=validated.get("operator_sign_date") or signature,
+            verified_sign_date=validated.get("verified_sign_date") or signature,
+        )
+        log_audit_event(
+            user=self.request.user,
+            event_type="log_created",
+            object_type="briquette_log",
+            object_id=str(log.id),
+            field_name="created",
+            new_value=timezone.localtime(log.timestamp).isoformat() if log.timestamp else None,
+        )
+
+    def perform_update(self, serializer):
+        instance = serializer.instance
+        if (
+            instance.status in ("rejected", "pending_secondary_approval")
+            and instance.operator_id
+            and instance.operator_id != self.request.user.id
+        ):
+            raise ValidationError({"detail": [CREATOR_ONLY_REJECTED_EDIT_MESSAGE]})
+        validated = serializer.validated_data
+        next_timestamp = validated.get("timestamp", instance.timestamp)
+        next_equipment_id = validated.get("equipment_id", instance.equipment_id)
+        interval, shift_hours = get_interval_for_equipment(next_equipment_id or "", "boiler")
+        slot_start, slot_end = get_slot_range(next_timestamp, interval, shift_hours)
+        duplicate_exists = (
+            BriquetteLog.objects.filter(
+                equipment_id=next_equipment_id, timestamp__gte=slot_start, timestamp__lt=slot_end
+            )
+            .exclude(pk=instance.pk)
+            .exists()
+        )
+        if duplicate_exists:
+            raise ValidationError({"detail": ["An entry for this equipment already exists for this time slot."]})
+        serializer.save()
+
+    @action(detail=False, methods=["get"], url_path="missing-slots")
+    def missing_slots(self, request):
+        date_str = (request.query_params.get("date") or "").strip()
+        equipment_id_filter = (request.query_params.get("equipment_id") or "").strip()
+        if date_str:
+            try:
+                day = datetime.strptime(date_str[:10], "%Y-%m-%d").date()
+            except ValueError:
+                return Response({"error": "date must be YYYY-MM-DD"}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            day = timezone.localdate()
+
+        day_start, day_end = get_slot_day_bounds(day)
+        slot_tz = get_slot_timezone()
+        base_qs = BriquetteLog.objects.filter(timestamp__gte=day_start, timestamp__lt=day_end)
+        if equipment_id_filter:
+            base_qs = base_qs.filter(equipment_id=equipment_id_filter)
+
+        suppressed_equipment_ids = set(
+            BriquetteLog.objects.filter(
+                timestamp__gte=day_start,
+                timestamp__lt=day_end,
+                activity_type__in=["maintenance", "shutdown"],
+                status__in=["draft", "pending", "pending_secondary_approval"],
+            )
+            .exclude(equipment_id__isnull=True)
+            .exclude(equipment_id="")
+            .values_list("equipment_id", flat=True)
+            .distinct()
+        )
+
+        timestamps_by_equipment = defaultdict(list)
+        timestamps_qs = base_qs.exclude(activity_type__in=["maintenance", "shutdown"])
+        for row in timestamps_qs.values("equipment_id", "timestamp"):
+            equipment_id = row.get("equipment_id") or ""
+            if equipment_id:
+                timestamps_by_equipment[equipment_id].append(row.get("timestamp"))
+
+        equipment_ids = set(timestamps_by_equipment.keys())
+        equipment_ids.update(
+            set(
+                BriquetteLog.objects.exclude(equipment_id__isnull=True)
+                .exclude(equipment_id="")
+                .values_list("equipment_id", flat=True)
+                .distinct()
+            )
+        )
+        if equipment_id_filter:
+            equipment_ids.add(equipment_id_filter)
+
+        equipments_payload = []
+        total_expected_slots = 0
+        total_present_slots = 0
+        total_missing_slots = 0
+        for equipment_id in sorted(equipment_ids):
+            if not equipment_id_filter and equipment_id in suppressed_equipment_ids:
+                continue
+            interval, shift_hours = get_interval_for_equipment(equipment_id, "boiler")
+            stats = compute_missing_slots_for_day(
+                day_value=day,
+                timestamps=timestamps_by_equipment.get(equipment_id, []),
+                interval=interval,
+                shift_duration_hours=shift_hours,
+                equipment_identifier=equipment_id,
+                log_type="boiler",
+            )
+            expected_count = stats["expected_slot_count"]
+            present_count = stats["present_slot_count"]
+            missing_count = stats["missing_slot_count"]
+            total_expected_slots += expected_count
+            total_present_slots += present_count
+            total_missing_slots += missing_count
+            missing_ranges = [
+                {
+                    "slot_start": timezone.localtime(slot["slot_start"], slot_tz).isoformat(),
+                    "slot_end": timezone.localtime(slot["slot_end"], slot_tz).isoformat(),
+                    "label": (
+                        f'{timezone.localtime(slot["slot_start"], slot_tz).strftime("%H:%M")}'
+                        f' - {timezone.localtime(slot["slot_end"], slot_tz).strftime("%H:%M")}'
+                    ),
+                }
+                for slot in stats["missing_slots"]
+            ]
+            equipments_payload.append(
+                {
+                    "equipment_id": equipment_id,
+                    "equipment_name": equipment_id,
+                    "interval": interval,
+                    "shift_duration_hours": shift_hours,
+                    "expected_slot_count": expected_count,
+                    "present_slot_count": present_count,
+                    "missing_slot_count": missing_count,
+                    "next_due": timezone.localtime(stats["next_due"]).isoformat() if stats["next_due"] else None,
+                    "last_reading_timestamp": None,
+                    "missing_slots": missing_ranges,
+                }
+            )
+        return Response(
+            {
+                "date": day.isoformat(),
+                "log_type": "briquette",
+                "total_expected_slots": total_expected_slots,
+                "total_present_slots": total_present_slots,
+                "total_missing_slots": total_missing_slots,
+                "equipment_count": len(equipments_payload),
+                "affected_equipment_count": len([e for e in equipments_payload if e["missing_slot_count"] > 0]),
+                "equipments": equipments_payload,
+            }
+        )
+
+    @action(detail=True, methods=["post"])
+    def correct(self, request, pk=None):
+        original = self.get_object()
+        if original.status not in ("rejected", "pending_secondary_approval"):
+            return Response(
+                {"error": "Only rejected or pending secondary approval entries can be corrected as new entries."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if original.operator_id and original.operator_id != request.user.id:
+            raise ValidationError({"detail": [CREATOR_ONLY_REJECTED_EDIT_MESSAGE]})
+        serializer = self.get_serializer(data=request.data.copy())
+        serializer.is_valid(raise_exception=True)
+        validated = dict(serializer.validated_data)
+        timestamp = validated.pop("timestamp", None)
+        payload = {
+            **validated,
+            "corrects": original,
+            "operator": original.operator,
+            "operator_name": original.operator_name or (original.operator.email if original.operator else request.user.email),
+            "equipment_id": original.equipment_id,
+            "site_id": original.site_id,
+            "status": "pending_secondary_approval",
+            "operator_sign_date": validated.get("operator_sign_date") or original.operator_sign_date or _signature_text(request.user),
+            "verified_sign_date": validated.get("verified_sign_date") or original.verified_sign_date or _signature_text(request.user),
+        }
+        if timestamp is not None:
+            payload["timestamp"] = timestamp
+        new_log = BriquetteLog.objects.create(**payload)
+        return Response(self.get_serializer(new_log).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["post"])
+    def approve(self, request, pk=None):
+        log = self.get_object()
+        action_type = request.data.get("action", "approve")
+        remarks = (request.data.get("remarks") or "").strip()
+        if action_type == "reject" and not remarks:
+            raise ValidationError({"remarks": ["Comment is required when rejecting."]})
+
+        if action_type == "approve":
+            if log.operator_id and log.operator_id == request.user.id:
+                return Response(
+                    {"error": "The log book entry must be approved by a different user than the operator (Log Book Done By)."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if log.status == "pending_secondary_approval":
+                if log.approved_by_id and log.approved_by_id == request.user.id:
+                    return Response(
+                        {"error": "A different person must perform secondary approval. The person who rejected cannot approve the corrected entry."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                log.status = "approved"
+                log.secondary_approved_by = request.user
+                log.secondary_approved_at = timezone.now()
+            elif log.status in ("pending", "draft"):
+                log.status = "approved"
+            else:
+                return Response(
+                    {"error": "Only pending, draft, or pending secondary approval entries can be approved."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        elif action_type == "reject":
+            if log.operator_id and log.operator_id == request.user.id:
+                return Response(
+                    {"error": "The log book entry must be rejected by a different user than the operator (Log Book Done By)."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if log.status not in ("pending", "draft", "pending_secondary_approval"):
+                return Response(
+                    {"error": "Only pending, draft, or pending secondary approval entries can be rejected."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            log.status = "rejected"
+            log.secondary_approved_by = None
+            log.secondary_approved_at = None
+        else:
+            return Response({"error": "Invalid action. Use approve or reject."}, status=status.HTTP_400_BAD_REQUEST)
+
+        log.approved_by = request.user
+        log.approved_at = timezone.now()
+        log.verified_sign_date = _signature_text(request.user)
+        if remarks:
+            log.remarks = remarks
+        log.save()
+        return Response(self.get_serializer(log).data)

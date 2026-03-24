@@ -176,12 +176,6 @@ class ChillerLog(models.Model):
         null=True,
         help_text="Cooling tower 3 daily water consumption (liters)"
     )
-    recording_frequency = models.CharField(
-        max_length=100,
-        blank=True,
-        null=True,
-        help_text="Recording frequency (e.g. Once in 4 hours)"
-    )
     operator_sign = models.CharField(
         max_length=255,
         blank=True,

@@ -50,6 +50,7 @@ export function MissedReadingPopup({
               : eq.interval === 'shift'
               ? `Shift (${eq.shiftHours}h)`
               : 'Daily';
+          const missedCount = eq.missingSlotCount ?? (eq.isMissed ? 1 : 0);
           return (
             <div
               key={eq.equipmentId}
@@ -58,6 +59,7 @@ export function MissedReadingPopup({
               <div className="font-medium text-foreground">
                 Equipment {eq.equipmentId}
                 {eq.equipmentName ? ` – ${eq.equipmentName}` : ''}
+                {eq.equipmentTypeLabel ? ` (${eq.equipmentTypeLabel})` : ''}
               </div>
               <div className="text-muted-foreground">
                 Last reading: <span className="font-mono">{lastStr}</span>
@@ -65,6 +67,23 @@ export function MissedReadingPopup({
               <div className="text-muted-foreground">
                 Next due: <span className="font-mono">{nextStr}</span> ({intervalLabel})
               </div>
+              <div className="text-muted-foreground">
+                Missed slots: <span className="font-semibold text-foreground">{missedCount}</span>
+              </div>
+              {!!eq.missingSlotRanges?.length && (
+                <div className="mt-2 rounded border border-border/70 bg-background p-2">
+                  <div className="mb-1 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                    Missing slot ranges
+                  </div>
+                  <div className="max-h-32 overflow-y-auto space-y-1">
+                    {eq.missingSlotRanges.map((slot, idx) => (
+                      <div key={`${eq.equipmentId}-${idx}`} className="font-mono text-xs text-foreground">
+                        {slot.label}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           );
         })}

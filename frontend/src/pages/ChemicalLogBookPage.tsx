@@ -42,7 +42,7 @@ import {
 import { EntryIntervalBadge } from "@/components/logbook/EntryIntervalBadge";
 import { MissedReadingPopup } from "@/components/logbook/MissedReadingPopup";
 import {
-  computeMissedByEquipment,
+  getTotalMissingSlots,
   type EquipmentMissInfo,
 } from "@/lib/missed-reading";
 import { MaintenanceTimingsSection } from "@/components/logbook/MaintenanceTimingsSection";
@@ -75,9 +75,34 @@ interface ChemicalPrepLog {
   corrects_id?: string;
   has_corrections?: boolean;
   tolerance_status?: "none" | "within" | "outside";
+  activity_type?: "operation" | "maintenance" | "shutdown";
+  activity_from_date?: string | null;
+  activity_to_date?: string | null;
+  activity_from_time?: string | null;
+  activity_to_time?: string | null;
 }
+type LogEntryIntervalType = "hourly" | "shift" | "daily";
 
 const CREATOR_ONLY_REJECTED_EDIT_MESSAGE = "Only the original creator can edit/correct a rejected entry.";
+
+const getReadableApiError = (error: any, fallback: string): string => {
+  const data = error?.data || error?.response?.data;
+  if (data) {
+    if (typeof data === "string") return data;
+    if (typeof data?.detail === "string") return data.detail;
+    if (Array.isArray(data?.detail) && data.detail.length) return String(data.detail[0]);
+    const firstKey = Object.keys(data)[0];
+    if (firstKey) {
+      const value = (data as Record<string, any>)[firstKey];
+      if (Array.isArray(value) && value.length) return String(value[0]);
+      if (typeof value === "string") return value;
+    }
+  }
+  if (typeof error?.message === "string" && !error.message.startsWith("{")) {
+    return error.message;
+  }
+  return fallback;
+};
 
 const ChemicalLogBookPage: React.FC = () => {
   const { user, sessionSettings } = useAuth();
@@ -85,6 +110,7 @@ const ChemicalLogBookPage: React.FC = () => {
   const [showMissedReadingPopup, setShowMissedReadingPopup] = useState(false);
   const [missedReadingNextDue, setMissedReadingNextDue] = useState<Date | null>(null);
   const [missedEquipments, setMissedEquipments] = useState<EquipmentMissInfo[] | null>(null);
+  const [missingRefreshKey, setMissingRefreshKey] = useState(0);
   const [filteredLogs, setFilteredLogs] = useState<ChemicalPrepLog[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -102,6 +128,7 @@ const ChemicalLogBookPage: React.FC = () => {
   const [readingsModalLogId, setReadingsModalLogId] = useState<string | null>(null);
   const [editingLogId, setEditingLogId] = useState<string | null>(null);
   const [viewedReadingsLogIds, setViewedReadingsLogIds] = useState<Set<string>>(new Set());
+  const [editedMaintenanceLogIds, setEditedMaintenanceLogIds] = useState<Set<string>>(new Set());
 
   const [formData, setFormData] = useState({
     equipmentName: "",
@@ -139,8 +166,18 @@ const ChemicalLogBookPage: React.FC = () => {
   const [chemicalNames, setChemicalNames] = useState<string[]>([]);
   const [equipmentOptions, setEquipmentOptions] = useState<{ id: string; name: string }[]>([]);
   const [equipmentWithIntervals, setEquipmentWithIntervals] = useState<
-    { equipment_number: string; name: string; log_entry_interval?: string | null; shift_duration_hours?: number | null }[]
+    {
+      id: string;
+      equipment_number: string;
+      name: string;
+      log_entry_interval?: string | null;
+      shift_duration_hours?: number | null;
+      tolerance_minutes?: number | null;
+    }[]
   >([]);
+  const [entryLogInterval, setEntryLogInterval] = useState<"" | LogEntryIntervalType>("");
+  const [entryShiftDurationHours, setEntryShiftDurationHours] = useState<number | "">("");
+  const [entryToleranceMinutes, setEntryToleranceMinutes] = useState<number | "">("");
   const [previousReadingsForEquipment, setPreviousReadingsForEquipment] = useState<ChemicalPrepLog[]>([]);
   const [previousReadingsLoading, setPreviousReadingsLoading] = useState(false);
   const [assignments, setAssignments] = useState<
@@ -195,14 +232,20 @@ const ChemicalLogBookPage: React.FC = () => {
           operator_id: prep.operator_id,
           approved_by_id: prep.approved_by_id,
           corrects_id: prep.corrects_id,
-      has_corrections: prep.has_corrections,
-      tolerance_status: prep.tolerance_status as ChemicalPrepLog["tolerance_status"],
+          has_corrections: prep.has_corrections,
+          tolerance_status: prep.tolerance_status as ChemicalPrepLog["tolerance_status"],
+          activity_type: prep.activity_type,
+          activity_from_date: prep.activity_from_date,
+          activity_to_date: prep.activity_to_date,
+          activity_from_time: prep.activity_from_time,
+          activity_to_time: prep.activity_to_time,
         });
       });
 
       allLogs.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
       setLogs(allLogs);
       setFilteredLogs(allLogs);
+      setMissingRefreshKey((prev) => prev + 1);
     } catch (error) {
       console.error("Error refreshing chemical logs:", error);
       toast.error("Failed to refresh chemical preparation entries");
@@ -257,6 +300,11 @@ const ChemicalLogBookPage: React.FC = () => {
             approved_by_id: prep.approved_by_id,
             corrects_id: prep.corrects_id,
             has_corrections: prep.has_corrections,
+            activity_type: prep.activity_type,
+            activity_from_date: prep.activity_from_date,
+            activity_to_date: prep.activity_to_date,
+            activity_from_time: prep.activity_from_time,
+            activity_to_time: prep.activity_to_time,
           };
         });
         setPreviousReadingsForEquipment(list);
@@ -273,75 +321,77 @@ const ChemicalLogBookPage: React.FC = () => {
   }, [formData.equipmentName]);
 
   useEffect(() => {
-    if (!sessionSettings?.log_entry_interval || logs.length === 0) {
-      setMissedEquipments(null);
-      setShowMissedReadingPopup(false);
-      setMissedReadingNextDue(null);
-      return;
-    }
-    const defaultInterval = sessionSettings.log_entry_interval as "hourly" | "shift" | "daily";
-    const defaultShift = sessionSettings.shift_duration_hours ?? 8;
-    const findEquipmentMeta = (equipmentIdOrName?: string, equipmentName?: string) => {
-      const primary = (equipmentIdOrName || "").trim();
-      const secondary = (equipmentName || "").trim();
-      const primaryBeforeDash = primary.split(" – ")[0]?.trim() || primary;
-      const secondaryBeforeDash = secondary.split(" – ")[0]?.trim() || secondary;
-      return equipmentWithIntervals.find(
-        (e) =>
-          e.equipment_number === primary ||
-          e.equipment_number === primaryBeforeDash ||
-          e.name === primary ||
-          `${e.equipment_number} – ${e.name}` === primary ||
-          e.equipment_number === secondary ||
-          e.equipment_number === secondaryBeforeDash ||
-          e.name === secondary ||
-          `${e.equipment_number} – ${e.name}` === secondary,
-      );
-    };
-    const resolveInterval = (equipmentIdOrName?: string, equipmentName?: string): "hourly" | "shift" | "daily" => {
-      const eq = findEquipmentMeta(equipmentIdOrName, equipmentName);
-      return (
-        (eq?.log_entry_interval as "hourly" | "shift" | "daily") ||
-        defaultInterval ||
-        "daily"
-      );
-    };
-    const resolveShiftHours = (equipmentIdOrName?: string, equipmentName?: string): number => {
-      const eq = findEquipmentMeta(equipmentIdOrName, equipmentName);
-      return eq?.shift_duration_hours ?? defaultShift;
-    };
+    const selectedDate = filters.fromDate || format(new Date(), "yyyy-MM-dd");
+    chemicalPrepAPI
+      .missingSlots({ date: selectedDate })
+      .then((payload) => {
+        const missedOnly: EquipmentMissInfo[] = (payload?.equipments || [])
+          .filter((eq) => (eq.missing_slot_count || 0) > 0)
+          .map((eq) => ({
+            equipmentId: eq.equipment_id,
+            equipmentName: eq.equipment_name,
+            lastTimestamp: null,
+            nextDue: eq.next_due ? new Date(eq.next_due) : null,
+            isMissed: (eq.missing_slot_count || 0) > 0,
+            interval: eq.interval,
+            shiftHours: eq.shift_duration_hours || 8,
+            expectedSlotCount: eq.expected_slot_count,
+            presentSlotCount: eq.present_slot_count,
+            missingSlotCount: eq.missing_slot_count,
+            missingSlotRanges: (eq.missing_slots || []).map((slot) => ({
+              slotStart: new Date(slot.slot_start),
+              slotEnd: new Date(slot.slot_end),
+              label: slot.label,
+            })),
+          }));
+        if (missedOnly.length > 0) {
+          setMissedEquipments(missedOnly);
+          const firstNext =
+            missedOnly
+              .map((m) => m.nextDue)
+              .filter((d): d is Date => !!d)
+              .sort((a, b) => a.getTime() - b.getTime())[0] || null;
+          setMissedReadingNextDue(firstNext);
+          return;
+        }
+        setMissedEquipments(null);
+        setShowMissedReadingPopup(false);
+        setMissedReadingNextDue(null);
+      })
+      .catch(() => {
+        setMissedEquipments(null);
+        setShowMissedReadingPopup(false);
+        setMissedReadingNextDue(null);
+      });
+  }, [filters.fromDate, missingRefreshKey]);
 
-    const perEquipment = computeMissedByEquipment(
-      logs.map((log) => ({
-        equipment_id: (log.equipmentName || "").split(" – ")[0]?.trim() || log.equipmentName,
-        equipment_name: log.equipmentName,
-        timestamp: log.timestamp,
-      })),
-      {
-        resolveInterval: (eqId, eqName) => resolveInterval(eqId, eqName),
-        resolveShiftHours: (eqId, eqName) => resolveShiftHours(eqId, eqName),
-      },
+  useEffect(() => {
+    if (!isDialogOpen || !!editingLogId) return;
+    if (!formData.equipmentName) return;
+    if (entryLogInterval !== "" || entryShiftDurationHours !== "" || entryToleranceMinutes !== "") return;
+    const selectedEquipmentMeta = equipmentWithIntervals.find(
+      (e) =>
+        e.name === formData.equipmentName ||
+        e.equipment_number === formData.equipmentName ||
+        `${e.equipment_number} – ${e.name}` === formData.equipmentName,
     );
-
-    const missedOnly = perEquipment.filter((m) => m.isMissed);
-    if (missedOnly.length > 0) {
-      setMissedEquipments(missedOnly);
-      const firstNext =
-        missedOnly
-          .map((m) => m.nextDue)
-          .filter((d): d is Date => !!d)
-          .sort((a, b) => a.getTime() - b.getTime())[0] || null;
-      setMissedReadingNextDue(firstNext);
-    } else {
-      setMissedEquipments(null);
-      setShowMissedReadingPopup(false);
-      setMissedReadingNextDue(null);
-    }
-  }, [logs, sessionSettings, equipmentWithIntervals]);
+    if (!selectedEquipmentMeta) return;
+    setEntryLogInterval((selectedEquipmentMeta.log_entry_interval as LogEntryIntervalType) || "");
+    setEntryShiftDurationHours(selectedEquipmentMeta.shift_duration_hours ?? "");
+    setEntryToleranceMinutes(selectedEquipmentMeta.tolerance_minutes ?? "");
+  }, [
+    isDialogOpen,
+    editingLogId,
+    formData.equipmentName,
+    equipmentWithIntervals,
+    entryLogInterval,
+    entryShiftDurationHours,
+    entryToleranceMinutes,
+  ]);
 
   const hasMissedReadings =
     !!missedReadingNextDue || (missedEquipments?.length ?? 0) > 0;
-  const missedReadingsCount = missedEquipments?.length ?? (hasMissedReadings ? 1 : 0);
+  const missedReadingsCount = getTotalMissingSlots(missedEquipments);
 
   // Load chemical names and full master list (for resolving chemical ID when assignment has no link)
   useEffect(() => {
@@ -420,10 +470,12 @@ const ChemicalLogBookPage: React.FC = () => {
         if (chemicalCat) {
           const list = (await equipmentAPI.list({ category: chemicalCat.id })) as any[];
           const withIntervals = (list || []).map((e: any) => ({
+            id: e.id,
             equipment_number: e.equipment_number || "",
             name: e.name || "",
             log_entry_interval: e.log_entry_interval ?? null,
             shift_duration_hours: e.shift_duration_hours ?? null,
+            tolerance_minutes: e.tolerance_minutes ?? null,
           }));
           setEquipmentWithIntervals(withIntervals);
         } else {
@@ -720,6 +772,32 @@ const ChemicalLogBookPage: React.FC = () => {
         toast.error("Please select Equipment Name.");
         return;
       }
+      const selectedEquipmentMeta = equipmentWithIntervals.find(
+        (e) =>
+          e.name === formData.equipmentName ||
+          e.equipment_number === formData.equipmentName ||
+          `${e.equipment_number} – ${e.name}` === formData.equipmentName,
+      );
+      if (selectedEquipmentMeta?.id) {
+        if (
+          entryLogInterval === "shift" &&
+          (entryShiftDurationHours === "" ||
+            Number(entryShiftDurationHours) < 1 ||
+            Number(entryShiftDurationHours) > 24)
+        ) {
+          toast.error("Shift duration must be between 1 and 24 hours.");
+          return;
+        }
+        await equipmentAPI.patch(selectedEquipmentMeta.id, {
+          log_entry_interval: entryLogInterval || null,
+          shift_duration_hours:
+            entryLogInterval === "shift" && entryShiftDurationHours !== ""
+              ? Number(entryShiftDurationHours)
+              : null,
+          tolerance_minutes:
+            entryToleranceMinutes === "" ? null : Math.max(0, Number(entryToleranceMinutes) || 0),
+        });
+      }
       if (!formData.chemicalName) {
         toast.error("Please select Chemical Name.");
         return;
@@ -760,6 +838,16 @@ const ChemicalLogBookPage: React.FC = () => {
           } else {
             await chemicalPrepAPI.update(editingLogId, prepData as any);
             toast.success("Chemical entry updated successfully.");
+            if (
+              maintenanceTimings.activityType === "maintenance" ||
+              maintenanceTimings.activityType === "shutdown"
+            ) {
+              setEditedMaintenanceLogIds((prev) => {
+                const next = new Set(prev);
+                next.add(editingLogId);
+                return next;
+              });
+            }
           }
           setEditingLogId(null);
         } else {
@@ -780,6 +868,9 @@ const ChemicalLogBookPage: React.FC = () => {
           date: "",
           time: "",
         });
+        setEntryLogInterval("");
+        setEntryShiftDurationHours("");
+        setEntryToleranceMinutes("");
         setIsDialogOpen(false);
         await refreshLogs();
         return;
@@ -788,7 +879,9 @@ const ChemicalLogBookPage: React.FC = () => {
         { key: "equipmentName", label: "Equipment Name" },
         { key: "chemicalName", label: "Chemical Name" },
         { key: "batchNo", label: "Batch No" },
-        { key: "chemicalConcentration", label: "Chemical Concentration", numeric: true },
+        ...(formData.chemicalCategory === "major"
+          ? ([{ key: "chemicalConcentration", label: "Chemical Concentration", numeric: true }] as const)
+          : []),
         ...(formData.chemicalCategory === "major"
           ? ([
               { key: "solutionConcentration", label: "Solution Concentration", numeric: true },
@@ -832,7 +925,10 @@ const ChemicalLogBookPage: React.FC = () => {
         formData.chemicalCategory === "major" ? parseFloat(formData.solutionConcentration) : undefined;
       const waterQtyValue =
         formData.chemicalCategory === "major" ? parseFloat(formData.waterQty) : undefined;
-      const chemicalConcentrationValue = parseFloat(formData.chemicalConcentration);
+      const chemicalConcentrationValue =
+        formData.chemicalCategory === "major"
+          ? parseFloat(formData.chemicalConcentration)
+          : undefined;
 
       const prepData: Record<string, unknown> = {
         equipment_name: formData.equipmentName,
@@ -875,6 +971,16 @@ const ChemicalLogBookPage: React.FC = () => {
         } else {
           await chemicalPrepAPI.update(editingLogId, prepData as any);
           toast.success("Chemical entry updated successfully.");
+          if (
+            maintenanceTimings.activityType === "maintenance" ||
+            maintenanceTimings.activityType === "shutdown"
+          ) {
+            setEditedMaintenanceLogIds((prev) => {
+              const next = new Set(prev);
+              next.add(editingLogId);
+              return next;
+            });
+          }
         }
         setEditingLogId(null);
         setFormData({
@@ -891,6 +997,9 @@ const ChemicalLogBookPage: React.FC = () => {
           date: "",
           time: "",
         });
+        setEntryLogInterval("");
+        setEntryShiftDurationHours("");
+        setEntryToleranceMinutes("");
         setIsDialogOpen(false);
         await refreshLogs();
       } else {
@@ -911,12 +1020,15 @@ const ChemicalLogBookPage: React.FC = () => {
           date: "",
           time: "",
         });
+        setEntryLogInterval("");
+        setEntryShiftDurationHours("");
+        setEntryToleranceMinutes("");
         setIsDialogOpen(false);
         await refreshLogs();
       }
     } catch (error: any) {
       console.error("Error saving chemical entry:", error);
-      toast.error(error?.message || "Failed to save chemical preparation entry");
+      toast.error(getReadableApiError(error, "Failed to save chemical preparation entry"));
     }
   };
 
@@ -935,10 +1047,18 @@ const ChemicalLogBookPage: React.FC = () => {
   };
 
   const handleEditLog = (log: ChemicalPrepLog) => {
+    const canEditMaintenanceBeforeApprove =
+      (log.activity_type === "maintenance" || log.activity_type === "shutdown") &&
+      (log.status === "draft" || log.status === "pending" || log.status === "pending_secondary_approval") &&
+      user?.role !== "operator" &&
+      log.operator_id !== user?.id &&
+      !(log.status === "pending_secondary_approval" && log.approved_by_id === user?.id);
+
     if (
-      log.status !== "rejected" ||
-      log.operator_id !== user?.id ||
-      (log.has_corrections && !log.corrects_id)
+      !canEditMaintenanceBeforeApprove &&
+      (log.status !== "rejected" ||
+        log.operator_id !== user?.id ||
+        (log.has_corrections && !log.corrects_id))
     ) {
       toast.error(CREATOR_ONLY_REJECTED_EDIT_MESSAGE);
       return;
@@ -962,6 +1082,13 @@ const ChemicalLogBookPage: React.FC = () => {
       remarks: log.remarks ?? "",
       date: log.date ?? "",
       time: log.time ?? "",
+    });
+    setMaintenanceTimings({
+      activityType: (log.activity_type as "operation" | "maintenance" | "shutdown") || "operation",
+      fromDate: log.activity_from_date || "",
+      toDate: log.activity_to_date || "",
+      fromTime: log.activity_from_time || "",
+      toTime: log.activity_to_time || "",
     });
     setIsDialogOpen(true);
   };
@@ -989,7 +1116,26 @@ const ChemicalLogBookPage: React.FC = () => {
   };
 
   const handleApproveSelectedClick = () => {
-    const notViewedIds = selectedLogIds.filter((id) => !viewedReadingsLogIds.has(id));
+    const mustEditFirstIds = selectedLogIds.filter((id) => {
+      const log = logs.find((l) => l.id === id);
+      if (!log) return false;
+      const isMaintenanceOrShutdown =
+        log.activity_type === "maintenance" || log.activity_type === "shutdown";
+      return isMaintenanceOrShutdown && !editedMaintenanceLogIds.has(id);
+    });
+    if (mustEditFirstIds.length > 0) {
+      toast.error(
+        `Please edit maintenance/shutdown entr${mustEditFirstIds.length === 1 ? "y" : "ies"} first, then approve.`
+      );
+      return;
+    }
+    const notViewedIds = selectedLogIds.filter((id) => {
+      const log = logs.find((l) => l.id === id);
+      if (!log) return false;
+      const isMaintenanceOrShutdown =
+        log.activity_type === "maintenance" || log.activity_type === "shutdown";
+      return !isMaintenanceOrShutdown && !viewedReadingsLogIds.has(id);
+    });
     if (notViewedIds.length > 0) {
       toast.error(
         `Please click View Readings before approval for ${notViewedIds.length} selected entr${notViewedIds.length === 1 ? "y" : "ies"}.`
@@ -1040,7 +1186,6 @@ const ChemicalLogBookPage: React.FC = () => {
           open={showMissedReadingPopup}
           onClose={() => {
             setShowMissedReadingPopup(false);
-            setMissedReadingNextDue(null);
           }}
           logTypeLabel="Chemical"
           nextDue={missedReadingNextDue}
@@ -1228,11 +1373,24 @@ const ChemicalLogBookPage: React.FC = () => {
               open={isDialogOpen}
               onOpenChange={(open) => {
                 setIsDialogOpen(open);
-                if (!open) setEditingLogId(null);
+                if (!open) {
+                  setEditingLogId(null);
+                  setEntryLogInterval("");
+                  setEntryShiftDurationHours("");
+                  setEntryToleranceMinutes("");
+                }
               }}
             >
               <DialogTrigger asChild>
-                <Button variant="accent" onClick={() => setEditingLogId(null)}>
+                <Button
+                  variant="accent"
+                  onClick={() => {
+                    setEditingLogId(null);
+                    setEntryLogInterval("");
+                    setEntryShiftDurationHours("");
+                    setEntryToleranceMinutes("");
+                  }}
+                >
                   <Plus className="w-4 h-4 mr-2" />
                   New Entry
                 </Button>
@@ -1277,20 +1435,44 @@ const ChemicalLogBookPage: React.FC = () => {
                   <MaintenanceTimingsSection value={maintenanceTimings} onChange={setMaintenanceTimings} />
 
                   <fieldset disabled={!isReadingsApplicable} className={cn(!isReadingsApplicable && "opacity-60")}>
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-8">
                     <div className="space-y-2">
                       <Label>Equipment Name *</Label>
                       <Select
                         value={formData.equipmentName || "__none__"}
                         onValueChange={(v) => {
                           const nextEquipmentName = v === "__none__" ? "" : v;
+                          const optionsForEquipment =
+                            nextEquipmentName
+                              ? (chemOptionsByEquipment[nextEquipmentName] || [])
+                              : [];
+                          const autoCategory: "major" | "minor" =
+                            optionsForEquipment.length > 0
+                              ? optionsForEquipment[0].category
+                              : "major";
+                          const selectedEquipmentMeta = equipmentWithIntervals.find(
+                            (e) =>
+                              e.name === nextEquipmentName ||
+                              e.equipment_number === nextEquipmentName ||
+                              `${e.equipment_number} – ${e.name}` === nextEquipmentName,
+                          );
                           setFormData({
                             ...formData,
                             equipmentName: nextEquipmentName,
                             // Clear chemical-related fields; user must pick chemical explicitly
                             chemicalName: "",
-                            chemicalCategory: "major",
+                            // Auto-fetch category from assignment for selected equipment
+                            chemicalCategory: autoCategory,
                           });
+                          setEntryLogInterval(
+                            (selectedEquipmentMeta?.log_entry_interval as LogEntryIntervalType) || "",
+                          );
+                          setEntryShiftDurationHours(
+                            selectedEquipmentMeta?.shift_duration_hours ?? "",
+                          );
+                          setEntryToleranceMinutes(
+                            selectedEquipmentMeta?.tolerance_minutes ?? "",
+                          );
                           setSelectedChemicalId(null);
                           setResolvedChemicalId(null);
                         }}
@@ -1310,29 +1492,17 @@ const ChemicalLogBookPage: React.FC = () => {
                     </div>
                     <div className="space-y-2">
                       <Label>Chemical Category</Label>
-                      <Select
-                        value={formData.chemicalCategory}
-                        onValueChange={(v) =>
-                          setFormData({
-                            ...formData,
-                            chemicalCategory: v as "major" | "minor",
-                          })
-                        }
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select category" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="major">Major</SelectItem>
-                          <SelectItem value="minor">Minor</SelectItem>
-                        </SelectContent>
-                      </Select>
+                      <Input
+                        value={formData.chemicalCategory === "minor" ? "Minor" : "Major"}
+                        readOnly
+                        disabled
+                      />
                     </div>
                   </div>
 
                   {/* Previous readings for selected equipment with entered-by */}
                   {formData.equipmentName?.trim() && (
-                    <div className="rounded-lg border bg-muted/30 p-3 space-y-2">
+                    <div className="rounded-lg border bg-muted/30 p-3 space-y-2 mt-4">
                       <p className="text-sm font-medium">Previous readings (Entered by)</p>
                       {previousReadingsLoading ? (
                         <p className="text-xs text-muted-foreground">Loading…</p>
@@ -1356,8 +1526,65 @@ const ChemicalLogBookPage: React.FC = () => {
                       )}
                     </div>
                   )}
+                  <div className="mt-4 grid grid-cols-3 gap-x-4 gap-y-8">
+                    <div className="space-y-2">
+                      <Label>Log entry interval</Label>
+                      <Select
+                        value={entryLogInterval || "__none__"}
+                        onValueChange={(v) => {
+                          const next = v === "__none__" ? "" : (v as LogEntryIntervalType);
+                          setEntryLogInterval(next);
+                          if (next !== "shift") setEntryShiftDurationHours("");
+                        }}
+                        disabled={!isReadingsApplicable}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Use global default" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">Use global default</SelectItem>
+                          <SelectItem value="hourly">Hourly</SelectItem>
+                          <SelectItem value="shift">Shift</SelectItem>
+                          <SelectItem value="daily">Daily</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Shift duration (hours)</Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={24}
+                        disabled={!isReadingsApplicable || entryLogInterval !== "shift"}
+                        value={entryShiftDurationHours === "" ? "" : entryShiftDurationHours}
+                        onChange={(e) =>
+                          setEntryShiftDurationHours(
+                            e.target.value === ""
+                              ? ""
+                              : Math.max(1, Math.min(24, Number(e.target.value) || 8)),
+                          )
+                        }
+                        placeholder="e.g. 8"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Log entry tolerance (minutes)</Label>
+                      <Input
+                        type="number"
+                        min={0}
+                        value={entryToleranceMinutes === "" ? "" : entryToleranceMinutes}
+                        onChange={(e) =>
+                          setEntryToleranceMinutes(
+                            e.target.value === "" ? "" : Math.max(0, Number(e.target.value) || 0),
+                          )
+                        }
+                        disabled={!isReadingsApplicable}
+                        placeholder="e.g. 15"
+                      />
+                    </div>
+                  </div>
 
-                  <div className="space-y-2">
+                  <div className="mt-4 space-y-2">
                     <Label>Chemical Name *</Label>
                     {(() => {
                       const optionsForEquipment =
@@ -1427,7 +1654,7 @@ const ChemicalLogBookPage: React.FC = () => {
                     })()}
                   </div>
 
-                  <div className="space-y-2">
+                  <div className="mt-4 space-y-2">
                     <Label>Batch No</Label>
                     <Input
                       type="text"
@@ -1470,19 +1697,23 @@ const ChemicalLogBookPage: React.FC = () => {
                         )}
                       </div>
                       <div className="space-y-2">
-                        <Label>Chemical Concentration (%)</Label>
-                        <Input
-                          type="number"
-                          step="0.01"
-                          value={formData.chemicalConcentration}
-                          onChange={(e) =>
-                            setFormData({
-                              ...formData,
-                              chemicalConcentration: e.target.value,
-                            })
-                          }
-                          placeholder="e.g., 5.0"
-                        />
+                        {formData.chemicalCategory === "major" && (
+                          <>
+                            <Label>Chemical Concentration (%)</Label>
+                            <Input
+                              type="number"
+                              step="0.01"
+                              value={formData.chemicalConcentration}
+                              onChange={(e) =>
+                                setFormData({
+                                  ...formData,
+                                  chemicalConcentration: e.target.value,
+                                })
+                              }
+                              placeholder="e.g., 5.0"
+                            />
+                          </>
+                        )}
                       </div>
 
                       {/* Row 2: Water Quantity & Chemical Quantity */}
@@ -1669,8 +1900,23 @@ const ChemicalLogBookPage: React.FC = () => {
                   </tr>
                 )}
                 {filteredLogs.map((log) => {
+                  const isMaintenanceOrShutdown =
+                    log.activity_type === "maintenance" || log.activity_type === "shutdown";
+                  const canEditMaintenanceBeforeApprove =
+                    isMaintenanceOrShutdown &&
+                    (log.status === "draft" || log.status === "pending" || log.status === "pending_secondary_approval") &&
+                    user?.role !== "operator" &&
+                    log.operator_id !== user?.id &&
+                    !(log.status === "pending_secondary_approval" && log.approved_by_id === user?.id);
+                  const canEditRejected =
+                    log.status === "rejected" &&
+                    log.operator_id === user?.id &&
+                    !(log.has_corrections && !log.corrects_id);
+                  const canEditAction = canEditMaintenanceBeforeApprove || canEditRejected;
                   const tolClass =
-                    log.tolerance_status === "outside"
+                    isMaintenanceOrShutdown
+                      ? "bg-yellow-100"
+                      : log.tolerance_status === "outside"
                       ? "bg-red-100"
                       : "";
                   return (
@@ -1817,6 +2063,10 @@ const ChemicalLogBookPage: React.FC = () => {
                               title={
                                 log.status === "pending_secondary_approval" && log.approved_by_id === user?.id
                                   ? "A different person must approve this corrected entry."
+                                  : isMaintenanceOrShutdown &&
+                                    (log.status === "pending" || log.status === "draft" || log.status === "pending_secondary_approval") &&
+                                    !editedMaintenanceLogIds.has(log.id)
+                                  ? "Please edit this maintenance/shutdown entry first, then approve."
                                   : (log.status === "pending" || log.status === "draft" || log.status === "pending_secondary_approval"
                                       ? "Approve"
                                       : "Approved")
@@ -1831,7 +2081,11 @@ const ChemicalLogBookPage: React.FC = () => {
                                     toast.error("The log book entry must be approved by a different user than the operator (Log Book Done By).");
                                     return;
                                   }
-                                  if (!viewedReadingsLogIds.has(log.id)) {
+                                  if (isMaintenanceOrShutdown && !editedMaintenanceLogIds.has(log.id)) {
+                                    toast.error("Please edit this maintenance/shutdown entry first, then approve.");
+                                    return;
+                                  }
+                                  if (!isMaintenanceOrShutdown && !viewedReadingsLogIds.has(log.id)) {
                                     toast.error("Please click View Readings before approving this entry.");
                                     return;
                                   }
@@ -1875,32 +2129,20 @@ const ChemicalLogBookPage: React.FC = () => {
                               size="icon"
                               className={cn(
                                 "h-7 w-7",
-                                (log.status === "rejected" &&
-                                  log.operator_id === user?.id &&
-                                  !(log.has_corrections && !log.corrects_id))
+                                canEditAction
                                   ? ""
                                   : "opacity-40 cursor-not-allowed"
                               )}
                               title={
-                                log.status === "rejected" &&
-                                log.operator_id === user?.id &&
-                                !(log.has_corrections && !log.corrects_id)
-                                  ? "Edit entry"
-                                  : "Edit only available after reject"
+                                canEditAction ? "Edit entry" : "Edit only available"
                               }
                               onClick={() => {
-                                if (
-                                  log.status === "rejected" &&
-                                  log.operator_id === user?.id &&
-                                  !(log.has_corrections && !log.corrects_id)
-                                ) {
+                                if (canEditAction) {
                                   handleEditLog(log);
                                 }
                               }}
                               disabled={
-                                log.status !== "rejected" ||
-                                log.operator_id !== user?.id ||
-                                (log.has_corrections && !log.corrects_id)
+                                !canEditAction
                               }
                             >
                               <Edit className="w-4 h-4" />
@@ -2093,7 +2335,26 @@ const ChemicalLogBookPage: React.FC = () => {
                     if (log.status === "pending_secondary_approval" && log.approved_by_id === user?.id) return false;
                     return true;
                   });
-                  const notViewedIds = ids.filter((id) => !viewedReadingsLogIds.has(id));
+                  const mustEditFirstIds = ids.filter((id) => {
+                    const log = logs.find((l) => l.id === id);
+                    if (!log) return false;
+                    const isMaintenanceOrShutdown =
+                      log.activity_type === "maintenance" || log.activity_type === "shutdown";
+                    return isMaintenanceOrShutdown && !editedMaintenanceLogIds.has(id);
+                  });
+                  if (mustEditFirstIds.length > 0) {
+                    toast.error(
+                      `Please edit maintenance/shutdown entr${mustEditFirstIds.length === 1 ? "y" : "ies"} first, then approve.`
+                    );
+                    return;
+                  }
+                  const notViewedIds = ids.filter((id) => {
+                    const log = logs.find((l) => l.id === id);
+                    if (!log) return false;
+                    const isMaintenanceOrShutdown =
+                      log.activity_type === "maintenance" || log.activity_type === "shutdown";
+                    return !isMaintenanceOrShutdown && !viewedReadingsLogIds.has(id);
+                  });
                   if (notViewedIds.length > 0) {
                     toast.error(
                       `Please click View Readings before approval for ${notViewedIds.length} selected entr${notViewedIds.length === 1 ? "y" : "ies"}.`

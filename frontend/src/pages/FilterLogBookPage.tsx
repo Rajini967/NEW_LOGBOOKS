@@ -50,7 +50,7 @@ import {
 import { EntryIntervalBadge } from "@/components/logbook/EntryIntervalBadge";
 import { MissedReadingPopup } from "@/components/logbook/MissedReadingPopup";
 import {
-  computeMissedByEquipment,
+  getTotalMissingSlots,
   type EquipmentMissInfo,
 } from "@/lib/missed-reading";
 import { MaintenanceTimingsSection } from "@/components/logbook/MaintenanceTimingsSection";
@@ -123,7 +123,13 @@ interface FilterLog {
   corrects_id?: string;
   has_corrections?: boolean;
   tolerance_status?: "none" | "within" | "outside";
+  activity_type?: "operation" | "maintenance" | "shutdown";
+  activity_from_date?: string | null;
+  activity_to_date?: string | null;
+  activity_from_time?: string | null;
+  activity_to_time?: string | null;
 }
+type LogEntryIntervalType = "hourly" | "shift" | "daily";
 
 const CREATOR_ONLY_REJECTED_EDIT_MESSAGE = "Only the original creator can edit/correct a rejected entry.";
 
@@ -134,6 +140,7 @@ const FilterLogBookPage: React.FC = () => {
   const [showMissedReadingPopup, setShowMissedReadingPopup] = useState(false);
   const [missedReadingNextDue, setMissedReadingNextDue] = useState<Date | null>(null);
   const [missedEquipments, setMissedEquipments] = useState<EquipmentMissInfo[] | null>(null);
+  const [missingRefreshKey, setMissingRefreshKey] = useState(0);
   const [filteredLogs, setFilteredLogs] = useState<FilterLog[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -145,6 +152,7 @@ const FilterLogBookPage: React.FC = () => {
   const [rejectComment, setRejectComment] = useState("");
   const [selectedLogId, setSelectedLogId] = useState<string | null>(null);
   const [selectedLogIds, setSelectedLogIds] = useState<string[]>([]);
+  const [editedMaintenanceLogIds, setEditedMaintenanceLogIds] = useState<Set<string>>(new Set());
   const [approvalComment, setApprovalComment] = useState("");
   const [editingCommentLogId, setEditingCommentLogId] = useState<string | null>(null);
   const [editingCommentValue, setEditingCommentValue] = useState("");
@@ -152,8 +160,19 @@ const FilterLogBookPage: React.FC = () => {
   const [categoryOptions, setCategoryOptions] = useState<FilterCategoryOption[]>([]);
   const [equipmentOptions, setEquipmentOptions] = useState<EquipmentOption[]>([]);
   const [filterIdToEquipmentInterval, setFilterIdToEquipmentInterval] = useState<
-    Map<string, { log_entry_interval?: string | null; shift_duration_hours?: number | null }>
+    Map<
+      string,
+      {
+        equipment_id?: string;
+        log_entry_interval?: string | null;
+        shift_duration_hours?: number | null;
+        tolerance_minutes?: number | null;
+      }
+    >
   >(new Map());
+  const [entryLogInterval, setEntryLogInterval] = useState<"" | LogEntryIntervalType>("");
+  const [entryShiftDurationHours, setEntryShiftDurationHours] = useState<number | "">("");
+  const [entryToleranceMinutes, setEntryToleranceMinutes] = useState<number | "">("");
   const [filterRegisterOptions, setFilterRegisterOptions] = useState<FilterRegisterOption[]>([]);
   const [selectedEquipmentUuid, setSelectedEquipmentUuid] = useState<string>("");
   const [previousReadingsForEquipment, setPreviousReadingsForEquipment] = useState<FilterLog[]>([]);
@@ -165,6 +184,7 @@ const FilterLogBookPage: React.FC = () => {
     fromTime: "",
     toTime: "",
   });
+  const isReadingsApplicable = maintenanceTimings.activityType === "operation";
 
   const getTodayDateString = () => format(new Date(), "yyyy-MM-dd");
 
@@ -278,16 +298,34 @@ const FilterLogBookPage: React.FC = () => {
         return;
       }
       const allEquipment = (await equipmentAPI.list()) as any[];
-      const eqIntervalMap = new Map<string, { log_entry_interval?: string | null; shift_duration_hours?: number | null }>();
+      const eqIntervalMap = new Map<
+        string,
+        {
+          equipment_id?: string;
+          log_entry_interval?: string | null;
+          shift_duration_hours?: number | null;
+          tolerance_minutes?: number | null;
+        }
+      >();
       for (const e of allEquipment || []) {
         if (e?.id && (e.log_entry_interval != null || e.shift_duration_hours != null)) {
           eqIntervalMap.set(e.id, {
+            equipment_id: e.id,
             log_entry_interval: e.log_entry_interval ?? null,
             shift_duration_hours: e.shift_duration_hours ?? null,
+            tolerance_minutes: e.tolerance_minutes ?? null,
           });
         }
       }
-      const filterToInterval = new Map<string, { log_entry_interval?: string | null; shift_duration_hours?: number | null }>();
+      const filterToInterval = new Map<
+        string,
+        {
+          equipment_id?: string;
+          log_entry_interval?: string | null;
+          shift_duration_hours?: number | null;
+          tolerance_minutes?: number | null;
+        }
+      >();
       for (const a of assignments || []) {
         if (a.filter_id && a.equipment) {
           const interval = eqIntervalMap.get(a.equipment);
@@ -405,6 +443,7 @@ const FilterLogBookPage: React.FC = () => {
   const onFilterFromRegisterSelected = (filterId: string) => {
     const filter = filterRegisterOptions.find((f) => f.filter_id === filterId);
     if (!filter) return;
+    const timingMeta = filterIdToEquipmentInterval.get(filter.filter_id);
     const sizeStr =
       [filter.size_l, filter.size_w, filter.size_h].every((v) => v != null)
         ? `${filter.size_l} × ${filter.size_w} × ${filter.size_h}`
@@ -417,6 +456,12 @@ const FilterLogBookPage: React.FC = () => {
       filterSize: sizeStr || prev.filterSize,
       category: (filter.category_name ?? prev.category) as FilterCategory,
     }));
+    if (timingMeta?.equipment_id) {
+      setSelectedEquipmentUuid(timingMeta.equipment_id);
+    }
+    setEntryLogInterval((timingMeta?.log_entry_interval as LogEntryIntervalType) || "");
+    setEntryShiftDurationHours(timingMeta?.shift_duration_hours ?? "");
+    setEntryToleranceMinutes(timingMeta?.tolerance_minutes ?? "");
   };
 
   /** When user selects equipment, fetch tag information (and assignment details) from filter assignment */
@@ -501,14 +546,20 @@ const FilterLogBookPage: React.FC = () => {
           operator_id: log.operator_id,
           approved_by_id: log.approved_by_id,
           corrects_id: log.corrects_id,
-      has_corrections: log.has_corrections,
-      tolerance_status: log.tolerance_status as FilterLog["tolerance_status"],
+          has_corrections: log.has_corrections,
+          tolerance_status: log.tolerance_status as FilterLog["tolerance_status"],
+          activity_type: log.activity_type,
+          activity_from_date: log.activity_from_date,
+          activity_to_date: log.activity_to_date,
+          activity_from_time: log.activity_from_time,
+          activity_to_time: log.activity_to_time,
         });
       });
 
       allLogs.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
       setLogs(allLogs);
       setFilteredLogs(allLogs);
+      setMissingRefreshKey((prev) => prev + 1);
     } catch (error) {
       console.error("Error refreshing filter logs:", error);
       toast.error("Failed to refresh filter log entries");
@@ -526,58 +577,72 @@ const FilterLogBookPage: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (!sessionSettings?.log_entry_interval || logs.length === 0) {
-      setMissedEquipments(null);
-      setShowMissedReadingPopup(false);
-      setMissedReadingNextDue(null);
-      return;
-    }
-    const defaultInterval = sessionSettings.log_entry_interval as "hourly" | "shift" | "daily";
-    const defaultShift = sessionSettings.shift_duration_hours ?? 8;
-    const resolveInterval = (equipmentId?: string): "hourly" | "shift" | "daily" => {
-      const meta = equipmentId ? filterIdToEquipmentInterval.get(equipmentId) : undefined;
-      return (
-        (meta?.log_entry_interval as "hourly" | "shift" | "daily") ||
-        defaultInterval ||
-        "daily"
-      );
-    };
-    const resolveShiftHours = (equipmentId?: string): number => {
-      const meta = equipmentId ? filterIdToEquipmentInterval.get(equipmentId) : undefined;
-      return meta?.shift_duration_hours ?? defaultShift;
-    };
+    const selectedDate = filters.fromDate || format(new Date(), "yyyy-MM-dd");
+    filterLogAPI
+      .missingSlots({ date: selectedDate })
+      .then((payload) => {
+        const missedOnly: EquipmentMissInfo[] = (payload?.equipments || [])
+          .filter((eq) => (eq.missing_slot_count || 0) > 0)
+          .map((eq) => ({
+            equipmentId: eq.equipment_id,
+            equipmentName: eq.equipment_name,
+            lastTimestamp: null,
+            nextDue: eq.next_due ? new Date(eq.next_due) : null,
+            isMissed: (eq.missing_slot_count || 0) > 0,
+            interval: eq.interval,
+            shiftHours: eq.shift_duration_hours || 8,
+            expectedSlotCount: eq.expected_slot_count,
+            presentSlotCount: eq.present_slot_count,
+            missingSlotCount: eq.missing_slot_count,
+            missingSlotRanges: (eq.missing_slots || []).map((slot) => ({
+              slotStart: new Date(slot.slot_start),
+              slotEnd: new Date(slot.slot_end),
+              label: slot.label,
+            })),
+          }));
+        if (missedOnly.length > 0) {
+          setMissedEquipments(missedOnly);
+          const firstNext =
+            missedOnly
+              .map((m) => m.nextDue)
+              .filter((d): d is Date => !!d)
+              .sort((a, b) => a.getTime() - b.getTime())[0] || null;
+          setMissedReadingNextDue(firstNext);
+          return;
+        }
+        setMissedEquipments(null);
+        setShowMissedReadingPopup(false);
+        setMissedReadingNextDue(null);
+      })
+      .catch(() => {
+        setMissedEquipments(null);
+        setShowMissedReadingPopup(false);
+        setMissedReadingNextDue(null);
+      });
+  }, [filters.fromDate, missingRefreshKey]);
 
-    const perEquipment = computeMissedByEquipment(
-      logs.map((log) => ({
-        equipment_id: log.equipmentId,
-        equipment_name: log.equipmentId,
-        timestamp: log.timestamp,
-      })),
-      {
-        resolveInterval: (eqId) => resolveInterval(eqId),
-        resolveShiftHours: (eqId) => resolveShiftHours(eqId),
-      },
-    );
-
-    const missedOnly = perEquipment.filter((m) => m.isMissed);
-    if (missedOnly.length > 0) {
-      setMissedEquipments(missedOnly);
-      const firstNext =
-        missedOnly
-          .map((m) => m.nextDue)
-          .filter((d): d is Date => !!d)
-          .sort((a, b) => a.getTime() - b.getTime())[0] || null;
-      setMissedReadingNextDue(firstNext);
-    } else {
-      setMissedEquipments(null);
-      setShowMissedReadingPopup(false);
-      setMissedReadingNextDue(null);
-    }
-  }, [logs, sessionSettings, filterIdToEquipmentInterval]);
+  useEffect(() => {
+    if (!isDialogOpen || !!editingLogId) return;
+    if (!formData.equipmentId) return;
+    if (entryLogInterval !== "" || entryShiftDurationHours !== "" || entryToleranceMinutes !== "") return;
+    const timingMeta = filterIdToEquipmentInterval.get(formData.equipmentId);
+    if (!timingMeta) return;
+    setEntryLogInterval((timingMeta.log_entry_interval as LogEntryIntervalType) || "");
+    setEntryShiftDurationHours(timingMeta.shift_duration_hours ?? "");
+    setEntryToleranceMinutes(timingMeta.tolerance_minutes ?? "");
+  }, [
+    isDialogOpen,
+    editingLogId,
+    formData.equipmentId,
+    filterIdToEquipmentInterval,
+    entryLogInterval,
+    entryShiftDurationHours,
+    entryToleranceMinutes,
+  ]);
 
   const hasMissedReadings =
     !!missedReadingNextDue || (missedEquipments?.length ?? 0) > 0;
-  const missedReadingsCount = missedEquipments?.length ?? (hasMissedReadings ? 1 : 0);
+  const missedReadingsCount = getTotalMissingSlots(missedEquipments);
 
   // After equipment selection, fetch previous readings with entered-by for that equipment
   useEffect(() => {
@@ -776,6 +841,9 @@ const FilterLogBookPage: React.FC = () => {
 
   const resetForm = () => {
     setSelectedEquipmentUuid("");
+    setEntryLogInterval("");
+    setEntryShiftDurationHours("");
+    setEntryToleranceMinutes("");
     const today = getTodayDateString();
     const base = new Date(today);
     const addDays = (d: Date, days: number) => {
@@ -827,10 +895,18 @@ const FilterLogBookPage: React.FC = () => {
   };
 
   const handleEditLog = (log: FilterLog) => {
+    const canEditMaintenanceBeforeApprove =
+      (log.activity_type === "maintenance" || log.activity_type === "shutdown") &&
+      (log.status === "draft" || log.status === "pending" || log.status === "pending_secondary_approval") &&
+      user?.role !== "operator" &&
+      log.operator_id !== user?.id &&
+      !(log.status === "pending_secondary_approval" && log.approved_by_id === user?.id);
+
     if (
-      log.status !== "rejected" ||
-      log.operator_id !== user?.id ||
-      (log.has_corrections && !log.corrects_id)
+      !canEditMaintenanceBeforeApprove &&
+      (log.status !== "rejected" ||
+        log.operator_id !== user?.id ||
+        (log.has_corrections && !log.corrects_id))
     ) {
       toast.error(CREATOR_ONLY_REJECTED_EDIT_MESSAGE);
       return;
@@ -854,6 +930,13 @@ const FilterLogBookPage: React.FC = () => {
       date: datePart,
       time: timePart,
     });
+    setMaintenanceTimings({
+      activityType: (log.activity_type as "operation" | "maintenance" | "shutdown") || "operation",
+      fromDate: log.activity_from_date || "",
+      toDate: log.activity_to_date || "",
+      fromTime: log.activity_from_time || "",
+      toTime: log.activity_to_time || "",
+    });
     setEditingLogId(log.id);
     setIsDialogOpen(true);
   };
@@ -868,6 +951,43 @@ const FilterLogBookPage: React.FC = () => {
     if (!formData.equipmentId) {
       toast.error("Please select Filter (from Register).");
       return;
+    }
+    const timingMeta = filterIdToEquipmentInterval.get(formData.equipmentId);
+    const equipmentIdForPatch = timingMeta?.equipment_id || selectedEquipmentUuid || "";
+    if (equipmentIdForPatch) {
+      if (
+        entryLogInterval === "shift" &&
+        (entryShiftDurationHours === "" ||
+          Number(entryShiftDurationHours) < 1 ||
+          Number(entryShiftDurationHours) > 24)
+      ) {
+        toast.error("Shift duration must be between 1 and 24 hours.");
+        return;
+      }
+      await equipmentAPI.patch(equipmentIdForPatch, {
+        log_entry_interval: entryLogInterval || null,
+        shift_duration_hours:
+          entryLogInterval === "shift" && entryShiftDurationHours !== ""
+            ? Number(entryShiftDurationHours)
+            : null,
+        tolerance_minutes:
+          entryToleranceMinutes === "" ? null : Math.max(0, Number(entryToleranceMinutes) || 0),
+      });
+      setFilterIdToEquipmentInterval((prev) => {
+        const next = new Map(prev);
+        next.set(formData.equipmentId, {
+          ...(next.get(formData.equipmentId) || {}),
+          equipment_id: equipmentIdForPatch,
+          log_entry_interval: entryLogInterval || null,
+          shift_duration_hours:
+            entryLogInterval === "shift" && entryShiftDurationHours !== ""
+              ? Number(entryShiftDurationHours)
+              : null,
+          tolerance_minutes:
+            entryToleranceMinutes === "" ? null : Math.max(0, Number(entryToleranceMinutes) || 0),
+        });
+        return next;
+      });
     }
     if (!formData.remarks.trim()) {
       toast.error("Remarks are required.");
@@ -943,6 +1063,16 @@ const FilterLogBookPage: React.FC = () => {
         } else {
           await filterLogAPI.update(editingLogId, payload);
           toast.success("Filter log updated successfully");
+          if (
+            maintenanceTimings.activityType === "maintenance" ||
+            maintenanceTimings.activityType === "shutdown"
+          ) {
+            setEditedMaintenanceLogIds((prev) => {
+              const next = new Set(prev);
+              next.add(editingLogId);
+              return next;
+            });
+          }
         }
       } else {
         const created = await filterLogAPI.create(payload);
@@ -964,6 +1094,8 @@ const FilterLogBookPage: React.FC = () => {
 
   const handleApproveClick = (logId: string, log: FilterLog) => {
     if (!user) return;
+    const isMaintenanceOrShutdown =
+      log.activity_type === "maintenance" || log.activity_type === "shutdown";
 
     // Disallow approving own entries
     if (log.operator_id && log.operator_id === user.id) {
@@ -985,6 +1117,10 @@ const FilterLogBookPage: React.FC = () => {
       toast.error("A different person must approve this corrected entry.");
       return;
     }
+    if (isMaintenanceOrShutdown && !editedMaintenanceLogIds.has(logId)) {
+      toast.error("Please edit this maintenance/shutdown entry first, then approve.");
+      return;
+    }
 
     setSelectedLogIds([logId]);
     setSelectedLogId(logId);
@@ -995,6 +1131,19 @@ const FilterLogBookPage: React.FC = () => {
   const handleBulkApproveClick = () => {
     if (!selectedLogIds.length) {
       toast.error("Please select at least one entry to approve.");
+      return;
+    }
+    const mustEditFirstIds = selectedLogIds.filter((id) => {
+      const log = logs.find((l) => l.id === id);
+      if (!log) return false;
+      const isMaintenanceOrShutdown =
+        log.activity_type === "maintenance" || log.activity_type === "shutdown";
+      return isMaintenanceOrShutdown && !editedMaintenanceLogIds.has(id);
+    });
+    if (mustEditFirstIds.length > 0) {
+      toast.error(
+        `Please edit maintenance/shutdown entr${mustEditFirstIds.length === 1 ? "y" : "ies"} first, then approve.`
+      );
       return;
     }
     setApproveConfirmOpen(true);
@@ -1124,7 +1273,6 @@ const FilterLogBookPage: React.FC = () => {
           open={showMissedReadingPopup}
           onClose={() => {
             setShowMissedReadingPopup(false);
-            setMissedReadingNextDue(null);
           }}
           logTypeLabel="Filter"
           nextDue={missedReadingNextDue}
@@ -1312,6 +1460,63 @@ const FilterLogBookPage: React.FC = () => {
                       <p className="text-xs text-muted-foreground">
                         Fetched from Filter Register when you select a filter above.
                       </p>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-4">
+                    <div className="space-y-2">
+                      <Label>Log entry interval</Label>
+                      <Select
+                        value={entryLogInterval || "__none__"}
+                        onValueChange={(v) => {
+                          const next = v === "__none__" ? "" : (v as LogEntryIntervalType);
+                          setEntryLogInterval(next);
+                          if (next !== "shift") setEntryShiftDurationHours("");
+                        }}
+                        disabled={!isReadingsApplicable}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Use global default" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">Use global default</SelectItem>
+                          <SelectItem value="hourly">Hourly</SelectItem>
+                          <SelectItem value="shift">Shift</SelectItem>
+                          <SelectItem value="daily">Daily</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Shift duration (hours)</Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={24}
+                        disabled={!isReadingsApplicable || entryLogInterval !== "shift"}
+                        value={entryShiftDurationHours === "" ? "" : entryShiftDurationHours}
+                        onChange={(e) =>
+                          setEntryShiftDurationHours(
+                            e.target.value === ""
+                              ? ""
+                              : Math.max(1, Math.min(24, Number(e.target.value) || 8)),
+                          )
+                        }
+                        placeholder="e.g. 8"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Log entry tolerance (minutes)</Label>
+                      <Input
+                        type="number"
+                        min={0}
+                        value={entryToleranceMinutes === "" ? "" : entryToleranceMinutes}
+                        onChange={(e) =>
+                          setEntryToleranceMinutes(
+                            e.target.value === "" ? "" : Math.max(0, Number(e.target.value) || 0),
+                          )
+                        }
+                        disabled={!isReadingsApplicable}
+                        placeholder="e.g. 15"
+                      />
                     </div>
                   </div>
 
@@ -1830,6 +2035,19 @@ const FilterLogBookPage: React.FC = () => {
                       toast.error("No entries selected to approve.");
                       return;
                     }
+                    const mustEditFirstIds = ids.filter((id) => {
+                      const log = logs.find((l) => l.id === id);
+                      if (!log) return false;
+                      const isMaintenanceOrShutdown =
+                        log.activity_type === "maintenance" || log.activity_type === "shutdown";
+                      return isMaintenanceOrShutdown && !editedMaintenanceLogIds.has(id);
+                    });
+                    if (mustEditFirstIds.length > 0) {
+                      toast.error(
+                        `Please edit maintenance/shutdown entr${mustEditFirstIds.length === 1 ? "y" : "ies"} first, then approve.`
+                      );
+                      return;
+                    }
                     await performApprove(ids, comment);
                     setApproveCommentOpen(false);
                     setApprovalComment("");
@@ -2040,8 +2258,23 @@ const FilterLogBookPage: React.FC = () => {
                   const dateStr = format(log.timestamp, "yyyy-MM-dd");
                   const timeStr = format(log.timestamp, "HH:mm:ss");
                   const isSelected = selectedLogIds.includes(log.id);
+                  const isMaintenanceOrShutdown =
+                    log.activity_type === "maintenance" || log.activity_type === "shutdown";
+                  const canEditMaintenanceBeforeApprove =
+                    isMaintenanceOrShutdown &&
+                    (log.status === "draft" || log.status === "pending" || log.status === "pending_secondary_approval") &&
+                    user?.role !== "operator" &&
+                    log.operator_id !== user?.id &&
+                    !(log.status === "pending_secondary_approval" && log.approved_by_id === user?.id);
+                  const canEditRejected =
+                    log.status === "rejected" &&
+                    log.operator_id === user?.id &&
+                    !(log.has_corrections && !log.corrects_id);
+                  const canEditAction = canEditMaintenanceBeforeApprove || canEditRejected;
                   const tolClass =
-                    log.tolerance_status === "outside"
+                    isMaintenanceOrShutdown
+                      ? "bg-yellow-100"
+                      : log.tolerance_status === "outside"
                       ? "bg-red-100"
                       : "";
 
@@ -2157,6 +2390,12 @@ const FilterLogBookPage: React.FC = () => {
                                 title={
                                   log.status === "pending_secondary_approval" && log.approved_by_id === user?.id
                                     ? "A different person must approve this corrected entry."
+                                    : isMaintenanceOrShutdown &&
+                                      (log.status === "pending" ||
+                                        log.status === "draft" ||
+                                        log.status === "pending_secondary_approval") &&
+                                      !editedMaintenanceLogIds.has(log.id)
+                                    ? "Please edit this maintenance/shutdown entry first, then approve."
                                     : log.status === "pending" ||
                                       log.status === "draft" ||
                                       log.status === "pending_secondary_approval"
@@ -2216,32 +2455,20 @@ const FilterLogBookPage: React.FC = () => {
                                 variant="ghost"
                                 className={cn(
                                   "h-7 w-7",
-                                  (log.status === "rejected" &&
-                                    log.operator_id === user?.id &&
-                                    !(log.has_corrections && !log.corrects_id))
+                                  canEditAction
                                     ? ""
                                     : "opacity-40 cursor-not-allowed",
                                 )}
                                 title={
-                                  log.status === "rejected" &&
-                                  log.operator_id === user?.id &&
-                                  !(log.has_corrections && !log.corrects_id)
-                                    ? "Edit entry"
-                                    : "Edit only available after reject"
+                                  canEditAction ? "Edit entry" : "Edit only available"
                                 }
                                 onClick={() => {
-                                  if (
-                                    log.status === "rejected" &&
-                                    log.operator_id === user?.id &&
-                                    !(log.has_corrections && !log.corrects_id)
-                                  ) {
+                                  if (canEditAction) {
                                     handleEditLog(log);
                                   }
                                 }}
                                 disabled={
-                                  log.status !== "rejected" ||
-                                  log.operator_id !== user?.id ||
-                                  (log.has_corrections && !log.corrects_id)
+                                  !canEditAction
                                 }
                               >
                                 <Edit className="w-4 h-4" />

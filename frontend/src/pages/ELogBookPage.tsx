@@ -44,8 +44,7 @@ import { EntryIntervalBadge } from '@/components/logbook/EntryIntervalBadge';
 import { MissedReadingPopup } from '@/components/logbook/MissedReadingPopup';
 import { MaintenanceTimingsSection } from "@/components/logbook/MaintenanceTimingsSection";
 import {
-  getNextDueAndMissed,
-  computeMissedByEquipment,
+  getTotalMissingSlots,
   type EquipmentMissInfo,
 } from '@/lib/missed-reading';
 import type { MaintenanceTimingsValue } from "@/types/maintenance-timings";
@@ -87,7 +86,6 @@ interface ELogBook {
   chilledWaterPumpChemicalQtyKg?: number;
   coolingTowerFanChemicalName?: string;
   coolingTowerFanChemicalQtyKg?: number;
-  recordingFrequency?: string;
   operatorSign?: string;
   verifiedBy?: string;
   // Boiler fields
@@ -121,6 +119,11 @@ interface ELogBook {
   corrects_id?: string;
   has_corrections?: boolean;
   tolerance_status?: 'none' | 'within' | 'outside';
+  activity_type?: 'operation' | 'maintenance' | 'shutdown';
+  activity_from_date?: string | null;
+  activity_to_date?: string | null;
+  activity_from_time?: string | null;
+  activity_to_time?: string | null;
 }
 
 const CREATOR_ONLY_REJECTED_EDIT_MESSAGE = "Only the original creator can edit/correct a rejected entry.";
@@ -155,6 +158,31 @@ const decodeFanTriple = (
     f2: match[2].toUpperCase() as PumpStatus,
     f3: match[3].toUpperCase() as PumpStatus,
   };
+};
+
+const formatBlowdownInputValue = (minutes?: number | null): string => {
+  if (minutes == null || Number.isNaN(minutes)) return "";
+  const totalSeconds = Math.max(0, Math.round(Number(minutes) * 60));
+  const hh = Math.floor(totalSeconds / 3600);
+  const mm = Math.floor((totalSeconds % 3600) / 60);
+  const ss = totalSeconds % 60;
+  return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
+};
+
+const parseBlowdownToMinutes = (raw: string): number | null | "invalid" => {
+  const value = (raw || "").trim();
+  if (!value) return null;
+  if (value.toUpperCase() === "N/A") return null;
+  const timeMatch = value.match(/^(\d{1,2}):([0-5]\d):([0-5]\d)$/);
+  if (timeMatch) {
+    const hh = Number(timeMatch[1]);
+    const mm = Number(timeMatch[2]);
+    const ss = Number(timeMatch[3]);
+    return (hh * 3600 + mm * 60 + ss) / 60;
+  }
+  const asNumber = Number(value);
+  if (!Number.isNaN(asNumber) && asNumber >= 0) return asNumber;
+  return "invalid";
 };
 
 // Equipment limits based on the example documents
@@ -247,7 +275,9 @@ interface EquipmentOption {
   name: string;
   log_entry_interval?: string | null;
   shift_duration_hours?: number | null;
+  tolerance_minutes?: number | null;
 }
+type LogEntryIntervalType = 'hourly' | 'shift' | 'daily';
 
 export default function ELogBookPage() {
   // This page is now dedicated to the Chiller log book only.
@@ -268,6 +298,9 @@ export default function ELogBookPage() {
     boiler: [],
     compressor: [],
   });
+  const [entryLogInterval, setEntryLogInterval] = useState<'' | LogEntryIntervalType>('');
+  const [entryShiftDurationHours, setEntryShiftDurationHours] = useState<number | ''>('');
+  const [entryToleranceMinutes, setEntryToleranceMinutes] = useState<number | ''>('');
   const [maintenanceTimings, setMaintenanceTimings] = useState<MaintenanceTimingsValue>({
     activityType: "operation",
     fromDate: "",
@@ -316,7 +349,6 @@ export default function ELogBookPage() {
     chilledWaterPumpChemicalQtyKg: '',
     coolingTowerFanChemicalName: '',
     coolingTowerFanChemicalQtyKg: '',
-    recordingFrequency: '',
     operatorSign: '',
     verifiedBy: '',
     // Boiler fields
@@ -352,6 +384,7 @@ export default function ELogBookPage() {
   const [showMissedReadingPopup, setShowMissedReadingPopup] = useState(false);
   const [missedReadingNextDue, setMissedReadingNextDue] = useState<Date | null>(null);
   const [missedEquipments, setMissedEquipments] = useState<EquipmentMissInfo[] | null>(null);
+  const [missingRefreshKey, setMissingRefreshKey] = useState(0);
   const [selectedLogId, setSelectedLogId] = useState<string | null>(null);
   const [selectedLogIds, setSelectedLogIds] = useState<string[]>([]);
   const [approvalComment, setApprovalComment] = useState('');
@@ -360,6 +393,7 @@ export default function ELogBookPage() {
   const [editingLogId, setEditingLogId] = useState<string | null>(null);
   const [readingsModalLogId, setReadingsModalLogId] = useState<string | null>(null);
   const [viewedReadingsLogIds, setViewedReadingsLogIds] = useState<Set<string>>(new Set());
+  const [editedMaintenanceLogIds, setEditedMaintenanceLogIds] = useState<Set<string>>(new Set());
 
   // Pump/fan running section can be edited only for the first chiller reading of the day (global).
   // Subsequent entries (and all edits) can view but cannot change these values.
@@ -458,6 +492,7 @@ export default function ELogBookPage() {
               name: e.name || '',
               log_entry_interval: e.log_entry_interval ?? null,
               shift_duration_hours: e.shift_duration_hours ?? null,
+              tolerance_minutes: e.tolerance_minutes ?? null,
             }));
         setEquipmentByType({
           chiller: map(chillerEq as any[]),
@@ -547,68 +582,75 @@ export default function ELogBookPage() {
     };
   }, [formData.equipmentId, formData.equipmentType]);
 
-  // Missed scheduled reading popup: when logs and session settings are ready, check if next due has passed (equipment-wise)
+  // Missed scheduled reading popup via backend slot engine (equipment-wise, slot-wise)
   useEffect(() => {
-    if (!sessionSettings?.log_entry_interval || logs.length === 0) return;
-    const chillerLogsOnly = logs.filter((l) => l.equipmentType === 'chiller');
-    if (chillerLogsOnly.length === 0) {
-      setMissedEquipments(null);
-      setShowMissedReadingPopup(false);
-      setMissedReadingNextDue(null);
-      return;
-    }
-    const chillerOptions = equipmentByType.chiller ?? [];
-    const metaByNumber = new Map<
-      string,
-      { log_entry_interval?: string | null; shift_duration_hours?: number | null }
-    >();
-    for (const e of chillerOptions) {
-      metaByNumber.set(e.equipment_number, {
-        log_entry_interval: e.log_entry_interval ?? null,
-        shift_duration_hours: e.shift_duration_hours ?? null,
+    const selectedDate = filters.fromDate || format(new Date(), 'yyyy-MM-dd');
+    chillerLogAPI
+      .missingSlots({ date: selectedDate })
+      .then((payload) => {
+        const missedOnly: EquipmentMissInfo[] = (payload?.equipments || [])
+          .filter((eq) => (eq.missing_slot_count || 0) > 0)
+          .map((eq) => ({
+            equipmentId: eq.equipment_id,
+            equipmentName: eq.equipment_name,
+            lastTimestamp: eq.last_reading_timestamp ? new Date(eq.last_reading_timestamp) : null,
+            nextDue: eq.next_due ? new Date(eq.next_due) : null,
+            isMissed: (eq.missing_slot_count || 0) > 0,
+            interval: eq.interval,
+            shiftHours: eq.shift_duration_hours || 8,
+            expectedSlotCount: eq.expected_slot_count,
+            presentSlotCount: eq.present_slot_count,
+            missingSlotCount: eq.missing_slot_count,
+            missingSlotRanges: (eq.missing_slots || []).map((slot) => ({
+              slotStart: new Date(slot.slot_start),
+              slotEnd: new Date(slot.slot_end),
+              label: slot.label,
+            })),
+          }));
+        if (missedOnly.length > 0) {
+          setMissedEquipments(missedOnly);
+          const firstNext =
+            missedOnly
+              .map((m) => m.nextDue)
+              .filter((d): d is Date => !!d)
+              .sort((a, b) => a.getTime() - b.getTime())[0] || null;
+          setMissedReadingNextDue(firstNext);
+          return;
+        }
+        setMissedEquipments(null);
+        setShowMissedReadingPopup(false);
+        setMissedReadingNextDue(null);
+      })
+      .catch(() => {
+        setMissedEquipments(null);
+        setShowMissedReadingPopup(false);
+        setMissedReadingNextDue(null);
       });
-    }
-    const defaultInterval = sessionSettings.log_entry_interval as 'hourly' | 'shift' | 'daily';
-    const defaultShift = sessionSettings.shift_duration_hours ?? 8;
+  }, [filters.fromDate, missingRefreshKey]);
 
-    const resolveInterval = (equipmentId?: string): 'hourly' | 'shift' | 'daily' => {
-      const meta = equipmentId ? metaByNumber.get(equipmentId) : undefined;
-      return (meta?.log_entry_interval as 'hourly' | 'shift' | 'daily') || defaultInterval || 'daily';
-    };
-    const resolveShift = (equipmentId?: string): number => {
-      const meta = equipmentId ? metaByNumber.get(equipmentId) : undefined;
-      return meta?.shift_duration_hours ?? defaultShift;
-    };
-
-    const perEquipment = computeMissedByEquipment(
-      chillerLogsOnly.map((l) => ({
-        equipment_id: l.equipmentId,
-        timestamp: l.timestamp,
-      })),
-      {
-        resolveInterval: (eqId) => resolveInterval(eqId),
-        resolveShiftHours: (eqId) => resolveShift(eqId),
-      },
-    );
-
-    const missedOnly = perEquipment.filter((m) => m.isMissed);
-    if (missedOnly.length > 0) {
-      setMissedEquipments(missedOnly);
-      // Use the earliest missed nextDue for the legacy description
-      const firstNext =
-        missedOnly
-          .map((m) => m.nextDue)
-          .filter((d): d is Date => !!d)
-          .sort((a, b) => a.getTime() - b.getTime())[0] || null;
-      setMissedReadingNextDue(firstNext);
-    } else {
-      setMissedEquipments(null);
-      setShowMissedReadingPopup(false);
-      setMissedReadingNextDue(null);
-    }
-  }, [logs, sessionSettings, equipmentByType]);
+  useEffect(() => {
+    if (!isDialogOpen || !!editingLogId) return;
+    if (!formData.equipmentId) return;
+    if (entryLogInterval !== '' || entryShiftDurationHours !== '' || entryToleranceMinutes !== '') return;
+    const options = equipmentByType[formData.equipmentType as 'chiller' | 'boiler' | 'compressor'] || [];
+    const selectedEquipment = options.find((eq) => eq.equipment_number === formData.equipmentId);
+    if (!selectedEquipment) return;
+    setEntryLogInterval((selectedEquipment.log_entry_interval as LogEntryIntervalType) || '');
+    setEntryShiftDurationHours(selectedEquipment.shift_duration_hours ?? '');
+    setEntryToleranceMinutes(selectedEquipment.tolerance_minutes ?? '');
+  }, [
+    isDialogOpen,
+    editingLogId,
+    formData.equipmentId,
+    formData.equipmentType,
+    equipmentByType,
+    entryLogInterval,
+    entryShiftDurationHours,
+    entryToleranceMinutes,
+  ]);
 
   const hasMissedReadings = !!missedReadingNextDue || (missedEquipments?.length ?? 0) > 0;
+  const missedReadingsCount = getTotalMissingSlots(missedEquipments);
 
   // Refresh logs from API
   const refreshLogs = async () => {
@@ -678,7 +720,6 @@ export default function ELogBookPage() {
           chilledWaterPumpChemicalQtyKg: log.chilled_water_pump_chemical_qty_kg,
           coolingTowerFanChemicalName: log.cooling_tower_fan_chemical_name,
           coolingTowerFanChemicalQtyKg: log.cooling_tower_fan_chemical_qty_kg,
-          recordingFrequency: log.recording_frequency,
           operatorSign: log.operator_sign,
           verifiedBy: log.verified_by,
           remarks: log.remarks || '',
@@ -696,6 +737,11 @@ export default function ELogBookPage() {
           corrects_id: log.corrects_id,
           has_corrections: log.has_corrections,
           tolerance_status: log.tolerance_status as 'none' | 'within' | 'outside' | undefined,
+          activity_type: log.activity_type,
+          activity_from_date: log.activity_from_date,
+          activity_to_date: log.activity_to_date,
+          activity_from_time: log.activity_from_time,
+          activity_to_time: log.activity_to_time,
         });
       });
 
@@ -723,6 +769,11 @@ export default function ELogBookPage() {
           corrects_id: log.corrects_id,
           has_corrections: log.has_corrections,
           tolerance_status: log.tolerance_status as 'none' | 'within' | 'outside' | undefined,
+          activity_type: log.activity_type,
+          activity_from_date: log.activity_from_date,
+          activity_to_date: log.activity_to_date,
+          activity_from_time: log.activity_from_time,
+          activity_to_time: log.activity_to_time,
         });
       });
 
@@ -750,6 +801,11 @@ export default function ELogBookPage() {
           corrects_id: log.corrects_id,
           has_corrections: log.has_corrections,
           tolerance_status: log.tolerance_status as 'none' | 'within' | 'outside' | undefined,
+          activity_type: log.activity_type,
+          activity_from_date: log.activity_from_date,
+          activity_to_date: log.activity_to_date,
+          activity_from_time: log.activity_from_time,
+          activity_to_time: log.activity_to_time,
         });
       });
 
@@ -777,12 +833,18 @@ export default function ELogBookPage() {
           corrects_id: log.corrects_id,
           has_corrections: log.has_corrections,
           tolerance_status: log.tolerance_status as 'none' | 'within' | 'outside' | undefined,
+          activity_type: log.activity_type,
+          activity_from_date: log.activity_from_date,
+          activity_to_date: log.activity_to_date,
+          activity_from_time: log.activity_from_time,
+          activity_to_time: log.activity_to_time,
         });
       });
 
       allLogs.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
       console.log('Total logs after refresh:', allLogs.length, allLogs);
       setLogs(allLogs);
+      setMissingRefreshKey((prev) => prev + 1);
 
       // Rebuild map of first chiller log per operator per day (legacy; kept for other logic)
       const firstMap: Record<string, ELogBook> = {};
@@ -972,6 +1034,29 @@ export default function ELogBookPage() {
     try {
       // Chiller page handles only chiller entries
       if (formData.equipmentType === 'chiller') {
+        const selectedChiller = (equipmentByType.chiller ?? []).find(
+          (eq) => eq.equipment_number === formData.equipmentId,
+        );
+        if (selectedChiller?.id) {
+          if (
+            entryLogInterval === 'shift' &&
+            (entryShiftDurationHours === '' ||
+              Number(entryShiftDurationHours) < 1 ||
+              Number(entryShiftDurationHours) > 24)
+          ) {
+            toast.error('Shift duration must be between 1 and 24 hours.');
+            return;
+          }
+          await equipmentAPI.patch(selectedChiller.id, {
+            log_entry_interval: entryLogInterval || null,
+            shift_duration_hours:
+              entryLogInterval === 'shift' && entryShiftDurationHours !== ''
+                ? Number(entryShiftDurationHours)
+                : null,
+            tolerance_minutes:
+              entryToleranceMinutes === '' ? null : Math.max(0, Number(entryToleranceMinutes) || 0),
+          });
+        }
         // Validate all chiller fields with clear messages before saving
         if (isReadingsApplicable && !validateChillerForm()) {
           return;
@@ -1064,7 +1149,6 @@ export default function ELogBookPage() {
           activity_to_date: maintenanceTimings.toDate || undefined,
           activity_from_time: maintenanceTimings.fromTime || undefined,
           activity_to_time: maintenanceTimings.toTime || undefined,
-          recording_frequency: formData.recordingFrequency || undefined,
           operator_sign: formData.operatorSign || undefined,
           verified_by: formData.verifiedBy || undefined,
           remarks: formData.remarks || undefined,
@@ -1072,10 +1156,13 @@ export default function ELogBookPage() {
           chilled_water_pump_status: chilledWaterPumpStatus || undefined,
           cooling_tower_fan_status: coolingTowerFanStatus || undefined,
           cooling_tower_blowoff_valve_status: formData.coolingTowerBlowoffValveStatus || undefined,
-          cooling_tower_blowdown_time_min: formData.coolingTowerBlowdownTimeMin
-            ? parseFloat(formData.coolingTowerBlowdownTimeMin)
-            : undefined,
         };
+        const blowdownMinutes = parseBlowdownToMinutes(formData.coolingTowerBlowdownTimeMin);
+        if (blowdownMinutes === "invalid") {
+          toast.error("Cooling Tower Blow Down Time must be HH:MM:SS or N/A.");
+          return;
+        }
+        logData.cooling_tower_blowdown_time_min = blowdownMinutes ?? undefined;
         if (isReadingsApplicable) {
           Object.assign(logData, {
             evap_water_inlet_pressure: formData.evapWaterInletPressure ? parseFloat(formData.evapWaterInletPressure) : undefined,
@@ -1114,6 +1201,16 @@ export default function ELogBookPage() {
           } else {
             await chillerLogAPI.update(editingLogId, logData);
             toast.success('Chiller entry updated successfully');
+            if (
+              maintenanceTimings.activityType === 'maintenance' ||
+              maintenanceTimings.activityType === 'shutdown'
+            ) {
+              setEditedMaintenanceLogIds((prev) => {
+                const next = new Set(prev);
+                next.add(editingLogId);
+                return next;
+              });
+            }
           }
         } else if (!editingLogId) {
           await chillerLogAPI.create(logData as any);
@@ -1207,7 +1304,6 @@ export default function ELogBookPage() {
         chilledWaterPumpChemicalQtyKg: '',
         coolingTowerFanChemicalName: '',
         coolingTowerFanChemicalQtyKg: '',
-        recordingFrequency: '',
         operatorSign: '',
         verifiedBy: '',
         feedWaterTemp: '',
@@ -1228,6 +1324,9 @@ export default function ELogBookPage() {
         date: '',
         time: '',
       });
+      setEntryLogInterval('');
+      setEntryShiftDurationHours('');
+      setEntryToleranceMinutes('');
       setCustomFormData({});
       setSelectedSchema(null);
       setIsDialogOpen(false);
@@ -1272,8 +1371,15 @@ export default function ELogBookPage() {
   const handleApproveClick = (id: string) => {
     const log = logs.find((l) => l.id === id);
     if (!log) return;
+    const isMaintenanceOrShutdown =
+      log.activity_type === 'maintenance' || log.activity_type === 'shutdown';
+    if (isMaintenanceOrShutdown && !editedMaintenanceLogIds.has(id)) {
+      toast.error('Please edit this maintenance/shutdown entry first, then approve.');
+      return;
+    }
     const requiresReadingsBeforeApprove =
-      log.equipmentType === 'chiller' || log.equipmentType === 'boiler' || log.equipmentType === 'chemical';
+      !isMaintenanceOrShutdown &&
+      (log.equipmentType === 'chiller' || log.equipmentType === 'boiler' || log.equipmentType === 'chemical');
     if (requiresReadingsBeforeApprove && !viewedReadingsLogIds.has(id)) {
       toast.error('Please click View Readings before approving this entry.');
       return;
@@ -1301,11 +1407,27 @@ export default function ELogBookPage() {
   };
 
   const handleApproveSelectedClick = () => {
+    const mustEditFirstIds = selectedLogIds.filter((id) => {
+      const log = logs.find((l) => l.id === id);
+      if (!log) return false;
+      const isMaintenanceOrShutdown =
+        log.activity_type === 'maintenance' || log.activity_type === 'shutdown';
+      return isMaintenanceOrShutdown && !editedMaintenanceLogIds.has(id);
+    });
+    if (mustEditFirstIds.length > 0) {
+      toast.error(
+        `Please edit maintenance/shutdown entr${mustEditFirstIds.length === 1 ? 'y' : 'ies'} first, then approve.`
+      );
+      return;
+    }
     const notViewedIds = selectedLogIds.filter((id) => {
       const log = logs.find((l) => l.id === id);
       if (!log) return false;
+      const isMaintenanceOrShutdown =
+        log.activity_type === 'maintenance' || log.activity_type === 'shutdown';
       const requiresReadingsBeforeApprove =
-        log.equipmentType === 'chiller' || log.equipmentType === 'boiler' || log.equipmentType === 'chemical';
+        !isMaintenanceOrShutdown &&
+        (log.equipmentType === 'chiller' || log.equipmentType === 'boiler' || log.equipmentType === 'chemical');
       return requiresReadingsBeforeApprove && !viewedReadingsLogIds.has(id);
     });
     if (notViewedIds.length > 0) {
@@ -1359,12 +1481,21 @@ export default function ELogBookPage() {
   };
 
   const canEditRejectedRow = (log: ELogBook) =>
+    log.activity_type !== 'maintenance' &&
+    log.activity_type !== 'shutdown' &&
     log.status === 'rejected' &&
     log.operator_id === user?.id &&
     (!log.has_corrections || Boolean(log.corrects_id));
 
+  const canEditMaintenanceBeforeApprove = (log: ELogBook) =>
+    (log.activity_type === 'maintenance' || log.activity_type === 'shutdown') &&
+    (log.status === 'draft' || log.status === 'pending' || log.status === 'pending_secondary_approval') &&
+    user?.role !== 'operator' &&
+    log.operator_id !== user?.id &&
+    !(log.status === 'pending_secondary_approval' && log.approved_by_id === user?.id);
+
   const handleEditLog = (log: ELogBook) => {
-    if (!canEditRejectedRow(log)) {
+    if (!canEditRejectedRow(log) && !canEditMaintenanceBeforeApprove(log)) {
       toast.error(CREATOR_ONLY_REJECTED_EDIT_MESSAGE);
       return;
     }
@@ -1408,7 +1539,7 @@ export default function ELogBookPage() {
       coolingTowerFanStatus: log.coolingTowerFanStatus || '',
       coolingTowerBlowoffValveStatus: log.coolingTowerBlowoffValveStatus || '',
       coolingTowerBlowdownTimeMin:
-        log.coolingTowerBlowdownTimeMin != null ? String(log.coolingTowerBlowdownTimeMin) : '',
+        formatBlowdownInputValue(log.coolingTowerBlowdownTimeMin),
       coolingTowerChemicalName: log.coolingTowerChemicalName || '',
       coolingTowerChemicalQtyPerDay:
         log.coolingTowerChemicalQtyPerDay != null ? String(log.coolingTowerChemicalQtyPerDay) : '',
@@ -1418,13 +1549,19 @@ export default function ELogBookPage() {
       coolingTowerFanChemicalName: log.coolingTowerFanChemicalName || '',
       coolingTowerFanChemicalQtyKg:
         log.coolingTowerFanChemicalQtyKg != null ? String(log.coolingTowerFanChemicalQtyKg) : '',
-      recordingFrequency: log.recordingFrequency || '',
       operatorSign: log.operatorSign || '',
       verifiedBy: log.verifiedBy || '',
       remarks: log.remarks || '',
       date: log.date || '',
       time: log.time || '',
     }));
+    setMaintenanceTimings({
+      activityType: (log.activity_type as "operation" | "maintenance" | "shutdown") || "operation",
+      fromDate: log.activity_from_date || "",
+      toDate: log.activity_to_date || "",
+      fromTime: log.activity_from_time || "",
+      toTime: log.activity_to_time || "",
+    });
 
     setIsDialogOpen(true);
   };
@@ -1567,7 +1704,6 @@ export default function ELogBookPage() {
       ...(canEditRunningSection
         ? [{ key: 'coolingTowerBlowdownTimeMin', label: 'Cooling tower blow down time (minutes)', numeric: true } as const]
         : []),
-      { key: 'recordingFrequency', label: 'Recording frequency' },
       { key: 'operatorSign', label: 'Operator Sign & Date' },
       { key: 'verifiedBy', label: 'Verified By (Sign & Date)' },
     ];
@@ -1633,17 +1769,6 @@ export default function ELogBookPage() {
     return 'Manual readings for Chillers and Boilers';
   };
 
-  const getRecordingFrequencyFromEquipment = (equipment?: EquipmentOption): string => {
-    if (!equipment?.log_entry_interval) return '';
-    if (equipment.log_entry_interval === 'hourly') return 'Hourly';
-    if (equipment.log_entry_interval === 'daily') return 'Daily';
-    if (equipment.log_entry_interval === 'shift') {
-      const shiftHours = equipment.shift_duration_hours ?? 8;
-      return `Shift (${shiftHours}h)`;
-    }
-    return '';
-  };
-
   const draftCount = useMemo(() => logs.filter((l) => l.status === 'draft').length, [logs]);
   const pendingCount = useMemo(
     () => logs.filter((l) => l.status === 'pending' || l.status === 'pending_secondary_approval').length,
@@ -1665,7 +1790,9 @@ export default function ELogBookPage() {
       {showMissedReadingPopup && (
         <MissedReadingPopup
           open={showMissedReadingPopup}
-          onClose={() => { setShowMissedReadingPopup(false); setMissedReadingNextDue(null); setMissedEquipments(null); }}
+          onClose={() => {
+            setShowMissedReadingPopup(false);
+          }}
           logTypeLabel="Chiller"
           nextDue={missedReadingNextDue ?? undefined}
           equipmentList={missedEquipments ?? undefined}
@@ -1699,9 +1826,9 @@ export default function ELogBookPage() {
             >
               <Clock className="w-4 h-4 mr-2" />
               Missing Readings
-              {!!missedEquipments?.length && (
+              {missedReadingsCount > 0 && (
                 <span className="ml-2 px-1.5 py-0.5 text-xs font-semibold bg-primary text-primary-foreground rounded-full">
-                  {missedEquipments.length}
+                  {missedReadingsCount}
                 </span>
               )}
             </Button>
@@ -1863,6 +1990,9 @@ export default function ELogBookPage() {
                 if (!open) {
                   // Reset edit mode when dialog closes
                   setEditingLogId(null);
+                  setEntryLogInterval('');
+                  setEntryShiftDurationHours('');
+                  setEntryToleranceMinutes('');
                   return;
                 }
                 // For new entries, auto-fill operator/verified fields.
@@ -1881,7 +2011,12 @@ export default function ELogBookPage() {
             <DialogTrigger asChild>
               <Button
                 variant="accent"
-                onClick={() => setEditingLogId(null)}
+                onClick={() => {
+                  setEditingLogId(null);
+                  setEntryLogInterval('');
+                  setEntryShiftDurationHours('');
+                  setEntryToleranceMinutes('');
+                }}
               >
                 <Plus className="w-4 h-4 mr-2" />
                 New Entry
@@ -1935,7 +2070,6 @@ export default function ELogBookPage() {
                           coolingTowerBlowoffValveStatus: '',
                           coolingTowerChemicalName: '',
                           coolingTowerChemicalQtyPerDay: '',
-                          recordingFrequency: '',
                           operatorSign: '',
                           verifiedBy: '',
                           feedWaterTemp: '',
@@ -1978,11 +2112,20 @@ export default function ELogBookPage() {
                             const options =
                               equipmentByType[formData.equipmentType as keyof typeof equipmentByType] ?? [];
                             const selectedEquipment = options.find((eq) => eq.equipment_number === v);
+                            if (formData.equipmentType === 'chiller') {
+                              setEntryLogInterval(
+                                (selectedEquipment?.log_entry_interval as LogEntryIntervalType) || '',
+                              );
+                              setEntryShiftDurationHours(
+                                selectedEquipment?.shift_duration_hours ?? '',
+                              );
+                              setEntryToleranceMinutes(
+                                selectedEquipment?.tolerance_minutes ?? '',
+                              );
+                            }
                             setFormData((prev) => ({
                               ...prev,
                               equipmentId: v,
-                              recordingFrequency:
-                                getRecordingFrequencyFromEquipment(selectedEquipment) || prev.recordingFrequency,
                             }));
                             if (formData.equipmentType === 'chiller') {
                               const dateKey = formData.date || format(new Date(), 'yyyy-MM-dd');
@@ -2010,7 +2153,7 @@ export default function ELogBookPage() {
                                     firstLog.coolingTowerBlowoffValveStatus || '',
                                   coolingTowerBlowdownTimeMin:
                                     firstLog.coolingTowerBlowdownTimeMin != null
-                                      ? String(firstLog.coolingTowerBlowdownTimeMin)
+                                      ? formatBlowdownInputValue(firstLog.coolingTowerBlowdownTimeMin)
                                       : '',
                                   coolingTowerChemicalName:
                                     firstLog.coolingTowerChemicalName || '',
@@ -2062,6 +2205,65 @@ export default function ELogBookPage() {
                             })()}
                         </SelectContent>
                       </Select>
+                    </div>
+                  )}
+                  {formData.equipmentType === 'chiller' && (
+                    <div className="col-span-2 grid grid-cols-3 gap-4">
+                      <div className="space-y-2">
+                        <Label>Log entry interval</Label>
+                        <Select
+                          value={entryLogInterval || '__none__'}
+                          onValueChange={(v) => {
+                            const next = v === '__none__' ? '' : (v as LogEntryIntervalType);
+                            setEntryLogInterval(next);
+                            if (next !== 'shift') setEntryShiftDurationHours('');
+                          }}
+                          disabled={!isReadingsApplicable}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Use global default" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="__none__">Use global default</SelectItem>
+                            <SelectItem value="hourly">Hourly</SelectItem>
+                            <SelectItem value="shift">Shift</SelectItem>
+                            <SelectItem value="daily">Daily</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Shift duration (hours)</Label>
+                        <Input
+                          type="number"
+                          min={1}
+                          max={24}
+                          disabled={!isReadingsApplicable || entryLogInterval !== 'shift'}
+                          value={entryShiftDurationHours === '' ? '' : entryShiftDurationHours}
+                          onChange={(e) =>
+                            setEntryShiftDurationHours(
+                              e.target.value === ''
+                                ? ''
+                                : Math.max(1, Math.min(24, Number(e.target.value) || 8)),
+                            )
+                          }
+                          placeholder="e.g. 8"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Log entry tolerance (minutes)</Label>
+                        <Input
+                          type="number"
+                          min={0}
+                          value={entryToleranceMinutes === '' ? '' : entryToleranceMinutes}
+                          onChange={(e) =>
+                            setEntryToleranceMinutes(
+                              e.target.value === '' ? '' : Math.max(0, Number(e.target.value) || 0),
+                            )
+                          }
+                          disabled={!isReadingsApplicable}
+                          placeholder="e.g. 15"
+                        />
+                      </div>
                     </div>
                   )}
 
@@ -2586,8 +2788,9 @@ export default function ELogBookPage() {
                     <div className="border-t pt-4 mt-2 space-y-4">
                       {!canEditRunningSection && (
                         <p className="text-sm text-muted-foreground">
-                          Pump/fan running status, blow down time and chemical quantities are set by your first
+                          Pump/fan running status and chemical quantities are set by your first
                           reading of the day. Subsequent entries can view but cannot change these values.
+                          Cooling Tower Blow Down Time remains editable for operation entries.
                         </p>
                       )}
                       <div className="grid grid-cols-2 gap-4">
@@ -2898,20 +3101,55 @@ export default function ELogBookPage() {
                         </div>
                         <div className="space-y-2">
                           <Label>Cooling Tower Blow Down Time (Minutes)</Label>
-                          <Input
-                            type="number"
-                            min={0}
-                            step="1"
-                            value={formData.coolingTowerBlowdownTimeMin}
-                            disabled={!canEditRunningSection}
-                            onChange={(e) =>
-                              setFormData({
-                                ...formData,
-                                coolingTowerBlowdownTimeMin: e.target.value,
-                              })
-                            }
-                            placeholder="e.g., 30"
-                          />
+                          <div className="grid grid-cols-3 gap-2">
+                            <Select
+                              value={
+                                (formData.coolingTowerBlowdownTimeMin || "").toUpperCase() === "N/A"
+                                  ? "na"
+                                  : "time"
+                              }
+                              onValueChange={(value) =>
+                                setFormData((prev) => ({
+                                  ...prev,
+                                  coolingTowerBlowdownTimeMin:
+                                    value === "na"
+                                      ? "N/A"
+                                      : (prev.coolingTowerBlowdownTimeMin || "").toUpperCase() === "N/A"
+                                        ? ""
+                                        : prev.coolingTowerBlowdownTimeMin,
+                                }))
+                              }
+                              disabled={!isReadingsApplicable}
+                            >
+                              <SelectTrigger className="col-span-1">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="time">Time</SelectItem>
+                                <SelectItem value="na">N/A</SelectItem>
+                              </SelectContent>
+                            </Select>
+                            <Input
+                              type="time"
+                              step={1}
+                              className="col-span-2"
+                              value={
+                                (formData.coolingTowerBlowdownTimeMin || "").toUpperCase() === "N/A"
+                                  ? ""
+                                  : formData.coolingTowerBlowdownTimeMin
+                              }
+                              disabled={
+                                !isReadingsApplicable ||
+                                (formData.coolingTowerBlowdownTimeMin || "").toUpperCase() === "N/A"
+                              }
+                              onChange={(e) =>
+                                setFormData({
+                                  ...formData,
+                                  coolingTowerBlowdownTimeMin: e.target.value,
+                                })
+                              }
+                            />
+                          </div>
                         </div>
                       </div>
 
@@ -2937,20 +3175,6 @@ export default function ELogBookPage() {
                       </div>
 
                       <div className="grid grid-cols-2 gap-4 mt-6">
-                        <div className="space-y-2">
-                          <Label>Recording Frequency</Label>
-                          <Input
-                            type="text"
-                            value={formData.recordingFrequency}
-                            onChange={(e) =>
-                              setFormData({
-                                ...formData,
-                                recordingFrequency: e.target.value,
-                              })
-                            }
-                            placeholder="e.g., Once in 4 hours"
-                          />
-                        </div>
                         <div className="space-y-2">
                           <Label>Verified By (Sign & Date)</Label>
                           <Input
@@ -3356,8 +3580,14 @@ export default function ELogBookPage() {
                   filteredLogs
                     .filter((log) => log.equipmentType === 'chiller')
                     .map((log) => {
+                    const isMaintenanceOrShutdown =
+                      log.activity_type === 'maintenance' || log.activity_type === 'shutdown';
+                    const canEditAction =
+                      canEditRejectedRow(log) || canEditMaintenanceBeforeApprove(log);
                     const tolClass =
-                      log.tolerance_status === 'outside'
+                      isMaintenanceOrShutdown
+                        ? 'bg-yellow-100'
+                        : log.tolerance_status === 'outside'
                         ? 'bg-red-100'
                         : '';
                     return (
@@ -3545,17 +3775,19 @@ export default function ELogBookPage() {
                                 size="icon"
                                 className={cn(
                                   'h-7 w-7',
-                                  canEditRejectedRow(log)
+                                  canEditAction
                                     ? ''
                                     : 'opacity-40 cursor-not-allowed'
                                 )}
-                                title={canEditRejectedRow(log) ? 'Edit entry' : 'Edit only available after reject'}
+                                title={
+                                  canEditAction ? 'Edit entry' : 'Edit only available'
+                                }
                                 onClick={() => {
-                                  if (canEditRejectedRow(log)) {
+                                  if (canEditAction) {
                                     handleEditLog(log);
                                   }
                                 }}
-                                disabled={!canEditRejectedRow(log)}
+                                disabled={!canEditAction}
                               >
                                 <Edit className="w-4 h-4" />
                               </Button>

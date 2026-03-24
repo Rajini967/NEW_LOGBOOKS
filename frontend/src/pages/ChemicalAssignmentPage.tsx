@@ -70,6 +70,8 @@ interface EquipmentOption {
   id: string;
   equipment_number: string;
   name: string;
+  department?: string;
+  department_name?: string;
 }
 
 const ChemicalAssignmentPage: React.FC = () => {
@@ -89,6 +91,7 @@ const ChemicalAssignmentPage: React.FC = () => {
     location: string;
     chemicalFormula: string;
     chemicalName: string;
+    department: string;
     equipmentName: string;
     category: "major" | "minor" | "";
     selectedChemicalId: string | null;
@@ -96,6 +99,7 @@ const ChemicalAssignmentPage: React.FC = () => {
     location: "",
     chemicalFormula: "",
     chemicalName: "",
+    department: "",
     equipmentName: "",
     category: "",
     selectedChemicalId: null,
@@ -104,7 +108,22 @@ const ChemicalAssignmentPage: React.FC = () => {
   const [stockByLocation, setStockByLocation] = useState<any[]>([]);
   const [stockLoading, setStockLoading] = useState(false);
   const [locationsFromStock, setLocationsFromStock] = useState<{ value: string; label: string }[]>([]);
+  const [departmentOptions, setDepartmentOptions] = useState<{ value: string; label: string }[]>([]);
+  const [allEquipmentOptions, setAllEquipmentOptions] = useState<EquipmentOption[]>([]);
   const [equipmentOptions, setEquipmentOptions] = useState<EquipmentOption[]>([]);
+
+  const visibleRows = useMemo(() => {
+    if (allEquipmentOptions.length === 0) return rows;
+    const masterNames = new Set<string>();
+    allEquipmentOptions.forEach((eq) => {
+      const n = (eq.name || "").trim();
+      const num = (eq.equipment_number || "").trim();
+      if (n) masterNames.add(n.toLowerCase());
+      if (num) masterNames.add(num.toLowerCase());
+      if (num || n) masterNames.add(`${num} – ${n || num}`.trim().toLowerCase());
+    });
+    return rows.filter((r) => masterNames.has((r.equipment_name || "").trim().toLowerCase()));
+  }, [rows, allEquipmentOptions]);
 
   const loadAssignments = async () => {
     setIsLoading(true);
@@ -150,15 +169,51 @@ const ChemicalAssignmentPage: React.FC = () => {
             id: e.id,
             equipment_number: e.equipment_number,
             name: e.name || "",
+            department: e.department || "",
+            department_name: e.department_name || "",
           }));
 
+        setAllEquipmentOptions(options);
         setEquipmentOptions(options);
+        const seen = new Set<string>();
+        const departments = options
+          .filter((eq) => eq.department)
+          .map((eq) => ({
+            value: eq.department as string,
+            label: (eq.department_name || eq.department || "").trim(),
+          }))
+          .filter((d) => {
+            const key = `${d.value}::${d.label}`.toLowerCase();
+            if (!d.value || seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          })
+          .sort((a, b) => a.label.localeCompare(b.label));
+        setDepartmentOptions(departments);
       } catch (error) {
         console.error("Failed to load chemical equipment list:", error);
+        setAllEquipmentOptions([]);
         setEquipmentOptions([]);
+        setDepartmentOptions([]);
       }
     })();
   }, []);
+
+  useEffect(() => {
+    if (!form.department) {
+      setEquipmentOptions(allEquipmentOptions);
+      return;
+    }
+    const filtered = allEquipmentOptions.filter((eq) => eq.department === form.department);
+    setEquipmentOptions(filtered);
+    setForm((prev) => {
+      if (!prev.equipmentName) return prev;
+      const exists = filtered.some(
+        (eq) => `${eq.equipment_number} – ${eq.name || eq.equipment_number}` === prev.equipmentName
+      );
+      return exists ? prev : { ...prev, equipmentName: "" };
+    });
+  }, [form.department, allEquipmentOptions]);
 
   // Load distinct locations from stock details (only locations that have stock entries)
   useEffect(() => {
@@ -240,6 +295,10 @@ const ChemicalAssignmentPage: React.FC = () => {
       toast.error("Please enter chemical name.");
       return;
     }
+    if (!form.department) {
+      toast.error("Please select department.");
+      return;
+    }
     if (!equipmentName) {
       toast.error("Equipment is required.");
       return;
@@ -277,6 +336,7 @@ const ChemicalAssignmentPage: React.FC = () => {
         location: "",
         chemicalFormula: "",
         chemicalName: "",
+        department: "",
         equipmentName: "",
         category: "",
         selectedChemicalId: null,
@@ -462,6 +522,32 @@ const ChemicalAssignmentPage: React.FC = () => {
                 </div>
 
                 <div className="space-y-2">
+                  <Label>Department</Label>
+                  <Select
+                    value={form.department || "__none__"}
+                    onValueChange={(v) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        department: v === "__none__" ? "" : v,
+                        equipmentName: "",
+                      }))
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select department" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">Select department</SelectItem>
+                      {departmentOptions.map((dep) => (
+                        <SelectItem key={dep.value} value={dep.value}>
+                          {dep.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
                   <Label htmlFor="equipment-name">Equipment</Label>
                   <Select
                     value={form.equipmentName || "__none__"}
@@ -477,7 +563,7 @@ const ChemicalAssignmentPage: React.FC = () => {
                       <SelectValue
                         placeholder={
                           equipmentOptions.length === 0
-                            ? "No approved Chemical equipment"
+                            ? (form.department ? "No equipment in selected department" : "Select department first")
                             : "Select equipment"
                         }
                       />
@@ -495,10 +581,9 @@ const ChemicalAssignmentPage: React.FC = () => {
                       ))}
                     </SelectContent>
                   </Select>
-                  {equipmentOptions.length === 0 && (
+                  {form.department && equipmentOptions.length === 0 && (
                     <p className="text-xs text-amber-600">
-                      No approved Chemical equipments found. Please add and approve Chemical
-                      equipment in the Equipment List first.
+                      No approved equipments found for selected department.
                     </p>
                   )}
                 </div>
@@ -537,7 +622,7 @@ const ChemicalAssignmentPage: React.FC = () => {
             <div className="px-4 py-3 border-b border-border flex items-center justify-between">
               <h2 className="text-base font-semibold">Current assignments</h2>
               <Badge variant="secondary">
-                {rows.length} {rows.length === 1 ? "assignment" : "assignments"}
+                {visibleRows.length} {visibleRows.length === 1 ? "assignment" : "assignments"}
               </Badge>
             </div>
             <div className="min-w-full overflow-x-auto">
@@ -577,7 +662,7 @@ const ChemicalAssignmentPage: React.FC = () => {
                         Loading assignments...
                       </td>
                     </tr>
-                  ) : rows.length === 0 ? (
+                  ) : visibleRows.length === 0 ? (
                     <tr>
                       <td
                         colSpan={7}
@@ -589,7 +674,7 @@ const ChemicalAssignmentPage: React.FC = () => {
                   ) : (
                     (() => {
                       // Group by equipment so equipment name appears once (rowSpan)
-                      const sorted = [...rows].sort((a, b) =>
+                      const sorted = [...visibleRows].sort((a, b) =>
                         (a.equipment_name || "").localeCompare(b.equipment_name || "")
                       );
                       const groups = new Map<string, AssignmentRow[]>();

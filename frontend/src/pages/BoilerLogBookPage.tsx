@@ -23,7 +23,7 @@ import {
 import { useAuth } from "@/contexts/AuthContext";
 import { format } from "date-fns";
 import { toast } from "sonner";
-import { boilerLogAPI, equipmentAPI, equipmentCategoryAPI } from "@/lib/api";
+import { boilerLogAPI, briquetteLogAPI, equipmentAPI, equipmentCategoryAPI } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { firstRequiredFieldError } from "@/lib/requiredFields";
 import { Link } from "react-router-dom";
@@ -42,7 +42,7 @@ import {
 import { EntryIntervalBadge } from "@/components/logbook/EntryIntervalBadge";
 import { MissedReadingPopup } from "@/components/logbook/MissedReadingPopup";
 import {
-  computeMissedByEquipment,
+  getTotalMissingSlots,
   type EquipmentMissInfo,
 } from "@/lib/missed-reading";
 import { MaintenanceTimingsSection } from "@/components/logbook/MaintenanceTimingsSection";
@@ -88,13 +88,14 @@ const BOILER_LIST_FIELDS: { key: keyof BoilerLog; label: string; unit: string }[
 
 interface BoilerLog {
   id: string;
+  equipmentType?: "boiler" | "briquette";
   equipmentId: string;
   date: string;
   time: string;
-  feedWaterTemp: number;
-  oilTemp: number;
-  steamTemp: number;
-  steamPressure: number;
+  feedWaterTemp?: number;
+  oilTemp?: number;
+  steamTemp?: number;
+  steamPressure?: number;
   steamFlowLPH?: number;
   foHsdNgDayTankLevel?: number;
   feedWaterTankLevel?: number;
@@ -135,9 +136,47 @@ interface BoilerLog {
   corrects_id?: string;
   has_corrections?: boolean;
   tolerance_status?: "none" | "within" | "outside";
+  activity_type?: "operation" | "maintenance" | "shutdown";
+  activity_from_date?: string | null;
+  activity_to_date?: string | null;
+  activity_from_time?: string | null;
+  activity_to_time?: string | null;
+  timeSlot?: string;
+  furnacePressureMmwc?: number;
+  idFanOpPercent?: number;
+  paDamperPosition1?: number;
+  paDamperPosition2?: number;
+  meteringScrewPercent?: number;
+  steamReadingTon?: number;
+  steamFlowKgHr?: number;
+  stackTemp?: number;
+  furnaceTemp?: number;
+  hotAirTemp?: string;
+  feedPump12?: string;
+  operatorSignDate?: string;
+  verifiedSignDate?: string;
+  feedWaterPh?: number;
+  boilerWaterPh?: number;
+  boilerWaterHardnessPpm?: number;
+  boilerWaterTdsPpm?: number;
+  totalSteamIn1Day?: string;
+  totalSteamFlowRatio?: string;
 }
+type LogEntryIntervalType = "hourly" | "shift" | "daily";
 
 const CREATOR_ONLY_REJECTED_EDIT_MESSAGE = "Only the original creator can edit/correct a rejected entry.";
+
+const normalizeHhMmSs = (value: string): string => {
+  const v = (value || "").trim();
+  if (!v) return "";
+  if (/^\d{2}:\d{2}:\d{2}$/.test(v)) return v;
+  if (/^\d{2}:\d{2}$/.test(v)) return `${v}:00`;
+  return v;
+};
+
+const buildAutoSignText = (nameOrEmail: string) => {
+  return `${nameOrEmail || "Unknown"} - ${format(new Date(), "dd/MM/yyyy HH:mm:ss")}`;
+};
 
 const BoilerLogBookPage: React.FC = () => {
   const { user, sessionSettings } = useAuth();
@@ -145,6 +184,7 @@ const BoilerLogBookPage: React.FC = () => {
   const [showMissedReadingPopup, setShowMissedReadingPopup] = useState(false);
   const [missedReadingNextDue, setMissedReadingNextDue] = useState<Date | null>(null);
   const [missedEquipments, setMissedEquipments] = useState<EquipmentMissInfo[] | null>(null);
+  const [missingRefreshKey, setMissingRefreshKey] = useState(0);
   const [filteredLogs, setFilteredLogs] = useState<BoilerLog[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -162,6 +202,7 @@ const BoilerLogBookPage: React.FC = () => {
   const [readingsModalLogId, setReadingsModalLogId] = useState<string | null>(null);
   const [editingLogId, setEditingLogId] = useState<string | null>(null);
   const [viewedReadingsLogIds, setViewedReadingsLogIds] = useState<Set<string>>(new Set());
+  const [editedMaintenanceLogIds, setEditedMaintenanceLogIds] = useState<Set<string>>(new Set());
   const [equipmentOptions, setEquipmentOptions] = useState<
     {
       id: string;
@@ -169,8 +210,12 @@ const BoilerLogBookPage: React.FC = () => {
       name: string;
       log_entry_interval?: string | null;
       shift_duration_hours?: number | null;
+      tolerance_minutes?: number | null;
     }[]
   >([]);
+  const [entryLogInterval, setEntryLogInterval] = useState<"" | LogEntryIntervalType>("");
+  const [entryShiftDurationHours, setEntryShiftDurationHours] = useState<number | "">("");
+  const [entryToleranceMinutes, setEntryToleranceMinutes] = useState<number | "">("");
   const [previousReadingsForEquipment, setPreviousReadingsForEquipment] = useState<BoilerLog[]>([]);
   const [previousReadingsLoading, setPreviousReadingsLoading] = useState(false);
 
@@ -184,6 +229,7 @@ const BoilerLogBookPage: React.FC = () => {
   const isReadingsApplicable = maintenanceTimings.activityType === "operation";
 
   const [formData, setFormData] = useState({
+    equipmentType: "boiler" as "boiler" | "briquette",
     equipmentId: "",
     feedWaterTemp: "",
     oilTemp: "",
@@ -216,10 +262,41 @@ const BoilerLogBookPage: React.FC = () => {
     dailyFurnaceOilConsumptionLiters: "",
     dailyBrigadeConsumptionKg: "",
     steamConsumptionKgHr: "",
+    timeSlot: "",
+    furnacePressureMmwc: "",
+    idFanOpPercent: "",
+    paDamperPosition1: "",
+    paDamperPosition2: "",
+    meteringScrewPercent: "",
+    steamReadingTon: "",
+    steamFlowKgHr: "",
+    stackTemp: "",
+    furnaceTemp: "",
+    hotAirTemp: "",
+    feedPump12: "",
+    operatorSignDate: "",
+    verifiedSignDate: "",
+    feedWaterPh: "",
+    boilerWaterPh: "",
+    boilerWaterHardnessPpm: "",
+    boilerWaterTdsPpm: "",
+    totalSteamIn1Day: "",
+    totalSteamFlowRatio: "",
     remarks: "",
     date: "",
     time: "",
   });
+
+  useEffect(() => {
+    if (!isDialogOpen || editingLogId || formData.equipmentType !== "briquette") return;
+    const actor = (user?.name || user?.email || "Unknown").trim();
+    setFormData((prev) => {
+      const next = { ...prev };
+      if (!next.operatorSignDate) next.operatorSignDate = buildAutoSignText(actor);
+      if (!next.verifiedSignDate) next.verifiedSignDate = buildAutoSignText(actor);
+      return next;
+    });
+  }, [isDialogOpen, editingLogId, formData.equipmentType, user?.name, user?.email]);
 
   const isFormValueOutOfLimit = (field: BoilerLimitField, rawValue: string): boolean => {
     if (!rawValue) return false;
@@ -302,6 +379,7 @@ const BoilerLogBookPage: React.FC = () => {
             name: e.name || "",
             log_entry_interval: e.log_entry_interval ?? null,
             shift_duration_hours: e.shift_duration_hours ?? null,
+            tolerance_minutes: e.tolerance_minutes ?? null,
           }));
         setEquipmentOptions(options);
       } catch (error) {
@@ -317,12 +395,17 @@ const BoilerLogBookPage: React.FC = () => {
         console.error("Error fetching boiler logs:", err);
         return [];
       });
+      const briquetteLogs = await briquetteLogAPI.list().catch((err) => {
+        console.error("Error fetching briquette logs:", err);
+        return [];
+      });
 
       const allLogs: BoilerLog[] = [];
       boilerLogs.forEach((log: any) => {
         const timestamp = new Date(log.timestamp);
         allLogs.push({
           id: log.id,
+          equipmentType: "boiler",
           equipmentId: log.equipment_id,
           date: format(timestamp, "yyyy-MM-dd"),
           time: format(timestamp, "HH:mm:ss"),
@@ -371,13 +454,72 @@ const BoilerLogBookPage: React.FC = () => {
           approved_by_id: log.approved_by_id,
           corrects_id: log.corrects_id,
           has_corrections: log.has_corrections,
-      tolerance_status: log.tolerance_status as BoilerLog["tolerance_status"],
+          tolerance_status: log.tolerance_status as BoilerLog["tolerance_status"],
+          activity_type: log.activity_type,
+          activity_from_date: log.activity_from_date,
+          activity_to_date: log.activity_to_date,
+          activity_from_time: log.activity_from_time,
+          activity_to_time: log.activity_to_time,
+        });
+      });
+
+      briquetteLogs.forEach((log: any) => {
+        const timestamp = new Date(log.timestamp);
+        allLogs.push({
+          id: log.id,
+          equipmentType: "briquette",
+          equipmentId: log.equipment_id,
+          date: format(timestamp, "yyyy-MM-dd"),
+          time: format(timestamp, "HH:mm:ss"),
+          remarks: log.remarks || "",
+          comment: log.comment || "",
+          checkedBy: log.operator_name,
+          approvedBy: log.status === "approved" ? (log.approved_by_name || "") : "",
+          rejectedBy:
+            log.status === "rejected" || log.status === "pending_secondary_approval"
+              ? (log.approved_by_name || "")
+              : "",
+          timestamp,
+          status: log.status as BoilerLog["status"],
+          operator_id: log.operator_id,
+          approved_by_id: log.approved_by_id,
+          corrects_id: log.corrects_id,
+          has_corrections: log.has_corrections,
+          tolerance_status: log.tolerance_status as BoilerLog["tolerance_status"],
+          activity_type: log.activity_type,
+          activity_from_date: log.activity_from_date,
+          activity_to_date: log.activity_to_date,
+          activity_from_time: log.activity_from_time,
+          activity_to_time: log.activity_to_time,
+          steamPressure: log.steam_pressure ?? undefined,
+          furnacePressureMmwc: log.furnace_pressure_mmwc ?? undefined,
+          idFanOpPercent: log.id_fan_op_percent ?? undefined,
+          paDamperPosition1: log.pa_damper_position_1 ?? undefined,
+          paDamperPosition2: log.pa_damper_position_2 ?? undefined,
+          meteringScrewPercent: log.metering_screw_percent ?? undefined,
+          steamReadingTon: log.steam_reading_ton ?? undefined,
+          steamFlowKgHr: log.steam_flow_kg_hr ?? undefined,
+          stackTemp: log.stack_temp ?? undefined,
+          furnaceTemp: log.furnace_temp ?? undefined,
+          hotAirTemp: log.hot_air_temp ?? "",
+          feedPump12: log.feed_pump_1_2 ?? "",
+          operatorSignDate: log.operator_sign_date ?? "",
+          verifiedSignDate: log.verified_sign_date ?? "",
+          feedWaterPh: log.feed_water_ph ?? undefined,
+          feedWaterHardnessPpm: log.feed_water_hardness_ppm ?? undefined,
+          feedWaterTdsPpm: log.feed_water_tds_ppm ?? undefined,
+          boilerWaterPh: log.boiler_water_ph ?? undefined,
+          boilerWaterHardnessPpm: log.boiler_water_hardness_ppm ?? undefined,
+          boilerWaterTdsPpm: log.boiler_water_tds_ppm ?? undefined,
+          totalSteamIn1Day: log.total_steam_in_1_day ?? "",
+          totalSteamFlowRatio: log.total_steam_flow_ratio ?? "",
         });
       });
 
       allLogs.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
       setLogs(allLogs);
       setFilteredLogs(allLogs);
+      setMissingRefreshKey((prev) => prev + 1);
     } catch (error) {
       console.error("Error refreshing boiler logs:", error);
       toast.error("Failed to refresh boiler log entries");
@@ -390,7 +532,8 @@ const BoilerLogBookPage: React.FC = () => {
     refreshLogs();
   }, []);
 
-  // After equipment selection, fetch and show previous readings with entered-by for that equipment
+  // After equipment selection, fetch and show previous readings with entered-by
+  // scoped to the selected equipment type (boiler/briquette).
   useEffect(() => {
     if (!formData.equipmentId) {
       setPreviousReadingsForEquipment([]);
@@ -398,8 +541,9 @@ const BoilerLogBookPage: React.FC = () => {
     }
     let cancelled = false;
     setPreviousReadingsLoading(true);
-    boilerLogAPI
-      .list({ equipment_id: formData.equipmentId })
+    const listApi =
+      formData.equipmentType === "briquette" ? briquetteLogAPI.list : boilerLogAPI.list;
+    listApi({ equipment_id: formData.equipmentId })
       .then((raw: any[]) => {
         if (cancelled) return;
         const list: BoilerLog[] = raw.slice(0, 10).map((log: any) => {
@@ -428,6 +572,13 @@ const BoilerLogBookPage: React.FC = () => {
             approved_by_id: log.approved_by_id,
             corrects_id: log.corrects_id,
             has_corrections: log.has_corrections,
+            equipmentType:
+              formData.equipmentType === "briquette" ? "briquette" : "boiler",
+            activity_type: log.activity_type,
+            activity_from_date: log.activity_from_date,
+            activity_to_date: log.activity_to_date,
+            activity_from_time: log.activity_from_time,
+            activity_to_time: log.activity_to_time,
           } as BoilerLog;
         });
         setPreviousReadingsForEquipment(list);
@@ -441,65 +592,101 @@ const BoilerLogBookPage: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [formData.equipmentId]);
+  }, [formData.equipmentId, formData.equipmentType]);
 
   useEffect(() => {
-    if (!sessionSettings?.log_entry_interval || logs.length === 0) {
-      setMissedEquipments(null);
-      setShowMissedReadingPopup(false);
-      setMissedReadingNextDue(null);
-      return;
-    }
-    const defaultInterval = sessionSettings.log_entry_interval as "hourly" | "shift" | "daily";
-    const defaultShift = sessionSettings.shift_duration_hours ?? 8;
-    const resolveInterval = (equipmentId?: string): "hourly" | "shift" | "daily" => {
-      const eq = equipmentId
-        ? equipmentOptions.find((e) => e.equipment_number === equipmentId)
-        : undefined;
-      return (
-        (eq?.log_entry_interval as "hourly" | "shift" | "daily") ||
-        defaultInterval ||
-        "daily"
-      );
-    };
-    const resolveShiftHours = (equipmentId?: string): number => {
-      const eq = equipmentId
-        ? equipmentOptions.find((e) => e.equipment_number === equipmentId)
-        : undefined;
-      return eq?.shift_duration_hours ?? defaultShift;
-    };
+    const selectedDate = filters.fromDate || format(new Date(), "yyyy-MM-dd");
+    Promise.all([
+      boilerLogAPI.missingSlots({ date: selectedDate }),
+      briquetteLogAPI.missingSlots({ date: selectedDate }),
+    ])
+      .then(([boilerPayload, briquettePayload]) => {
+        const boilerMissed: EquipmentMissInfo[] = (boilerPayload?.equipments || [])
+          .filter((eq) => (eq.missing_slot_count || 0) > 0)
+          .map((eq) => ({
+            equipmentTypeLabel: "Boiler",
+            equipmentId: eq.equipment_id,
+            equipmentName: eq.equipment_name,
+            lastTimestamp: null,
+            nextDue: eq.next_due ? new Date(eq.next_due) : null,
+            isMissed: (eq.missing_slot_count || 0) > 0,
+            interval: eq.interval,
+            shiftHours: eq.shift_duration_hours || 8,
+            expectedSlotCount: eq.expected_slot_count,
+            presentSlotCount: eq.present_slot_count,
+            missingSlotCount: eq.missing_slot_count,
+            missingSlotRanges: (eq.missing_slots || []).map((slot) => ({
+              slotStart: new Date(slot.slot_start),
+              slotEnd: new Date(slot.slot_end),
+              label: slot.label,
+            })),
+          }));
+        const briquetteMissed: EquipmentMissInfo[] = (briquettePayload?.equipments || [])
+          .filter((eq) => (eq.missing_slot_count || 0) > 0)
+          .map((eq) => ({
+            equipmentTypeLabel: "Briquette",
+            equipmentId: eq.equipment_id,
+            equipmentName: eq.equipment_name,
+            lastTimestamp: null,
+            nextDue: eq.next_due ? new Date(eq.next_due) : null,
+            isMissed: (eq.missing_slot_count || 0) > 0,
+            interval: eq.interval,
+            shiftHours: eq.shift_duration_hours || 8,
+            expectedSlotCount: eq.expected_slot_count,
+            presentSlotCount: eq.present_slot_count,
+            missingSlotCount: eq.missing_slot_count,
+            missingSlotRanges: (eq.missing_slots || []).map((slot) => ({
+              slotStart: new Date(slot.slot_start),
+              slotEnd: new Date(slot.slot_end),
+              label: slot.label,
+            })),
+          }));
+        const missedOnly: EquipmentMissInfo[] = [...boilerMissed, ...briquetteMissed];
+        if (missedOnly.length > 0) {
+          setMissedEquipments(missedOnly);
+          const firstNext =
+            missedOnly
+              .map((m) => m.nextDue)
+              .filter((d): d is Date => !!d)
+              .sort((a, b) => a.getTime() - b.getTime())[0] || null;
+          setMissedReadingNextDue(firstNext);
+          return;
+        }
+        setMissedEquipments(null);
+        setShowMissedReadingPopup(false);
+        setMissedReadingNextDue(null);
+      })
+      .catch(() => {
+        setMissedEquipments(null);
+        setShowMissedReadingPopup(false);
+        setMissedReadingNextDue(null);
+      });
+  }, [filters.fromDate, missingRefreshKey]);
 
-    const perEquipment = computeMissedByEquipment(
-      logs.map((log) => ({
-        equipment_id: log.equipmentId,
-        equipment_name: log.equipmentId,
-        timestamp: log.timestamp,
-      })),
-      {
-        resolveInterval: (eqId) => resolveInterval(eqId),
-        resolveShiftHours: (eqId) => resolveShiftHours(eqId),
-      },
+  useEffect(() => {
+    if (!isDialogOpen || !!editingLogId) return;
+    if (!formData.equipmentId) return;
+    if (entryLogInterval !== "" || entryShiftDurationHours !== "" || entryToleranceMinutes !== "") return;
+    const selectedEquipment = equipmentOptions.find(
+      (eq) => eq.equipment_number === formData.equipmentId,
     );
-
-    const missedOnly = perEquipment.filter((m) => m.isMissed);
-    if (missedOnly.length > 0) {
-      setMissedEquipments(missedOnly);
-      const firstNext =
-        missedOnly
-          .map((m) => m.nextDue)
-          .filter((d): d is Date => !!d)
-          .sort((a, b) => a.getTime() - b.getTime())[0] || null;
-      setMissedReadingNextDue(firstNext);
-    } else {
-      setMissedEquipments(null);
-      setShowMissedReadingPopup(false);
-      setMissedReadingNextDue(null);
-    }
-  }, [logs, sessionSettings, equipmentOptions]);
+    if (!selectedEquipment) return;
+    setEntryLogInterval((selectedEquipment.log_entry_interval as LogEntryIntervalType) || "");
+    setEntryShiftDurationHours(selectedEquipment.shift_duration_hours ?? "");
+    setEntryToleranceMinutes(selectedEquipment.tolerance_minutes ?? "");
+  }, [
+    isDialogOpen,
+    editingLogId,
+    formData.equipmentId,
+    equipmentOptions,
+    entryLogInterval,
+    entryShiftDurationHours,
+    entryToleranceMinutes,
+  ]);
 
   const hasMissedReadings =
     !!missedReadingNextDue || (missedEquipments?.length ?? 0) > 0;
-  const missedReadingsCount = missedEquipments?.length ?? (hasMissedReadings ? 1 : 0);
+  const missedReadingsCount = getTotalMissingSlots(missedEquipments);
 
   const uniqueCheckedBy = useMemo(() => {
     if (!logs.length) return [];
@@ -613,9 +800,137 @@ const BoilerLogBookPage: React.FC = () => {
         toast.error("Please select Equipment ID.");
         return;
       }
+      const selectedEquipment = equipmentOptions.find(
+        (eq) => eq.equipment_number === formData.equipmentId,
+      );
+      if (selectedEquipment) {
+        if (
+          entryLogInterval === "shift" &&
+          (entryShiftDurationHours === "" ||
+            Number(entryShiftDurationHours) < 1 ||
+            Number(entryShiftDurationHours) > 24)
+        ) {
+          toast.error("Shift duration must be between 1 and 24 hours.");
+          return;
+        }
+        await equipmentAPI.patch(selectedEquipment.id, {
+          log_entry_interval: entryLogInterval || null,
+          shift_duration_hours:
+            entryLogInterval === "shift" && entryShiftDurationHours !== ""
+              ? Number(entryShiftDurationHours)
+              : null,
+          tolerance_minutes:
+            entryToleranceMinutes === "" ? null : Math.max(0, Number(entryToleranceMinutes) || 0),
+        });
+      }
 
       if (!formData.remarks.trim()) {
         toast.error("Remarks are required.");
+        return;
+      }
+
+      if (formData.equipmentType === "briquette") {
+        const briquetteData: Record<string, unknown> = {
+          equipment_id: formData.equipmentId,
+          activity_type: maintenanceTimings.activityType,
+          activity_from_date: maintenanceTimings.fromDate || undefined,
+          activity_to_date: maintenanceTimings.toDate || undefined,
+          activity_from_time: maintenanceTimings.fromTime || undefined,
+          activity_to_time: maintenanceTimings.toTime || undefined,
+          remarks: formData.remarks || undefined,
+          time_slot: normalizeHhMmSs(formData.timeSlot) || undefined,
+          steam_pressure: formData.steamPressure ? parseFloat(formData.steamPressure) : undefined,
+          furnace_pressure_mmwc: formData.furnacePressureMmwc ? parseFloat(formData.furnacePressureMmwc) : undefined,
+          id_fan_op_percent: formData.idFanOpPercent ? parseFloat(formData.idFanOpPercent) : undefined,
+          pa_damper_position_1: formData.paDamperPosition1 ? parseFloat(formData.paDamperPosition1) : undefined,
+          pa_damper_position_2: formData.paDamperPosition2 ? parseFloat(formData.paDamperPosition2) : undefined,
+          metering_screw_percent: formData.meteringScrewPercent ? parseFloat(formData.meteringScrewPercent) : undefined,
+          steam_reading_ton: formData.steamReadingTon ? parseFloat(formData.steamReadingTon) : undefined,
+          steam_flow_kg_hr: formData.steamFlowKgHr ? parseFloat(formData.steamFlowKgHr) : undefined,
+          stack_temp: formData.stackTemp ? parseFloat(formData.stackTemp) : undefined,
+          furnace_temp: formData.furnaceTemp ? parseFloat(formData.furnaceTemp) : undefined,
+          hot_air_temp: formData.hotAirTemp || undefined,
+          feed_pump_1_2: formData.feedPump12 || undefined,
+          operator_sign_date: formData.operatorSignDate || undefined,
+          verified_sign_date: formData.verifiedSignDate || undefined,
+          feed_water_ph: formData.feedWaterPh ? parseFloat(formData.feedWaterPh) : undefined,
+          feed_water_hardness_ppm: formData.feedWaterHardnessPpm ? parseFloat(formData.feedWaterHardnessPpm) : undefined,
+          feed_water_tds_ppm: formData.feedWaterTdsPpm ? parseFloat(formData.feedWaterTdsPpm) : undefined,
+          boiler_water_ph: formData.boilerWaterPh ? parseFloat(formData.boilerWaterPh) : undefined,
+          boiler_water_hardness_ppm: formData.boilerWaterHardnessPpm ? parseFloat(formData.boilerWaterHardnessPpm) : undefined,
+          boiler_water_tds_ppm: formData.boilerWaterTdsPpm ? parseFloat(formData.boilerWaterTdsPpm) : undefined,
+          total_steam_in_1_day: formData.totalSteamIn1Day || undefined,
+          total_steam_flow_ratio: formData.totalSteamFlowRatio || undefined,
+        };
+        const editingLog = editingLogId ? logs.find((l) => l.id === editingLogId) : null;
+        const canChangeTimestamp =
+          editingLog &&
+          (editingLog.status === "rejected" || editingLog.status === "pending_secondary_approval");
+        if (canChangeTimestamp && formData.date && formData.time) {
+          (briquetteData as Record<string, unknown>).timestamp = new Date(`${formData.date}T${formData.time}`).toISOString();
+        }
+        if (editingLogId && editingLog) {
+          const isCorrection =
+            editingLog.status === "rejected" || editingLog.status === "pending_secondary_approval";
+          if (isCorrection && editingLog.operator_id !== user?.id) {
+            toast.error(CREATOR_ONLY_REJECTED_EDIT_MESSAGE);
+            return;
+          }
+          if (isCorrection) {
+            await briquetteLogAPI.correct(editingLogId, briquetteData as any);
+            toast.success("Briquette entry corrected as new entry.");
+          } else {
+            await briquetteLogAPI.update(editingLogId, briquetteData as any);
+            toast.success("Briquette entry updated successfully.");
+            if (
+              maintenanceTimings.activityType === "maintenance" ||
+              maintenanceTimings.activityType === "shutdown"
+            ) {
+              setEditedMaintenanceLogIds((prev) => {
+                const next = new Set(prev);
+                next.add(editingLogId);
+                return next;
+              });
+            }
+          }
+          setEditingLogId(null);
+        } else {
+          await briquetteLogAPI.create(briquetteData as any);
+          toast.success("Briquette entry saved successfully");
+        }
+        setFormData((prev) => ({
+          ...prev,
+          equipmentType: "boiler",
+          equipmentId: "",
+          remarks: "",
+          date: "",
+          time: "",
+          timeSlot: "",
+          steamPressure: "",
+          furnacePressureMmwc: "",
+          idFanOpPercent: "",
+          paDamperPosition1: "",
+          paDamperPosition2: "",
+          meteringScrewPercent: "",
+          steamReadingTon: "",
+          steamFlowKgHr: "",
+          stackTemp: "",
+          furnaceTemp: "",
+          hotAirTemp: "",
+          feedPump12: "",
+          operatorSignDate: "",
+          verifiedSignDate: "",
+          feedWaterPh: "",
+          feedWaterHardnessPpm: "",
+          feedWaterTdsPpm: "",
+          boilerWaterPh: "",
+          boilerWaterHardnessPpm: "",
+          boilerWaterTdsPpm: "",
+          totalSteamIn1Day: "",
+          totalSteamFlowRatio: "",
+        }));
+        setIsDialogOpen(false);
+        await refreshLogs();
         return;
       }
 
@@ -649,6 +964,16 @@ const BoilerLogBookPage: React.FC = () => {
           } else {
             await boilerLogAPI.update(editingLogId, logData as any);
             toast.success("Boiler entry updated successfully.");
+            if (
+              maintenanceTimings.activityType === "maintenance" ||
+              maintenanceTimings.activityType === "shutdown"
+            ) {
+              setEditedMaintenanceLogIds((prev) => {
+                const next = new Set(prev);
+                next.add(editingLogId);
+                return next;
+              });
+            }
           }
           setEditingLogId(null);
         } else {
@@ -656,7 +981,8 @@ const BoilerLogBookPage: React.FC = () => {
           toast.success("Boiler entry saved successfully");
         }
 
-        setFormData({
+        setFormData((prev) => ({
+          ...prev,
           equipmentId: "",
           feedWaterTemp: "",
           oilTemp: "",
@@ -692,7 +1018,10 @@ const BoilerLogBookPage: React.FC = () => {
           remarks: "",
           date: "",
           time: "",
-        });
+        }));
+        setEntryLogInterval("");
+        setEntryShiftDurationHours("");
+        setEntryToleranceMinutes("");
         setIsDialogOpen(false);
         await refreshLogs();
         return;
@@ -751,7 +1080,10 @@ const BoilerLogBookPage: React.FC = () => {
         feed_water_tds_ppm: parseFloat(formData.feedWaterTdsPpm),
         fo_hsd_ng_consumption: parseFloat(formData.foHsdNgConsumption),
         mobrey_functioning: formData.mobreyFunctioning,
-        manual_blowdown_time: formData.manualBlowdownTime,
+        manual_blowdown_time:
+          (formData.manualBlowdownTime || "").toUpperCase() === "N/A"
+            ? "N/A"
+            : formData.manualBlowdownTime || undefined,
         remarks: formData.remarks || undefined,
       };
       const editingBoilerLog = editingLogId ? logs.find((l) => l.id === editingLogId) : null;
@@ -774,9 +1106,20 @@ const BoilerLogBookPage: React.FC = () => {
         } else {
           await boilerLogAPI.update(editingLogId, logData as any);
           toast.success("Boiler entry updated successfully.");
+          if (
+            maintenanceTimings.activityType === "maintenance" ||
+            maintenanceTimings.activityType === "shutdown"
+          ) {
+            setEditedMaintenanceLogIds((prev) => {
+              const next = new Set(prev);
+              next.add(editingLogId);
+              return next;
+            });
+          }
         }
         setEditingLogId(null);
-        setFormData({
+        setFormData((prev) => ({
+          ...prev,
           equipmentId: "",
           feedWaterTemp: "",
           oilTemp: "",
@@ -812,14 +1155,18 @@ const BoilerLogBookPage: React.FC = () => {
           remarks: "",
           date: "",
           time: "",
-        });
+        }));
+        setEntryLogInterval("");
+        setEntryShiftDurationHours("");
+        setEntryToleranceMinutes("");
         setIsDialogOpen(false);
         await refreshLogs();
       } else {
         await boilerLogAPI.create(logData as any);
         toast.success("Boiler entry saved successfully");
 
-        setFormData({
+        setFormData((prev) => ({
+          ...prev,
           equipmentId: "",
           feedWaterTemp: "",
           oilTemp: "",
@@ -855,7 +1202,10 @@ const BoilerLogBookPage: React.FC = () => {
           remarks: "",
           date: "",
           time: "",
-        });
+        }));
+        setEntryLogInterval("");
+        setEntryShiftDurationHours("");
+        setEntryToleranceMinutes("");
         setIsDialogOpen(false);
         await refreshLogs();
       }
@@ -875,7 +1225,12 @@ const BoilerLogBookPage: React.FC = () => {
     if (editingCommentLogId !== logId) return;
     setEditingCommentLogId(null);
     try {
-      await boilerLogAPI.patch(logId, { comment: comment || "" });
+      const log = logs.find((l) => l.id === logId);
+      if (log?.equipmentType === "briquette") {
+        await briquetteLogAPI.patch(logId, { comment: comment || "" });
+      } else {
+        await boilerLogAPI.patch(logId, { comment: comment || "" });
+      }
       toast.success("Comment updated");
       await refreshLogs();
     } catch (error: any) {
@@ -886,16 +1241,25 @@ const BoilerLogBookPage: React.FC = () => {
   };
 
   const handleEditLog = (log: BoilerLog) => {
+    const canEditMaintenanceBeforeApprove =
+      (log.activity_type === "maintenance" || log.activity_type === "shutdown") &&
+      (log.status === "draft" || log.status === "pending" || log.status === "pending_secondary_approval") &&
+      user?.role !== "operator" &&
+      log.operator_id !== user?.id &&
+      !(log.status === "pending_secondary_approval" && log.approved_by_id === user?.id);
+
     if (
-      log.status !== "rejected" ||
-      log.operator_id !== user?.id ||
-      (log.has_corrections && !log.corrects_id)
+      !canEditMaintenanceBeforeApprove &&
+      (log.status !== "rejected" ||
+        log.operator_id !== user?.id ||
+        (log.has_corrections && !log.corrects_id))
     ) {
       toast.error(CREATOR_ONLY_REJECTED_EDIT_MESSAGE);
       return;
     }
     setEditingLogId(log.id);
     setFormData({
+      equipmentType: (log.equipmentType || "boiler") as "boiler" | "briquette",
       equipmentId: log.equipmentId ?? "",
       feedWaterTemp: log.feedWaterTemp != null ? String(log.feedWaterTemp) : "",
       oilTemp: log.oilTemp != null ? String(log.oilTemp) : "",
@@ -928,9 +1292,36 @@ const BoilerLogBookPage: React.FC = () => {
       dailyFurnaceOilConsumptionLiters: log.dailyFurnaceOilConsumptionLiters != null ? String(log.dailyFurnaceOilConsumptionLiters) : "",
       dailyBrigadeConsumptionKg: log.dailyBrigadeConsumptionKg != null ? String(log.dailyBrigadeConsumptionKg) : "",
       steamConsumptionKgHr: log.steamConsumptionKgHr != null ? String(log.steamConsumptionKgHr) : "",
+      timeSlot: log.timeSlot ?? "",
+      furnacePressureMmwc: log.furnacePressureMmwc != null ? String(log.furnacePressureMmwc) : "",
+      idFanOpPercent: log.idFanOpPercent != null ? String(log.idFanOpPercent) : "",
+      paDamperPosition1: log.paDamperPosition1 != null ? String(log.paDamperPosition1) : "",
+      paDamperPosition2: log.paDamperPosition2 != null ? String(log.paDamperPosition2) : "",
+      meteringScrewPercent: log.meteringScrewPercent != null ? String(log.meteringScrewPercent) : "",
+      steamReadingTon: log.steamReadingTon != null ? String(log.steamReadingTon) : "",
+      steamFlowKgHr: log.steamFlowKgHr != null ? String(log.steamFlowKgHr) : "",
+      stackTemp: log.stackTemp != null ? String(log.stackTemp) : "",
+      furnaceTemp: log.furnaceTemp != null ? String(log.furnaceTemp) : "",
+      hotAirTemp: log.hotAirTemp ?? "",
+      feedPump12: log.feedPump12 ?? "",
+      operatorSignDate: log.operatorSignDate ?? "",
+      verifiedSignDate: log.verifiedSignDate ?? "",
+      feedWaterPh: log.feedWaterPh != null ? String(log.feedWaterPh) : "",
+      boilerWaterPh: log.boilerWaterPh != null ? String(log.boilerWaterPh) : "",
+      boilerWaterHardnessPpm: log.boilerWaterHardnessPpm != null ? String(log.boilerWaterHardnessPpm) : "",
+      boilerWaterTdsPpm: log.boilerWaterTdsPpm != null ? String(log.boilerWaterTdsPpm) : "",
+      totalSteamIn1Day: log.totalSteamIn1Day ?? "",
+      totalSteamFlowRatio: log.totalSteamFlowRatio ?? "",
       remarks: log.remarks ?? "",
       date: log.date ?? "",
       time: log.time ?? "",
+    });
+    setMaintenanceTimings({
+      activityType: (log.activity_type as "operation" | "maintenance" | "shutdown") || "operation",
+      fromDate: log.activity_from_date || "",
+      toDate: log.activity_to_date || "",
+      fromTime: log.activity_from_time || "",
+      toTime: log.activity_to_time || "",
     });
     setIsDialogOpen(true);
   };
@@ -939,8 +1330,14 @@ const BoilerLogBookPage: React.FC = () => {
     setApproveCommentOpen(false);
     setApprovalComment("");
     try {
-      await boilerLogAPI.approve(id, "approve", remarks);
-      toast.success("Boiler entry approved successfully");
+      const log = logs.find((l) => l.id === id);
+      if (log?.equipmentType === "briquette") {
+        await briquetteLogAPI.approve(id, "approve", remarks);
+        toast.success("Briquette entry approved successfully");
+      } else {
+        await boilerLogAPI.approve(id, "approve", remarks);
+        toast.success("Boiler entry approved successfully");
+      }
       await refreshLogs();
     } catch (error: any) {
       console.error("Error approving boiler entry:", error);
@@ -958,7 +1355,26 @@ const BoilerLogBookPage: React.FC = () => {
   };
 
   const handleApproveSelectedClick = () => {
-    const notViewedIds = selectedLogIds.filter((id) => !viewedReadingsLogIds.has(id));
+    const mustEditFirstIds = selectedLogIds.filter((id) => {
+      const log = logs.find((l) => l.id === id);
+      if (!log) return false;
+      const isMaintenanceOrShutdown =
+        log.activity_type === "maintenance" || log.activity_type === "shutdown";
+      return isMaintenanceOrShutdown && !editedMaintenanceLogIds.has(id);
+    });
+    if (mustEditFirstIds.length > 0) {
+      toast.error(
+        `Please edit maintenance/shutdown entr${mustEditFirstIds.length === 1 ? "y" : "ies"} first, then approve.`
+      );
+      return;
+    }
+    const notViewedIds = selectedLogIds.filter((id) => {
+      const log = logs.find((l) => l.id === id);
+      if (!log) return false;
+      const isMaintenanceOrShutdown =
+        log.activity_type === "maintenance" || log.activity_type === "shutdown";
+      return !isMaintenanceOrShutdown && !viewedReadingsLogIds.has(id);
+    });
     if (notViewedIds.length > 0) {
       toast.error(
         `Please click View Readings before approval for ${notViewedIds.length} selected entr${notViewedIds.length === 1 ? "y" : "ies"}.`
@@ -972,8 +1388,14 @@ const BoilerLogBookPage: React.FC = () => {
     setRejectCommentOpen(false);
     setRejectComment("");
     try {
-      await boilerLogAPI.approve(id, "reject", remarks);
-      toast.error("Boiler entry rejected");
+      const log = logs.find((l) => l.id === id);
+      if (log?.equipmentType === "briquette") {
+        await briquetteLogAPI.approve(id, "reject", remarks);
+        toast.error("Briquette entry rejected");
+      } else {
+        await boilerLogAPI.approve(id, "reject", remarks);
+        toast.error("Boiler entry rejected");
+      }
       await refreshLogs();
     } catch (error: any) {
       console.error("Error rejecting boiler entry:", error);
@@ -991,8 +1413,14 @@ const BoilerLogBookPage: React.FC = () => {
       return;
     }
     try {
-      await boilerLogAPI.delete(id);
-      toast.success("Boiler entry deleted");
+      const log = logs.find((l) => l.id === id);
+      if (log?.equipmentType === "briquette") {
+        await briquetteLogAPI.delete(id);
+        toast.success("Briquette entry deleted");
+      } else {
+        await boilerLogAPI.delete(id);
+        toast.success("Boiler entry deleted");
+      }
       await refreshLogs();
     } catch (error: any) {
       console.error("Error deleting boiler entry:", error);
@@ -1014,7 +1442,6 @@ const BoilerLogBookPage: React.FC = () => {
           open={showMissedReadingPopup}
           onClose={() => {
             setShowMissedReadingPopup(false);
-            setMissedReadingNextDue(null);
           }}
           logTypeLabel="Boiler"
           nextDue={missedReadingNextDue}
@@ -1203,11 +1630,24 @@ const BoilerLogBookPage: React.FC = () => {
               open={isDialogOpen}
               onOpenChange={(open) => {
                 setIsDialogOpen(open);
-                if (!open) setEditingLogId(null);
+                if (!open) {
+                  setEditingLogId(null);
+                  setEntryLogInterval("");
+                  setEntryShiftDurationHours("");
+                  setEntryToleranceMinutes("");
+                }
               }}
             >
               <DialogTrigger asChild>
-                <Button variant="accent" onClick={() => setEditingLogId(null)}>
+                <Button
+                  variant="accent"
+                  onClick={() => {
+                    setEditingLogId(null);
+                    setEntryLogInterval("");
+                    setEntryShiftDurationHours("");
+                    setEntryToleranceMinutes("");
+                  }}
+                >
                   <Plus className="w-4 h-4 mr-2" />
                   New Entry
                 </Button>
@@ -1233,13 +1673,43 @@ const BoilerLogBookPage: React.FC = () => {
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label>Equipment Type *</Label>
-                      <Input value="Boiler" disabled />
+                      <Select
+                        value={formData.equipmentType}
+                        onValueChange={(v) =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            equipmentType: v as "boiler" | "briquette",
+                          }))
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select type" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="boiler">Boiler</SelectItem>
+                          <SelectItem value="briquette">Briquette</SelectItem>
+                        </SelectContent>
+                      </Select>
                     </div>
                     <div className="space-y-2">
                       <Label>Equipment ID *</Label>
                       <Select
                         value={formData.equipmentId}
-                        onValueChange={(v) => setFormData({ ...formData, equipmentId: v })}
+                        onValueChange={(v) => {
+                          const selectedEquipment = equipmentOptions.find(
+                            (eq) => eq.equipment_number === v,
+                          );
+                          setFormData({ ...formData, equipmentId: v });
+                          setEntryLogInterval(
+                            (selectedEquipment?.log_entry_interval as LogEntryIntervalType) || "",
+                          );
+                          setEntryShiftDurationHours(
+                            selectedEquipment?.shift_duration_hours ?? "",
+                          );
+                          setEntryToleranceMinutes(
+                            selectedEquipment?.tolerance_minutes ?? "",
+                          );
+                        }}
                       >
                         <SelectTrigger>
                           <SelectValue placeholder="Select equipment" />
@@ -1253,6 +1723,63 @@ const BoilerLogBookPage: React.FC = () => {
                           ))}
                         </SelectContent>
                       </Select>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-4">
+                    <div className="space-y-2">
+                      <Label>Log entry interval</Label>
+                      <Select
+                        value={entryLogInterval || "__none__"}
+                        onValueChange={(v) => {
+                          const next = v === "__none__" ? "" : (v as LogEntryIntervalType);
+                          setEntryLogInterval(next);
+                          if (next !== "shift") setEntryShiftDurationHours("");
+                        }}
+                        disabled={!isReadingsApplicable}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Use global default" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">Use global default</SelectItem>
+                          <SelectItem value="hourly">Hourly</SelectItem>
+                          <SelectItem value="shift">Shift</SelectItem>
+                          <SelectItem value="daily">Daily</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Shift duration (hours)</Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={24}
+                        disabled={!isReadingsApplicable || entryLogInterval !== "shift"}
+                        value={entryShiftDurationHours === "" ? "" : entryShiftDurationHours}
+                        onChange={(e) =>
+                          setEntryShiftDurationHours(
+                            e.target.value === ""
+                              ? ""
+                              : Math.max(1, Math.min(24, Number(e.target.value) || 8)),
+                          )
+                        }
+                        placeholder="e.g. 8"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Log entry tolerance (minutes)</Label>
+                      <Input
+                        type="number"
+                        min={0}
+                        value={entryToleranceMinutes === "" ? "" : entryToleranceMinutes}
+                        onChange={(e) =>
+                          setEntryToleranceMinutes(
+                            e.target.value === "" ? "" : Math.max(0, Number(e.target.value) || 0),
+                          )
+                        }
+                        disabled={!isReadingsApplicable}
+                        placeholder="e.g. 15"
+                      />
                     </div>
                   </div>
 
@@ -1300,7 +1827,93 @@ const BoilerLogBookPage: React.FC = () => {
                     );
                   })()}
 
+                  {formData.equipmentType === "briquette" && (
+                    <fieldset disabled={!isReadingsApplicable} className={cn(!isReadingsApplicable && "opacity-60")}>
+                      <div className="space-y-3">
+                        <h3 className="text-sm font-semibold border-b pb-2">Briquette Parameters</h3>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div className="space-y-2">
+                            <Label>Time Slot (HH:MM:SS)</Label>
+                            <Input
+                              type="time"
+                              step={1}
+                              value={formData.timeSlot}
+                              onChange={(e) => setFormData({ ...formData, timeSlot: normalizeHhMmSs(e.target.value) })}
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label>Steam Pressure</Label>
+                            <Input type="number" step="0.01" value={formData.steamPressure} onChange={(e) => setFormData({ ...formData, steamPressure: e.target.value })} />
+                          </div>
+                          <div className="space-y-2">
+                            <Label>Furnace Pressure (mmWC)</Label>
+                            <Input type="number" step="0.01" value={formData.furnacePressureMmwc} onChange={(e) => setFormData({ ...formData, furnacePressureMmwc: e.target.value })} />
+                          </div>
+                          <div className="space-y-2">
+                            <Label>ID Fan O/P</Label>
+                            <Input type="number" step="0.01" value={formData.idFanOpPercent} onChange={(e) => setFormData({ ...formData, idFanOpPercent: e.target.value })} />
+                          </div>
+                          <div className="space-y-2">
+                            <Label>PA Damper position 1</Label>
+                            <Input type="number" step="0.01" value={formData.paDamperPosition1} onChange={(e) => setFormData({ ...formData, paDamperPosition1: e.target.value })} />
+                          </div>
+                          <div className="space-y-2">
+                            <Label>PA Damper position 2</Label>
+                            <Input type="number" step="0.01" value={formData.paDamperPosition2} onChange={(e) => setFormData({ ...formData, paDamperPosition2: e.target.value })} />
+                          </div>
+                          <div className="space-y-2">
+                            <Label>Metering Screw %</Label>
+                            <Input type="number" step="0.01" value={formData.meteringScrewPercent} onChange={(e) => setFormData({ ...formData, meteringScrewPercent: e.target.value })} />
+                          </div>
+                          <div className="space-y-2">
+                            <Label>Steam Reading Ton</Label>
+                            <Input type="number" step="0.01" value={formData.steamReadingTon} onChange={(e) => setFormData({ ...formData, steamReadingTon: e.target.value })} />
+                          </div>
+                          <div className="space-y-2">
+                            <Label>Steam Flow Kg/Hr</Label>
+                            <Input type="number" step="0.01" value={formData.steamFlowKgHr} onChange={(e) => setFormData({ ...formData, steamFlowKgHr: e.target.value })} />
+                          </div>
+                          <div className="space-y-2">
+                            <Label>Stack Temp</Label>
+                            <Input type="number" step="0.01" value={formData.stackTemp} onChange={(e) => setFormData({ ...formData, stackTemp: e.target.value })} />
+                          </div>
+                          <div className="space-y-2">
+                            <Label>Furnace Temp</Label>
+                            <Input type="number" step="0.01" value={formData.furnaceTemp} onChange={(e) => setFormData({ ...formData, furnaceTemp: e.target.value })} />
+                          </div>
+                          <div className="space-y-2">
+                            <Label>Hot Air Temp</Label>
+                            <Input value={formData.hotAirTemp} onChange={(e) => setFormData({ ...formData, hotAirTemp: e.target.value })} />
+                          </div>
+                          <div className="space-y-2">
+                            <Label>Feed Pump 1/2</Label>
+                            <Input value={formData.feedPump12} onChange={(e) => setFormData({ ...formData, feedPump12: e.target.value })} />
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-3 gap-4">
+                          <div className="space-y-2"><Label>Feed Water pH</Label><Input type="number" step="0.01" value={formData.feedWaterPh} onChange={(e) => setFormData({ ...formData, feedWaterPh: e.target.value })} /></div>
+                          <div className="space-y-2"><Label>Feed Water Hardness (ppm)</Label><Input type="number" step="0.01" value={formData.feedWaterHardnessPpm} onChange={(e) => setFormData({ ...formData, feedWaterHardnessPpm: e.target.value })} /></div>
+                          <div className="space-y-2"><Label>Feed Water TDS</Label><Input type="number" step="0.01" value={formData.feedWaterTdsPpm} onChange={(e) => setFormData({ ...formData, feedWaterTdsPpm: e.target.value })} /></div>
+                          <div className="space-y-2"><Label>Boiler Water pH</Label><Input type="number" step="0.01" value={formData.boilerWaterPh} onChange={(e) => setFormData({ ...formData, boilerWaterPh: e.target.value })} /></div>
+                          <div className="space-y-2"><Label>Boiler Water Hardness (ppm)</Label><Input type="number" step="0.01" value={formData.boilerWaterHardnessPpm} onChange={(e) => setFormData({ ...formData, boilerWaterHardnessPpm: e.target.value })} /></div>
+                          <div className="space-y-2"><Label>Boiler Water TDS</Label><Input type="number" step="0.01" value={formData.boilerWaterTdsPpm} onChange={(e) => setFormData({ ...formData, boilerWaterTdsPpm: e.target.value })} /></div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div className="space-y-2"><Label>Total Steam in 1 day</Label><Input value={formData.totalSteamIn1Day} onChange={(e) => setFormData({ ...formData, totalSteamIn1Day: e.target.value })} /></div>
+                          <div className="space-y-2"><Label>Total Steam Flow Ratio</Label><Input value={formData.totalSteamFlowRatio} onChange={(e) => setFormData({ ...formData, totalSteamFlowRatio: e.target.value })} /></div>
+                        </div>
+                        <div className="grid grid-cols-1 gap-4">
+                          <div className="space-y-2">
+                            <Label>Operator Sign & Date</Label>
+                            <Input value={formData.operatorSignDate} readOnly />
+                          </div>
+                        </div>
+                      </div>
+                    </fieldset>
+                  )}
+
                   {/* Hourly Parameters */}
+                  {formData.equipmentType === "boiler" && (
                   <fieldset disabled={!isReadingsApplicable} className={cn(!isReadingsApplicable && "opacity-60")}>
                   <div className="space-y-3">
                     <h3 className="text-sm font-semibold border-b pb-2">Hourly Parameters</h3>
@@ -1489,15 +2102,56 @@ const BoilerLogBookPage: React.FC = () => {
                         </Select>
                       </div>
                       <div className="space-y-2">
-                        <Label>Manual Blow Down Time <span className="text-muted-foreground text-xs">(e.g. 14:30)</span></Label>
-                        <Input type="time" value={formData.manualBlowdownTime} onChange={(e) => setFormData({ ...formData, manualBlowdownTime: e.target.value })} placeholder="14:30" />
+                        <Label>Manual Blow Down Time</Label>
+                        <div className="grid grid-cols-3 gap-2">
+                          <Select
+                            value={(formData.manualBlowdownTime || "").toUpperCase() === "N/A" ? "na" : "time"}
+                            onValueChange={(value) =>
+                              setFormData((prev) => ({
+                                ...prev,
+                                manualBlowdownTime:
+                                  value === "na"
+                                    ? "N/A"
+                                    : (prev.manualBlowdownTime || "").toUpperCase() === "N/A"
+                                      ? ""
+                                      : prev.manualBlowdownTime,
+                              }))
+                            }
+                          >
+                            <SelectTrigger className="col-span-1">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="time">Time</SelectItem>
+                              <SelectItem value="na">N/A</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <Input
+                            type="time"
+                            step={1}
+                            className="col-span-2"
+                            value={(formData.manualBlowdownTime || "").toUpperCase() === "N/A" ? "" : formData.manualBlowdownTime}
+                            onChange={(e) => setFormData({ ...formData, manualBlowdownTime: e.target.value })}
+                            disabled={(formData.manualBlowdownTime || "").toUpperCase() === "N/A"}
+                          />
+                        </div>
                       </div>
                     </div>
                   </div>
                   </fieldset>
+                  )}
 
                   {/* Remarks */}
                   <div className="space-y-3 pt-4 mt-2 border-t">
+                    {formData.equipmentType === "briquette" && (
+                      <div className="space-y-2">
+                        <Label>Verified Sign & Date</Label>
+                        <Input
+                          value={formData.verifiedSignDate}
+                          readOnly
+                        />
+                      </div>
+                    )}
                     <h3 className="text-sm font-semibold border-b pb-2">Remarks</h3>
                     <Textarea
                       value={formData.remarks}
@@ -1558,6 +2212,7 @@ const BoilerLogBookPage: React.FC = () => {
                   </th>
                   <th className="px-4 py-2 text-left font-semibold w-[110px]">Date</th>
                   <th className="px-4 py-2 text-left font-semibold w-[100px]">Time</th>
+                  <th className="px-4 py-2 text-left font-semibold w-[130px]">Equipment Type</th>
                   <th className="px-4 py-2 text-left font-semibold w-[150px]">Equipment</th>
                   <th className="px-4 py-2 text-left font-semibold min-w-[140px]">Readings</th>
                   <th className="px-4 py-2 text-center font-semibold min-w-[140px]">Remarks</th>
@@ -1573,7 +2228,7 @@ const BoilerLogBookPage: React.FC = () => {
                 {filteredLogs.length === 0 && !isLoading && (
                   <tr>
                     <td
-                      colSpan={12}
+                      colSpan={13}
                       className="px-3 py-6 text-center text-muted-foreground"
                     >
                       No Boiler Log Book entries found.
@@ -1581,8 +2236,23 @@ const BoilerLogBookPage: React.FC = () => {
                   </tr>
                 )}
                 {filteredLogs.map((log) => {
+                  const isMaintenanceOrShutdown =
+                    log.activity_type === "maintenance" || log.activity_type === "shutdown";
+                  const canEditMaintenanceBeforeApprove =
+                    isMaintenanceOrShutdown &&
+                    (log.status === "draft" || log.status === "pending" || log.status === "pending_secondary_approval") &&
+                    user?.role !== "operator" &&
+                    log.operator_id !== user?.id &&
+                    !(log.status === "pending_secondary_approval" && log.approved_by_id === user?.id);
+                  const canEditRejected =
+                    log.status === "rejected" &&
+                    log.operator_id === user?.id &&
+                    !(log.has_corrections && !log.corrects_id);
+                  const canEditAction = canEditMaintenanceBeforeApprove || canEditRejected;
                   const tolClass =
-                    log.tolerance_status === "outside"
+                    isMaintenanceOrShutdown
+                      ? "bg-yellow-100"
+                      : log.tolerance_status === "outside"
                       ? "bg-red-100"
                       : "";
                   return (
@@ -1604,6 +2274,11 @@ const BoilerLogBookPage: React.FC = () => {
                     </td>
                     <td className="px-4 py-3">
                       <span className="text-sm text-foreground">{log.time}</span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <Badge variant={log.equipmentType === "briquette" ? "secondary" : "outline"}>
+                        {log.equipmentType === "briquette" ? "Briquette" : "Boiler"}
+                      </Badge>
                     </td>
                     <td className="px-4 py-3">
                       <span className="text-sm font-medium text-foreground">{log.equipmentId}</span>
@@ -1723,6 +2398,10 @@ const BoilerLogBookPage: React.FC = () => {
                               title={
                                 log.status === "pending_secondary_approval" && log.approved_by_id === user?.id
                                   ? "A different person must approve this corrected entry."
+                                  : isMaintenanceOrShutdown &&
+                                    (log.status === "pending" || log.status === "draft" || log.status === "pending_secondary_approval") &&
+                                    !editedMaintenanceLogIds.has(log.id)
+                                  ? "Please edit this maintenance/shutdown entry first, then approve."
                                   : (log.status === "pending" || log.status === "draft" || log.status === "pending_secondary_approval"
                                       ? "Approve"
                                       : "Approved")
@@ -1737,7 +2416,11 @@ const BoilerLogBookPage: React.FC = () => {
                                     toast.error("The log book entry must be approved by a different user than the operator (Log Book Done By).");
                                     return;
                                   }
-                                  if (!viewedReadingsLogIds.has(log.id)) {
+                                  if (isMaintenanceOrShutdown && !editedMaintenanceLogIds.has(log.id)) {
+                                    toast.error("Please edit this maintenance/shutdown entry first, then approve.");
+                                    return;
+                                  }
+                                  if (!isMaintenanceOrShutdown && !viewedReadingsLogIds.has(log.id)) {
                                     toast.error("Please click View Readings before approving this entry.");
                                     return;
                                   }
@@ -1781,32 +2464,20 @@ const BoilerLogBookPage: React.FC = () => {
                               size="icon"
                               className={cn(
                                 "h-7 w-7",
-                                (log.status === "rejected" &&
-                                  log.operator_id === user?.id &&
-                                  !(log.has_corrections && !log.corrects_id))
+                                canEditAction
                                   ? ""
                                   : "opacity-40 cursor-not-allowed"
                               )}
                               title={
-                                log.status === "rejected" &&
-                                log.operator_id === user?.id &&
-                                !(log.has_corrections && !log.corrects_id)
-                                  ? "Edit entry"
-                                  : "Edit only available after reject"
+                                canEditAction ? "Edit entry" : "Edit only available"
                               }
                               onClick={() => {
-                                if (
-                                  log.status === "rejected" &&
-                                  log.operator_id === user?.id &&
-                                  !(log.has_corrections && !log.corrects_id)
-                                ) {
+                                if (canEditAction) {
                                   handleEditLog(log);
                                 }
                               }}
                               disabled={
-                                log.status !== "rejected" ||
-                                log.operator_id !== user?.id ||
-                                (log.has_corrections && !log.corrects_id)
+                                !canEditAction
                               }
                             >
                               <Edit className="w-4 h-4" />
@@ -2049,7 +2720,26 @@ const BoilerLogBookPage: React.FC = () => {
                     if (log.status === "pending_secondary_approval" && log.approved_by_id === user?.id) return false;
                     return true;
                   });
-                  const notViewedIds = ids.filter((id) => !viewedReadingsLogIds.has(id));
+                  const mustEditFirstIds = ids.filter((id) => {
+                    const log = logs.find((l) => l.id === id);
+                    if (!log) return false;
+                    const isMaintenanceOrShutdown =
+                      log.activity_type === "maintenance" || log.activity_type === "shutdown";
+                    return isMaintenanceOrShutdown && !editedMaintenanceLogIds.has(id);
+                  });
+                  if (mustEditFirstIds.length > 0) {
+                    toast.error(
+                      `Please edit maintenance/shutdown entr${mustEditFirstIds.length === 1 ? "y" : "ies"} first, then approve.`
+                    );
+                    return;
+                  }
+                  const notViewedIds = ids.filter((id) => {
+                    const log = logs.find((l) => l.id === id);
+                    if (!log) return false;
+                    const isMaintenanceOrShutdown =
+                      log.activity_type === "maintenance" || log.activity_type === "shutdown";
+                    return !isMaintenanceOrShutdown && !viewedReadingsLogIds.has(id);
+                  });
                   if (notViewedIds.length > 0) {
                     toast.error(
                       `Please click View Readings before approval for ${notViewedIds.length} selected entr${notViewedIds.length === 1 ? "y" : "ies"}.`
@@ -2064,13 +2754,18 @@ const BoilerLogBookPage: React.FC = () => {
                   }
                   try {
                     for (const id of ids) {
-                      await boilerLogAPI.approve(id, "approve", comment);
+                      const log = logs.find((l) => l.id === id);
+                      if (log?.equipmentType === "briquette") {
+                        await briquetteLogAPI.approve(id, "approve", comment);
+                      } else {
+                        await boilerLogAPI.approve(id, "approve", comment);
+                      }
                     }
                     setApproveCommentOpen(false);
                     setApprovalComment("");
                     setSelectedLogIds([]);
                     await refreshLogs();
-                    toast.success(`${ids.length} boiler entries approved successfully.`);
+                    toast.success(`${ids.length} entries approved successfully.`);
                   } catch (error: any) {
                     console.error("Error approving boiler entries:", error);
                     toast.error(error?.response?.data?.error || error?.message || "Failed to approve some entries");

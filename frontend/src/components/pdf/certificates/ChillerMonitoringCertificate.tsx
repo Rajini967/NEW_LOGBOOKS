@@ -126,7 +126,6 @@ interface ChillerMonitoringData {
     chilledWaterPumpChemicalQtyKg?: number;
     coolingTowerFanChemicalName?: string;
     coolingTowerFanChemicalQtyKg?: number;
-    recordingFrequency?: string;
     operatorSign?: string;
     verifiedBy?: string;
     comment?: string;
@@ -357,9 +356,8 @@ export function ChillerMonitoringCertificate({ data }: ChillerMonitoringCertific
             <Text style={[styles.tableCell, styles.smallCell, { width: '14%' }]}>Chilled Water Pump</Text>
             <Text style={[styles.tableCell, styles.smallCell, { width: '14%' }]}>Cooling Tower Fan</Text>
             <Text style={[styles.tableCell, styles.smallCell, { width: '11%' }]}>Cooling Tower Blow Down Time (Minutes)</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '11%' }]}>Recording Frequency</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '11%' }]}>Verified By</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '11%' }, styles.tableCellLast]}>Operator Sign</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '16%' }]}>Verified By</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '16%' }, styles.tableCellLast]}>Operator Sign</Text>
           </View>
 
           {data.logs.map((log, index) => (
@@ -376,9 +374,8 @@ export function ChillerMonitoringCertificate({ data }: ChillerMonitoringCertific
                 {`Fan 1: ${parseStatus(log.coolingTowerFanStatus, 'F1', 0) || ''}\nFan 2: ${parseStatus(log.coolingTowerFanStatus, 'F2', 1) || ''}\nFan 3: ${parseStatus(log.coolingTowerFanStatus, 'F3', 2) || ''}`}
               </Text>
               <Text style={[styles.tableCell, styles.smallCell, { width: '11%' }]}>{log.coolingTowerBlowdownTimeMin ?? ''}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '11%' }]}>{log.recordingFrequency || ''}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '11%' }]}>{wrapUser(log.verifiedBy)}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '11%' }, styles.tableCellLast]}>{wrapUser(log.operatorSign)}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '16%' }]}>{wrapUser(log.verifiedBy)}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '16%' }, styles.tableCellLast]}>{wrapUser(log.operatorSign)}</Text>
             </View>
           ))}
         </View>

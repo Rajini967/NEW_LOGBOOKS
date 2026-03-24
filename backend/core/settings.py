@@ -46,6 +46,7 @@ INSTALLED_APPS = [
     'chemical_prep',
     'chiller_logs',
     'boiler_logs',
+    'briquette_logs',
     'filter_logs',
     'compressor_logs',
     'air_validation',

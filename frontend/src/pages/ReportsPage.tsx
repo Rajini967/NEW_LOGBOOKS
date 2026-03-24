@@ -161,7 +161,6 @@ const mapChillerLogForMonitoringPdf = (l: any) => ({
   chilledWaterPumpChemicalQtyKg: l.chilled_water_pump_chemical_qty_kg,
   coolingTowerFanChemicalName: l.cooling_tower_fan_chemical_name,
   coolingTowerFanChemicalQtyKg: l.cooling_tower_fan_chemical_qty_kg,
-  recordingFrequency: l.recording_frequency,
   operatorSign: l.operator_sign,
   verifiedBy: l.verified_by,
   comment: l.comment,
