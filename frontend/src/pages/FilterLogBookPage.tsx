@@ -27,7 +27,6 @@ import {
   equipmentAPI,
   equipmentCategoryAPI,
   filterAssignmentAPI,
-  filterCategoryAPI,
   filterLogAPI,
   filterMasterAPI,
   filterScheduleAPI,
@@ -275,9 +274,10 @@ const FilterLogBookPage: React.FC = () => {
 
   const loadCategories = async () => {
     try {
-      const data = await filterCategoryAPI.list();
+      const data = await equipmentCategoryAPI.list();
       const options: FilterCategoryOption[] = (data as any[])
-        .filter((c) => c.is_active)
+        .filter((c) => c.is_active !== false)
+        .filter((c) => !/^chiller(s)?$/i.test(String(c?.name || "").trim()))
         .map((c) => ({
           value: c.name as string,
           label: c.name as string,

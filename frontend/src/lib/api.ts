@@ -632,13 +632,18 @@ export const filterScheduleAPI = {
     return response.data;
   },
 
-  approve: async (id: string) => {
-    const response = await api.post(`/filter-schedules/${id}/approve/`);
+  approve: async (id: string, remarks?: string) => {
+    const response = await api.post(`/filter-schedules/${id}/approve/`, {
+      remarks,
+    });
     return response.data;
   },
 
-  reject: async (id: string) => {
-    await api.post(`/filter-schedules/${id}/reject/`);
+  reject: async (id: string, remarks?: string) => {
+    const response = await api.post(`/filter-schedules/${id}/reject/`, {
+      remarks,
+    });
+    return response.data;
   },
 
   delete: async (id: string) => {
@@ -1213,6 +1218,10 @@ export const briquetteLogAPI = {
   },
   correct: async (id: string, data: any) => {
     const response = await api.post(`/briquette-logs/${id}/correct/`, data);
+    return response.data;
+  },
+  backfillReports: async () => {
+    const response = await api.post('/briquette-logs/backfill-reports/');
     return response.data;
   },
 };

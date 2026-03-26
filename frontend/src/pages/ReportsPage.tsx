@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Header } from '@/components/layout/Header';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -46,6 +46,7 @@ import {
   generateNVPCPDF,
   generateChillerMonitoringPDF,
   generateBoilerMonitoringPDF,
+  generateBriquetteMonitoringPDF,
   generateChemicalMonitoringPDF,
   generateFilterMonitoringPDF,
   downloadPDF,
@@ -57,6 +58,7 @@ import {
   chemicalPrepAPI,
   chillerLogAPI,
   boilerLogAPI,
+  briquetteLogAPI,
   compressorLogAPI,
   hvacValidationAPI,
   testCertificateAPI,
@@ -127,12 +129,18 @@ interface AuditEventRow {
   new_value: string | null;
 }
 
+const isChillerOperationRaw = (row: any): boolean => {
+  const a = row?.activity_type;
+  return !a || String(a).toLowerCase() === 'operation';
+};
+
 const mapChillerLogForMonitoringPdf = (l: any) => ({
   date: l.timestamp ? format(new Date(l.timestamp), 'dd/MM/yy') : '',
   time: l.timestamp ? format(new Date(l.timestamp), 'HH:mm') : '',
   id: l.id,
   equipmentType: 'chiller',
   equipmentId: l.equipment_id,
+  activity_type: l.activity_type,
   evapWaterInletPressure: l.evap_water_inlet_pressure,
   evapWaterOutletPressure: l.evap_water_outlet_pressure,
   evapEnteringWaterTemp: l.evap_entering_water_temp,
@@ -170,6 +178,100 @@ const mapChillerLogForMonitoringPdf = (l: any) => ({
   status: l.status,
   raw: l,
 });
+
+/** Payload for chiller grid PDF: operation logs for equipment + report day columns. */
+function buildChillerMonitoringPdfPayload(
+  sourceLog: any,
+  mappedForEquipment: ReturnType<typeof mapChillerLogForMonitoringPdf>[],
+  targetEquipmentId: string,
+  approvedBy?: string,
+  printedBy?: string,
+): MonitoringPDFData | null {
+  const logsForEquip = mappedForEquipment.filter(
+    (row) =>
+      String(row.equipmentId ?? '') === String(targetEquipmentId) &&
+      (!row.activity_type || String(row.activity_type).toLowerCase() === 'operation'),
+  );
+  let reportDateStr: string | undefined;
+  if (sourceLog?.timestamp) {
+    const d = new Date(sourceLog.timestamp);
+    if (!Number.isNaN(d.getTime())) {
+      reportDateStr = format(d, 'yyyy-MM-dd');
+    }
+  }
+  if (!reportDateStr && logsForEquip.length > 0) {
+    const days = [...new Set(logsForEquip.map((l) => format(l.timestamp, 'yyyy-MM-dd')))]
+      .filter(Boolean)
+      .sort()
+      .reverse();
+    reportDateStr = days[0];
+  }
+  if (!reportDateStr) {
+    return null;
+  }
+  const onDay = logsForEquip.filter((l) => format(l.timestamp, 'yyyy-MM-dd') === reportDateStr);
+  if (onDay.length === 0) {
+    return null;
+  }
+  return {
+    logs: logsForEquip,
+    approvedBy,
+    printedBy,
+    reportDate: reportDateStr,
+  };
+}
+
+const parseBriquetteTimeToMinutes = (t: string): number => {
+  const m = String(t || '').match(/^(\d{1,2}):(\d{2})/);
+  if (!m) return Number.POSITIVE_INFINITY;
+  const hh = Number(m[1]);
+  const mm = Number(m[2]);
+  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return Number.POSITIVE_INFINITY;
+  return hh * 60 + mm;
+};
+
+/** Briquette monitoring PDF: lock main grid + water readings to the report calendar day. */
+function buildBriquetteMonitoringPdfPayload(
+  sourceLog: any,
+  mappedForEquipment: ReturnType<typeof mapBriquetteLogForMonitoringPdf>[],
+  targetEquipmentId: string,
+  approvedBy?: string,
+  printedBy?: string,
+): MonitoringPDFData | null {
+  const logsForEquip = mappedForEquipment.filter(
+    (row) => String(row.equipmentId ?? '') === String(targetEquipmentId),
+  );
+  let reportDateStr: string | undefined;
+  if (sourceLog?.timestamp) {
+    const d = new Date(sourceLog.timestamp);
+    if (!Number.isNaN(d.getTime())) {
+      reportDateStr = format(d, 'yyyy-MM-dd');
+    }
+  }
+  if (!reportDateStr && logsForEquip.length > 0) {
+    const days = [...new Set(logsForEquip.map((l) => format(l.timestamp, 'yyyy-MM-dd')))]
+      .filter(Boolean)
+      .sort()
+      .reverse();
+    reportDateStr = days[0];
+  }
+  if (!reportDateStr) {
+    return null;
+  }
+  const onDay = logsForEquip.filter((l) => format(l.timestamp, 'yyyy-MM-dd') === reportDateStr);
+  if (onDay.length === 0) {
+    return null;
+  }
+  const sorted = [...onDay].sort(
+    (a, b) => parseBriquetteTimeToMinutes(String(a.time)) - parseBriquetteTimeToMinutes(String(b.time)),
+  );
+  return {
+    logs: sorted,
+    approvedBy,
+    printedBy,
+    reportDate: reportDateStr,
+  };
+}
 
 const mapBoilerLogForMonitoringPdf = (l: any) => ({
   date: l.timestamp ? format(new Date(l.timestamp), 'dd/MM/yy') : '',
@@ -212,6 +314,42 @@ const mapBoilerLogForMonitoringPdf = (l: any) => ({
   remarks: l.remarks,
   checkedBy: l.operator_name,
   timestamp: new Date(l.timestamp),
+  status: l.status,
+  raw: l,
+});
+
+const mapBriquetteLogForMonitoringPdf = (l: any) => ({
+  date: l.timestamp ? format(new Date(l.timestamp), 'dd/MM/yy') : '',
+  time: (l.time_slot || (l.timestamp ? format(new Date(l.timestamp), 'HH:mm') : '')).toString(),
+  id: l.id,
+  equipmentType: 'briquette',
+  equipmentId: l.equipment_id,
+  steamPressure: l.steam_pressure,
+  furnacePressureMmwc: l.furnace_pressure_mmwc,
+  idFanOpPercent: l.id_fan_op_percent,
+  paDamperPosition1: l.pa_damper_position_1,
+  paDamperPosition2: l.pa_damper_position_2,
+  meteringScrewPercent: l.metering_screw_percent,
+  steamReadingTon: l.steam_reading_ton,
+  steamFlowKgHr: l.steam_flow_kg_hr,
+  stackTemp: l.stack_temp,
+  furnaceTemp: l.furnace_temp,
+  hotAirTemp: l.hot_air_temp,
+  feedPump12: l.feed_pump_1_2,
+  operatorSignDate: l.operator_sign_date,
+  verifiedSignDate: l.verified_sign_date,
+  feedWaterPh: l.feed_water_ph,
+  feedWaterHardnessPpm: l.feed_water_hardness_ppm,
+  feedWaterTdsPpm: l.feed_water_tds_ppm,
+  boilerWaterPh: l.boiler_water_ph,
+  boilerWaterHardnessPpm: l.boiler_water_hardness_ppm,
+  boilerWaterTdsPpm: l.boiler_water_tds_ppm,
+  totalSteamIn1Day: l.total_steam_in_1_day,
+  totalSteamFlowRatio: l.total_steam_flow_ratio,
+  remarks: l.remarks,
+  comment: l.comment,
+  checkedBy: l.operator_name,
+  timestamp: l.timestamp ? new Date(l.timestamp) : new Date(),
   status: l.status,
   raw: l,
 });
@@ -270,6 +408,22 @@ const mapFilterLogForMonitoringPdf = (l: any) => {
 
 const isApprovedReportRow = (row: any): boolean =>
   String(row?.status ?? '').toLowerCase() === 'approved';
+
+/**
+ * E Log Book monitoring PDFs were merging every approved log for the equipment/day.
+ * Non–super-admin users must only export the log row for the selected report (same as list RBAC).
+ * Super admin keeps the full multi-column daily grid for that equipment/date.
+ */
+function filterUtilityMonitoringLogsForPdfRole<T extends { id?: string }>(
+  mappedLogs: T[],
+  report: Report,
+  userRole: string | undefined,
+): T[] {
+  if (userRole === 'super_admin') return mappedLogs;
+  const sid = report.originalData?.sourceId;
+  if (!sid) return mappedLogs;
+  return mappedLogs.filter((l) => String(l.id ?? '') === String(sid));
+}
 
 // TODO: Replace with API call to fetch reports
 const typeIcons = {
@@ -411,6 +565,7 @@ export default function ReportsPage() {
     createdBy: string;
   }>({ fromDate: '', toDate: '', fromTime: '', toTime: '', equipmentId: '', createdBy: '' });
   const [equipmentOptions, setEquipmentOptions] = useState<{ value: string; label: string }[]>([]);
+  const briquetteSyncAttemptedRef = useRef(false);
 
   const isSupervisor = user?.role === 'supervisor' || user?.role === 'super_admin';
   const isManager = user?.role === 'manager';
@@ -418,6 +573,7 @@ export default function ReportsPage() {
   const canSeeUserReports = !isCustomer && (isSupervisor || isManager || user?.role === 'super_admin');
   const canSeeActivity = !isCustomer && (isSupervisor || isManager || user?.role === 'super_admin');
   const canSeeAudit = !isCustomer && (isSupervisor || isManager || user?.role === 'super_admin');
+  const canSyncBriquetteReports = !isCustomer && (user?.role === 'super_admin' || isManager);
 
   const reportCreatedByOptions = useMemo(() => {
     const unique = Array.from(new Set(reports.map((r) => r.createdBy).filter(Boolean))) as string[];
@@ -504,6 +660,14 @@ export default function ReportsPage() {
   useEffect(() => {
     const fetchReports = async () => {
       setIsLoading(true);
+      if (canSyncBriquetteReports && !briquetteSyncAttemptedRef.current) {
+        briquetteSyncAttemptedRef.current = true;
+        try {
+          await briquetteLogAPI.backfillReports();
+        } catch (error) {
+          console.error('Auto sync briquette reports failed:', error);
+        }
+      }
       const reportsList = await loadReportsFromAPI();
       setReports(reportsList);
       setIsLoading(false);
@@ -517,7 +681,7 @@ export default function ReportsPage() {
     return () => {
       clearInterval(intervalId);
     };
-  }, [loadReportsFromAPI]);
+  }, [loadReportsFromAPI, canSyncBriquetteReports]);
 
   useEffect(() => {
     const loadEquipmentOptions = async () => {
@@ -830,6 +994,8 @@ export default function ReportsPage() {
           await chillerLogAPI.approve(selectedReport.id, 'approve', approvalRemarks);
         } else if (log.equipmentType === 'boiler') {
           await boilerLogAPI.approve(selectedReport.id, 'approve', approvalRemarks);
+        } else if (log.equipmentType === 'briquette') {
+          await briquetteLogAPI.approve(selectedReport.id, 'approve', approvalRemarks);
         } else if (log.equipmentType === 'compressor') {
           await compressorLogAPI.approve(selectedReport.id, 'approve', approvalRemarks);
         } else if (log.equipmentType === 'chemical') {
@@ -880,6 +1046,8 @@ export default function ReportsPage() {
           await chillerLogAPI.approve(selectedReport.id, 'reject', approvalRemarks);
         } else if (log.equipmentType === 'boiler') {
           await boilerLogAPI.approve(selectedReport.id, 'reject', approvalRemarks);
+        } else if (log.equipmentType === 'briquette') {
+          await briquetteLogAPI.approve(selectedReport.id, 'reject', approvalRemarks);
         } else if (log.equipmentType === 'compressor') {
           await compressorLogAPI.approve(selectedReport.id, 'reject', approvalRemarks);
         } else if (log.equipmentType === 'chemical') {
@@ -940,6 +1108,9 @@ export default function ReportsPage() {
       if (sourceTable === 'boiler_logs') {
         return { equipmentType: 'boiler' };
       }
+      if (sourceTable === 'briquette_logs') {
+        return { equipmentType: 'briquette' };
+      }
       if (sourceTable === 'compressor_logs') {
         return { equipmentType: 'compressor' };
       }
@@ -958,6 +1129,7 @@ export default function ReportsPage() {
       const apiMap: Record<string, (id: string) => Promise<any>> = {
         'chiller_logs': (id) => chillerLogAPI.get(id),
         'boiler_logs': (id) => boilerLogAPI.get(id),
+        'briquette_logs': (id) => briquetteLogAPI.get(id),
         'compressor_logs': (id) => compressorLogAPI.get(id),
         'chemical_preparations': (id) => chemicalPrepAPI.get(id),
         'filter_logs': (id) => filterLogAPI.get(id),
@@ -983,6 +1155,8 @@ export default function ReportsPage() {
         return { ...data, equipmentType: 'chiller' };
       } else if (sourceTable === 'boiler_logs') {
         return { ...data, equipmentType: 'boiler' };
+      } else if (sourceTable === 'briquette_logs') {
+        return { ...data, equipmentType: 'briquette' };
       } else if (sourceTable === 'compressor_logs') {
         return { ...data, equipmentType: 'compressor' };
       } else if (sourceTable === 'chemical_preparations') {
@@ -1318,14 +1492,29 @@ export default function ReportsPage() {
             .filter(
               (l: any) =>
                 isApprovedReportRow(l) &&
+                isChillerOperationRaw(l) &&
                 (!targetEquipmentId || String(l.equipment_id ?? '') === targetEquipmentId)
             )
             .map(mapChillerLogForMonitoringPdf);
+          allLogs = filterUtilityMonitoringLogsForPdfRole(allLogs, report, user?.role);
           if (allLogs.length === 0) {
-            toast.error('No logs found for this equipment');
+            toast.error('No approved operation chiller logs found for this equipment.');
             return;
           }
-          const chillerPdfData: MonitoringPDFData = { logs: allLogs, approvedBy: report.approvedBy, printedBy: user?.name || user?.email || '' };
+          const equipId =
+            targetEquipmentId ||
+            String(log.equipment_id ?? log.equipmentId ?? allLogs[0]?.equipmentId ?? '');
+          const chillerPdfData = buildChillerMonitoringPdfPayload(
+            log,
+            allLogs,
+            equipId,
+            report.approvedBy,
+            user?.name || user?.email || '',
+          );
+          if (!chillerPdfData) {
+            toast.error('No approved operation readings for this equipment on this date.');
+            return;
+          }
           const blob = await generateChillerMonitoringPDF(chillerPdfData);
           downloadPDF(blob, 'Chiller Monitoring.pdf');
           toast.success('PDF generated successfully');
@@ -1340,6 +1529,7 @@ export default function ReportsPage() {
                 (!targetEquipmentId || String(l.equipment_id ?? '') === targetEquipmentId)
             )
             .map(mapBoilerLogForMonitoringPdf);
+          allLogs = filterUtilityMonitoringLogsForPdfRole(allLogs, report, user?.role);
           if (allLogs.length === 0) {
             toast.error('No logs found for this equipment');
             return;
@@ -1347,6 +1537,39 @@ export default function ReportsPage() {
           const boilerPdfData: MonitoringPDFData = { logs: allLogs, approvedBy: report.approvedBy, printedBy: user?.name || user?.email || '' };
           const blob = await generateBoilerMonitoringPDF(boilerPdfData);
           downloadPDF(blob, 'Boiler Monitoring.pdf');
+          toast.success('PDF generated successfully');
+          return;
+        } else if (log.equipmentType === 'briquette') {
+          const targetEquipmentId = (log.equipment_id ?? log.equipmentId ?? report.site ?? '').toString();
+          const briqLogs = await briquetteLogAPI.list();
+          allLogs = briqLogs
+            .filter(
+              (l: any) =>
+                isApprovedReportRow(l) &&
+                (!targetEquipmentId || String(l.equipment_id ?? '') === targetEquipmentId),
+            )
+            .map(mapBriquetteLogForMonitoringPdf);
+          allLogs = filterUtilityMonitoringLogsForPdfRole(allLogs, report, user?.role);
+          if (allLogs.length === 0) {
+            toast.error('No logs found for this equipment');
+            return;
+          }
+          const equipId =
+            targetEquipmentId ||
+            String(log.equipment_id ?? log.equipmentId ?? allLogs[0]?.equipmentId ?? '');
+          const briqPdfData = buildBriquetteMonitoringPdfPayload(
+            log,
+            allLogs,
+            equipId,
+            report.approvedBy,
+            user?.name || user?.email || '',
+          );
+          if (!briqPdfData) {
+            toast.error('No approved briquette readings for this equipment on this date.');
+            return;
+          }
+          const blob = await generateBriquetteMonitoringPDF(briqPdfData);
+          downloadPDF(blob, 'Briquette Boiler Monitoring.pdf');
           toast.success('PDF generated successfully');
           return;
         } else if (log.equipmentType === 'chemical') {
@@ -1359,6 +1582,7 @@ export default function ReportsPage() {
                 (!targetEquipmentName || String(l.equipment_name ?? '') === targetEquipmentName)
             )
             .map(mapChemicalLogForMonitoringPdf);
+          allLogs = filterUtilityMonitoringLogsForPdfRole(allLogs, report, user?.role);
           if (allLogs.length === 0) {
             toast.error('No logs found for this equipment');
             return;
@@ -1380,6 +1604,7 @@ export default function ReportsPage() {
               return matchEquipment && matchFilter;
             })
             .map(mapFilterLogForMonitoringPdf);
+          allLogs = filterUtilityMonitoringLogsForPdfRole(allLogs, report, user?.role);
           if (allLogs.length === 0) {
             toast.error('No logs found for this equipment');
             return;
@@ -1730,14 +1955,29 @@ export default function ReportsPage() {
             .filter(
               (l: any) =>
                 isApprovedReportRow(l) &&
+                isChillerOperationRaw(l) &&
                 (!targetEquipmentId || String(l.equipment_id ?? '') === targetEquipmentId)
             )
             .map(mapChillerLogForMonitoringPdf);
+          allLogs = filterUtilityMonitoringLogsForPdfRole(allLogs, report, user?.role);
           if (allLogs.length === 0) {
-            toast.error('No logs found for this equipment');
+            toast.error('No approved operation chiller logs found for this equipment.');
             return;
           }
-          const chillerPdfData: MonitoringPDFData = { logs: allLogs, approvedBy: report.approvedBy, printedBy: user?.name || user?.email || '' };
+          const equipId =
+            targetEquipmentId ||
+            String(log.equipment_id ?? log.equipmentId ?? allLogs[0]?.equipmentId ?? '');
+          const chillerPdfData = buildChillerMonitoringPdfPayload(
+            log,
+            allLogs,
+            equipId,
+            report.approvedBy,
+            user?.name || user?.email || '',
+          );
+          if (!chillerPdfData) {
+            toast.error('No approved operation readings for this equipment on this date.');
+            return;
+          }
           const blob = await generateChillerMonitoringPDF(chillerPdfData);
           const success = printPDF(blob);
           if (success) {
@@ -1756,12 +1996,50 @@ export default function ReportsPage() {
                 (!targetEquipmentId || String(l.equipment_id ?? '') === targetEquipmentId)
             )
             .map(mapBoilerLogForMonitoringPdf);
+          allLogs = filterUtilityMonitoringLogsForPdfRole(allLogs, report, user?.role);
           if (allLogs.length === 0) {
             toast.error('No logs found for this equipment');
             return;
           }
           const boilerPdfData: MonitoringPDFData = { logs: allLogs, approvedBy: report.approvedBy, printedBy: user?.name || user?.email || '' };
           const blob = await generateBoilerMonitoringPDF(boilerPdfData);
+          const success = printPDF(blob);
+          if (success) {
+            toast.success('Opening print dialog...');
+          } else {
+            toast.error('Please allow popups to print PDFs');
+          }
+          return;
+        } else if (log.equipmentType === 'briquette') {
+          const targetEquipmentId = (log.equipment_id ?? log.equipmentId ?? report.site ?? '').toString();
+          const briqLogs = await briquetteLogAPI.list();
+          allLogs = briqLogs
+            .filter(
+              (l: any) =>
+                isApprovedReportRow(l) &&
+                (!targetEquipmentId || String(l.equipment_id ?? '') === targetEquipmentId),
+            )
+            .map(mapBriquetteLogForMonitoringPdf);
+          allLogs = filterUtilityMonitoringLogsForPdfRole(allLogs, report, user?.role);
+          if (allLogs.length === 0) {
+            toast.error('No logs found for this equipment');
+            return;
+          }
+          const equipId =
+            targetEquipmentId ||
+            String(log.equipment_id ?? log.equipmentId ?? allLogs[0]?.equipmentId ?? '');
+          const briqPdfData = buildBriquetteMonitoringPdfPayload(
+            log,
+            allLogs,
+            equipId,
+            report.approvedBy,
+            user?.name || user?.email || '',
+          );
+          if (!briqPdfData) {
+            toast.error('No approved briquette readings for this equipment on this date.');
+            return;
+          }
+          const blob = await generateBriquetteMonitoringPDF(briqPdfData);
           const success = printPDF(blob);
           if (success) {
             toast.success('Opening print dialog...');
@@ -1779,6 +2057,7 @@ export default function ReportsPage() {
                 (!targetEquipmentName || String(l.equipment_name ?? '') === targetEquipmentName)
             )
             .map(mapChemicalLogForMonitoringPdf);
+          allLogs = filterUtilityMonitoringLogsForPdfRole(allLogs, report, user?.role);
           if (allLogs.length === 0) {
             toast.error('No logs found for this equipment');
             return;
@@ -1804,6 +2083,7 @@ export default function ReportsPage() {
               return matchEquipment && matchFilter;
             })
             .map(mapFilterLogForMonitoringPdf);
+          allLogs = filterUtilityMonitoringLogsForPdfRole(allLogs, report, user?.role);
           if (allLogs.length === 0) {
             toast.error('No logs found for this equipment');
             return;

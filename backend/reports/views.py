@@ -7,6 +7,33 @@ from .models import Report, AuditEvent
 from .serializers import ReportSerializer, AuditEventSerializer
 
 
+def _exclude_super_admin_operated_reports(queryset, user):
+    """
+    For utility-style reports, `created_by` is copied from the source log's operator
+    (name or email). Non-super-admins should not see entries that were operated
+    by a super_admin. Do not filter on approved_by — otherwise every report
+    approved by a super_admin would disappear for all other roles.
+    """
+    if getattr(user, "role", None) == "super_admin":
+        return queryset
+    User = get_user_model()
+    super_users = User.all_objects.filter(role="super_admin", is_deleted=False).only(
+        "email", "name"
+    )
+    identifiers = []
+    for u in super_users:
+        for val in (u.email, u.name):
+            s = (val or "").strip()
+            if s:
+                identifiers.append(s)
+    if not identifiers:
+        return queryset
+    op_q = Q()
+    for ident in identifiers:
+        op_q |= Q(created_by__iexact=ident)
+    return queryset.exclude(op_q)
+
+
 class ReportViewSet(viewsets.ReadOnlyModelViewSet):
     """
     ViewSet for viewing approved reports.
@@ -41,16 +68,8 @@ class ReportViewSet(viewsets.ReadOnlyModelViewSet):
                 ]
             )
 
-        # Non-super-admin users should not see super-admin details.
-        if self.request.user.role != "super_admin":
-            User = get_user_model()
-            super_admin_emails = list(
-                User.all_objects.filter(role="super_admin", is_deleted=False).values_list("email", flat=True)
-            )
-            queryset = queryset.exclude(approved_by__role="super_admin")
-            if super_admin_emails:
-                queryset = queryset.exclude(created_by__in=super_admin_emails)
-        
+        queryset = _exclude_super_admin_operated_reports(queryset, self.request.user)
+
         return queryset.order_by('-approved_at')
 
 

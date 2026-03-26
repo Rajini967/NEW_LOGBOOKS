@@ -6,6 +6,25 @@ import { filterScheduleAPI } from "@/lib/api";
 import { Loader2, CheckCircle2, XCircle, ArrowLeft } from "lucide-react";
 import { useNavigate, Navigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 
 type ScheduleType = "replacement" | "cleaning" | "integrity";
 
@@ -15,10 +34,12 @@ interface FilterScheduleRow {
   frequency_days?: number | null;
   next_due_date?: string | null;
   is_approved: boolean;
+  status?: "active" | "overdue" | "completed" | "rejected";
   assignment_info?: {
     equipment_id: string;
     equipment_number: string;
     equipment_name: string;
+    area_category?: string | null;
     tag_info?: string | null;
   };
   created_at: string;
@@ -39,6 +60,13 @@ const FilterScheduleApprovalsPage: React.FC = () => {
   const [rows, setRows] = useState<FilterScheduleRow[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [workingId, setWorkingId] = useState<string | null>(null);
+  const [selectedScheduleId, setSelectedScheduleId] = useState<string | null>(null);
+  const [approveConfirmOpen, setApproveConfirmOpen] = useState(false);
+  const [approveCommentOpen, setApproveCommentOpen] = useState(false);
+  const [rejectConfirmOpen, setRejectConfirmOpen] = useState(false);
+  const [rejectCommentOpen, setRejectCommentOpen] = useState(false);
+  const [approvalComment, setApprovalComment] = useState("");
+  const [rejectionComment, setRejectionComment] = useState("");
 
   const pendingCount = useMemo(
     () => rows.filter((r) => !r.is_approved).length,
@@ -67,17 +95,10 @@ const FilterScheduleApprovalsPage: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdmin]);
 
-  const doApprove = async (id: string) => {
-    if (
-      !window.confirm(
-        "Are you sure you want to approve this maintenance schedule? This will start tracking due dates and overdue alerts."
-      )
-    ) {
-      return;
-    }
+  const doApprove = async (id: string, comment: string) => {
     setWorkingId(id);
     try {
-      await filterScheduleAPI.approve(id);
+      await filterScheduleAPI.approve(id, comment);
       toast({ title: "Schedule approved" });
       await load();
     } catch (error: any) {
@@ -91,11 +112,10 @@ const FilterScheduleApprovalsPage: React.FC = () => {
     }
   };
 
-  const doReject = async (id: string) => {
-    if (!window.confirm("Reject this schedule?")) return;
+  const doReject = async (id: string, comment: string) => {
     setWorkingId(id);
     try {
-      await filterScheduleAPI.reject(id);
+      await filterScheduleAPI.reject(id, comment);
       toast({ title: "Schedule rejected" });
       await load();
     } catch (error: any) {
@@ -151,6 +171,9 @@ const FilterScheduleApprovalsPage: React.FC = () => {
                       Frequency (days)
                     </th>
                     <th className="px-4 py-2 text-left font-medium text-muted-foreground">
+                      Area Category
+                    </th>
+                    <th className="px-4 py-2 text-left font-medium text-muted-foreground">
                       Tag Info
                     </th>
                     <th className="px-4 py-2 text-right font-medium text-muted-foreground">
@@ -162,7 +185,7 @@ const FilterScheduleApprovalsPage: React.FC = () => {
                   {isLoading ? (
                     <tr>
                       <td
-                        colSpan={5}
+                        colSpan={7}
                         className="px-4 py-6 text-center text-muted-foreground"
                       >
                         <div className="flex items-center justify-center gap-2">
@@ -174,7 +197,7 @@ const FilterScheduleApprovalsPage: React.FC = () => {
                   ) : rows.length === 0 ? (
                     <tr>
                       <td
-                        colSpan={5}
+                        colSpan={7}
                         className="px-4 py-6 text-center text-muted-foreground"
                       >
                         No schedules pending approval.
@@ -201,18 +224,30 @@ const FilterScheduleApprovalsPage: React.FC = () => {
                           {typeLabel[row.schedule_type]}
                         </td>
                         <td className="px-4 py-2">
-                          <span
-                            className={
-                              row.is_approved
+                          {(() => {
+                            const isRejected = row.status === "rejected";
+                            const label = isRejected
+                              ? "Rejected"
+                              : row.is_approved
+                                ? "Approved"
+                                : "Pending";
+                            const badgeClass = isRejected
+                              ? "inline-flex items-center rounded-full bg-rose-50 px-2 py-0.5 text-xs font-medium text-rose-700 dark:bg-rose-950/50 dark:text-rose-300"
+                              : row.is_approved
                                 ? "inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300"
-                                : "inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-950/50 dark:text-amber-300"
-                            }
-                          >
-                            {row.is_approved ? "Approved" : "Pending"}
-                          </span>
+                                : "inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-950/50 dark:text-amber-300";
+                            return (
+                              <span className={badgeClass}>
+                                {label}
+                              </span>
+                            );
+                          })()}
                         </td>
                         <td className="px-4 py-2">
                           {row.frequency_days ?? "—"}
+                        </td>
+                        <td className="px-4 py-2 text-muted-foreground">
+                          {row.assignment_info?.area_category || "—"}
                         </td>
                         <td className="px-4 py-2 text-muted-foreground">
                           {row.assignment_info?.tag_info || "—"}
@@ -223,9 +258,12 @@ const FilterScheduleApprovalsPage: React.FC = () => {
                               size="icon"
                               variant="outline"
                               className="h-8 w-8 text-emerald-600"
-                              disabled={workingId === row.id || row.is_approved}
+                              disabled={workingId === row.id || row.is_approved || row.status === "rejected"}
                               onClick={() => {
-                                if (!row.is_approved) void doApprove(row.id);
+                                if (!row.is_approved && row.status !== "rejected") {
+                                  setSelectedScheduleId(row.id);
+                                  setApproveConfirmOpen(true);
+                                }
                               }}
                               title="Approve"
                             >
@@ -239,9 +277,12 @@ const FilterScheduleApprovalsPage: React.FC = () => {
                               size="icon"
                               variant="outline"
                               className="h-8 w-8 text-rose-600"
-                              disabled={workingId === row.id || row.is_approved}
+                              disabled={workingId === row.id || row.is_approved || row.status === "rejected"}
                               onClick={() => {
-                                if (!row.is_approved) void doReject(row.id);
+                                if (!row.is_approved && row.status !== "rejected") {
+                                  setSelectedScheduleId(row.id);
+                                  setRejectConfirmOpen(true);
+                                }
                               }}
                               title="Reject"
                             >
@@ -258,6 +299,189 @@ const FilterScheduleApprovalsPage: React.FC = () => {
           </div>
         </div>
       </main>
+
+      <AlertDialog open={approveConfirmOpen} onOpenChange={setApproveConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirm Approval</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to approve this maintenance schedule? This will start tracking due dates and overdue alerts.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-green-600 hover:bg-green-700 text-white"
+              onClick={() => {
+                setApproveConfirmOpen(false);
+                setApproveCommentOpen(true);
+              }}
+            >
+              OK
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <Dialog
+        open={approveCommentOpen}
+        onOpenChange={(open) => {
+          setApproveCommentOpen(open);
+          if (!open) {
+            setApprovalComment("");
+            setSelectedScheduleId(null);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Approval Comment (Required)</DialogTitle>
+            <DialogDescription>
+              Please enter a comment for this approval.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label htmlFor="filter-schedule-approval-comment">
+                Comment <span className="text-destructive">*</span>
+              </Label>
+              <Textarea
+                id="filter-schedule-approval-comment"
+                value={approvalComment}
+                onChange={(e) => setApprovalComment(e.target.value)}
+                placeholder="Enter approval comment..."
+                rows={3}
+                className="resize-none"
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setApproveCommentOpen(false);
+                  setApprovalComment("");
+                  setSelectedScheduleId(null);
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                className="bg-green-600 hover:bg-green-700 text-white"
+                disabled={!selectedScheduleId || workingId === selectedScheduleId}
+                onClick={async () => {
+                  const comment = approvalComment.trim();
+                  if (!comment) {
+                    toast({
+                      title: "Comment required",
+                      description: "Please enter an approval comment.",
+                      variant: "destructive",
+                    });
+                    return;
+                  }
+                  if (!selectedScheduleId) return;
+                  await doApprove(selectedScheduleId, comment);
+                  setApproveCommentOpen(false);
+                  setApprovalComment("");
+                  setSelectedScheduleId(null);
+                }}
+              >
+                Approve
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={rejectConfirmOpen} onOpenChange={setRejectConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirm Rejection</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to reject this maintenance schedule? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive hover:bg-destructive/90 text-white"
+              onClick={() => {
+                setRejectConfirmOpen(false);
+                setRejectCommentOpen(true);
+              }}
+            >
+              Reject
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <Dialog
+        open={rejectCommentOpen}
+        onOpenChange={(open) => {
+          setRejectCommentOpen(open);
+          if (!open) {
+            setRejectionComment("");
+            setSelectedScheduleId(null);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Rejection Comment (Required)</DialogTitle>
+            <DialogDescription>
+              Please enter a comment for this rejection.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <Textarea
+              id="filter-schedule-reject-comment"
+              value={rejectionComment}
+              onChange={(e) => setRejectionComment(e.target.value)}
+              placeholder="Enter rejection comment..."
+              rows={3}
+              className="resize-none"
+            />
+            <div className="flex justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setRejectCommentOpen(false);
+                  setRejectionComment("");
+                  setSelectedScheduleId(null);
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                className="bg-red-600 hover:bg-red-700 text-white"
+                disabled={!selectedScheduleId || workingId === selectedScheduleId}
+                onClick={async () => {
+                  const comment = rejectionComment.trim();
+                  if (!comment) {
+                    toast({
+                      title: "Comment required",
+                      description: "Please enter a rejection comment.",
+                      variant: "destructive",
+                    });
+                    return;
+                  }
+                  if (!selectedScheduleId) return;
+                  await doReject(selectedScheduleId, comment);
+                  setRejectCommentOpen(false);
+                  setRejectionComment("");
+                  setSelectedScheduleId(null);
+                }}
+              >
+                Reject
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

@@ -6,8 +6,9 @@ import { FilterIntegrityCertificate } from '@/components/pdf/certificates/Filter
 import { RecoveryTestCertificate } from '@/components/pdf/certificates/RecoveryTestCertificate';
 import { DifferentialPressureCertificate } from '@/components/pdf/certificates/DifferentialPressureCertificate';
 import { NVPCCertificate } from '@/components/pdf/certificates/NVPCCertificate';
-import { ChillerMonitoringCertificate } from '@/components/pdf/certificates/ChillerMonitoringCertificate';
+import { ChillerMonitoringGridCertificate } from '@/components/pdf/certificates/ChillerMonitoringGridCertificate';
 import { BoilerMonitoringCertificate } from '@/components/pdf/certificates/BoilerMonitoringCertificate';
+import { BriquetteBoilerMonitoringCertificate } from '@/components/pdf/certificates/BriquetteBoilerMonitoringCertificate';
 import { ChemicalMonitoringCertificate } from '@/components/pdf/certificates/ChemicalMonitoringCertificate';
 import { FilterMonitoringCertificate } from '@/components/pdf/certificates/FilterMonitoringCertificate';
 import {
@@ -23,6 +24,8 @@ export type MonitoringPDFData = {
   logs: any[];
   approvedBy?: string;
   printedBy?: string;
+  /** yyyy-MM-dd: chiller grid columns; briquette log + water readings for that calendar day. */
+  reportDate?: string;
 };
 
 /**
@@ -79,7 +82,7 @@ export async function generateNVPCPDF(data: NVPCTestData): Promise<Blob> {
  * Generate Chiller Monitoring PDF
  */
 export async function generateChillerMonitoringPDF(data: MonitoringPDFData): Promise<Blob> {
-  const doc = <ChillerMonitoringCertificate data={data} />;
+  const doc = <ChillerMonitoringGridCertificate data={data} />;
   const asPdf = pdf(doc);
   const blob = await asPdf.toBlob();
   return blob;
@@ -90,6 +93,16 @@ export async function generateChillerMonitoringPDF(data: MonitoringPDFData): Pro
  */
 export async function generateBoilerMonitoringPDF(data: MonitoringPDFData): Promise<Blob> {
   const doc = <BoilerMonitoringCertificate data={data} />;
+  const asPdf = pdf(doc);
+  const blob = await asPdf.toBlob();
+  return blob;
+}
+
+/**
+ * Generate Briquette Boiler Monitoring PDF (page 1)
+ */
+export async function generateBriquetteMonitoringPDF(data: MonitoringPDFData): Promise<Blob> {
+  const doc = <BriquetteBoilerMonitoringCertificate data={data as any} />;
   const asPdf = pdf(doc);
   const blob = await asPdf.toBlob();
   return blob;
@@ -123,10 +136,13 @@ export function downloadPDF(blob: Blob, filename: string): void {
   const link = document.createElement('a');
   link.href = url;
   link.download = filename;
+  link.style.display = 'none';
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
-  URL.revokeObjectURL(url);
+  // Revoke after a short delay to avoid browsers cancelling the download
+  // before the object URL is fully consumed.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 /**
@@ -135,8 +151,8 @@ export function downloadPDF(blob: Blob, filename: string): void {
 export function openPDF(blob: Blob): void {
   const url = URL.createObjectURL(blob);
   window.open(url, '_blank');
-  // Clean up after a delay
-  setTimeout(() => URL.revokeObjectURL(url), 100);
+  // Clean up after a delay (revocation too early can break some browsers)
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 /**

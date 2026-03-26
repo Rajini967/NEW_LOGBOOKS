@@ -44,7 +44,7 @@ import { useAuth } from "@/contexts/AuthContext";
 interface FilterCategory {
   id: string;
   name: string;
-  is_active: boolean;
+  is_active?: boolean;
 }
 
 interface FilterMaster {
@@ -72,6 +72,45 @@ interface EquipmentOption {
 }
 
 const MICRON_OPTIONS = ["0.2", "0.45", "1", "3", "5", "10", "20", "100"];
+
+const getPlainErrorMessage = (
+  error: any,
+  fallback = "Please check the form values and try again.",
+): string => {
+  const fromUnknown = (value: unknown): string | null => {
+    if (Array.isArray(value) && value.length > 0) {
+      return fromUnknown(value[0]);
+    }
+    if (value && typeof value === "object") {
+      for (const nested of Object.values(value as Record<string, unknown>)) {
+        const resolved = fromUnknown(nested);
+        if (resolved) return resolved;
+      }
+      return null;
+    }
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+    return null;
+  };
+
+  const payload = error?.response?.data;
+  const payloadMsg = fromUnknown(payload);
+  if (payloadMsg) return payloadMsg;
+
+  if (typeof error?.message === "string" && error.message.trim()) {
+    const raw = error.message.trim();
+    try {
+      const parsed = JSON.parse(raw);
+      const parsedMsg = fromUnknown(parsed);
+      if (parsedMsg) return parsedMsg;
+    } catch {
+      // Not JSON; use message as-is.
+    }
+    return raw;
+  }
+  return fallback;
+};
 
 const FilterRegisterPage: React.FC = () => {
   const { toast } = useToast();
@@ -116,13 +155,24 @@ const FilterRegisterPage: React.FC = () => {
     useState<FilterMaster | null>(null);
   const [pendingRejectFilter, setPendingRejectFilter] =
     useState<FilterMaster | null>(null);
+  const [approveCommentFilter, setApproveCommentFilter] =
+    useState<FilterMaster | null>(null);
+  const [rejectCommentFilter, setRejectCommentFilter] =
+    useState<FilterMaster | null>(null);
   const [pendingDeleteFilter, setPendingDeleteFilter] =
     useState<FilterMaster | null>(null);
+  const [approveCommentOpen, setApproveCommentOpen] = useState(false);
+  const [rejectCommentOpen, setRejectCommentOpen] = useState(false);
+  const [approvalComment, setApprovalComment] = useState("");
+  const [rejectionComment, setRejectionComment] = useState("");
 
   const loadCategories = async () => {
     try {
-      const data = await filterCategoryAPI.list();
-      setCategories(data.filter((c: FilterCategory) => c.is_active));
+      const data = (await filterCategoryAPI.list()) as FilterCategory[];
+      setCategories(
+        (data || [])
+          .filter((c) => c.is_active !== false),
+      );
     } catch (error: any) {
       toast({
         title: "Failed to load categories",
@@ -282,17 +332,14 @@ const FilterRegisterPage: React.FC = () => {
     } catch (error: any) {
       toast({
         title: "Registration failed",
-        description:
-          error?.message ||
-          "Please check the form values and try again.",
-        variant: "destructive",
+        description: getPlainErrorMessage(error),
       });
     } finally {
       setIsRegisterSubmitting(false);
     }
   };
 
-  const handleApprove = async (filter: FilterMaster) => {
+  const handleApprove = async (filter: FilterMaster, _comment: string) => {
     try {
       await filterMasterAPI.approve(filter.id);
       toast({
@@ -308,7 +355,7 @@ const FilterRegisterPage: React.FC = () => {
     }
   };
 
-  const handleReject = async (filter: FilterMaster) => {
+  const handleReject = async (filter: FilterMaster, _comment: string) => {
     try {
       await filterMasterAPI.reject(filter.id);
       toast({
@@ -417,7 +464,7 @@ const FilterRegisterPage: React.FC = () => {
     } catch (error: any) {
       toast({
         title: "Assignment failed",
-        description: error?.message || "Please try again.",
+        description: getPlainErrorMessage(error, "Please try again."),
         variant: "destructive",
       });
     } finally {
@@ -1036,18 +1083,89 @@ const FilterRegisterPage: React.FC = () => {
               Cancel
             </AlertDialogCancel>
             <AlertDialogAction
+              className="bg-green-600 hover:bg-green-700 text-white"
               onClick={async () => {
                 if (!pendingApprovalFilter) return;
-                const target = pendingApprovalFilter;
+                setApproveCommentFilter(pendingApprovalFilter);
                 setPendingApprovalFilter(null);
-                await handleApprove(target);
+                setApproveCommentOpen(true);
               }}
             >
-              Approve
+              OK
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <Dialog
+        open={approveCommentOpen}
+        onOpenChange={(open) => {
+          setApproveCommentOpen(open);
+          if (!open) {
+            setApprovalComment("");
+            setApproveCommentFilter(null);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Approval Comment (Required)</DialogTitle>
+            <DialogDescription>
+              Please enter a comment for this approval.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-foreground">
+                Comment <span className="text-destructive">*</span>
+              </label>
+              <Textarea
+                value={approvalComment}
+                onChange={(e) => setApprovalComment(e.target.value)}
+                placeholder="Enter approval comment..."
+                rows={3}
+                className="resize-none"
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setApproveCommentOpen(false);
+                  setApprovalComment("");
+                  setApproveCommentFilter(null);
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                className="bg-green-600 hover:bg-green-700 text-white"
+                onClick={async () => {
+                  const comment = approvalComment.trim();
+                  if (!comment) {
+                    toast({
+                      title: "Comment required",
+                      description: "Please enter an approval comment.",
+                      variant: "destructive",
+                    });
+                    return;
+                  }
+                  if (!approveCommentFilter) return;
+                  const target = approveCommentFilter;
+                  await handleApprove(target, comment);
+                  setApproveCommentOpen(false);
+                  setApprovalComment("");
+                  setApproveCommentFilter(null);
+                }}
+              >
+                Approve
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <AlertDialog
         open={!!pendingRejectFilter}
@@ -1072,9 +1190,9 @@ const FilterRegisterPage: React.FC = () => {
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               onClick={async () => {
                 if (!pendingRejectFilter) return;
-                const target = pendingRejectFilter;
+                setRejectCommentFilter(pendingRejectFilter);
                 setPendingRejectFilter(null);
-                await handleReject(target);
+                setRejectCommentOpen(true);
               }}
             >
               Reject
@@ -1082,6 +1200,71 @@ const FilterRegisterPage: React.FC = () => {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <Dialog
+        open={rejectCommentOpen}
+        onOpenChange={(open) => {
+          setRejectCommentOpen(open);
+          if (!open) {
+            setRejectionComment("");
+            setRejectCommentFilter(null);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Rejection Comment (Required)</DialogTitle>
+            <DialogDescription>
+              Please enter a comment for this rejection.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <Textarea
+              value={rejectionComment}
+              onChange={(e) => setRejectionComment(e.target.value)}
+              placeholder="Enter rejection comment..."
+              rows={3}
+              className="resize-none"
+            />
+            <div className="flex justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setRejectCommentOpen(false);
+                  setRejectionComment("");
+                  setRejectCommentFilter(null);
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                className="bg-red-600 hover:bg-red-700 text-white"
+                onClick={async () => {
+                  const comment = rejectionComment.trim();
+                  if (!comment) {
+                    toast({
+                      title: "Comment required",
+                      description: "Please enter a rejection comment.",
+                      variant: "destructive",
+                    });
+                    return;
+                  }
+                  if (!rejectCommentFilter) return;
+                  const target = rejectCommentFilter;
+                  await handleReject(target, comment);
+                  setRejectCommentOpen(false);
+                  setRejectionComment("");
+                  setRejectCommentFilter(null);
+                }}
+              >
+                Reject
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <AlertDialog
         open={!!pendingDeleteFilter}

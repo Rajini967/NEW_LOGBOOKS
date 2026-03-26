@@ -4,35 +4,9 @@ from datetime import date
 from django.conf import settings
 from django.core.validators import MinValueValidator
 from django.db import models
+from django.db.models import Q
 
 from equipment.models import Equipment
-
-
-class FilterCategory(models.Model):
-    """Filter category master."""
-
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    name = models.CharField(max_length=255, unique=True)
-    client_id = models.CharField(max_length=100, db_index=True, default="svu-enterprises")
-    description = models.TextField(blank=True, null=True)
-    micron_costs = models.JSONField(
-        blank=True,
-        null=True,
-        default=dict,
-        help_text="Optional mapping of micron size to cost, e.g. {'0.2': 100, '0.45': 80}.",
-    )
-    is_active = models.BooleanField(default=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        db_table = "filter_categories"
-        ordering = ["name"]
-        verbose_name = "Filter Category"
-        verbose_name_plural = "Filter Categories"
-
-    def __str__(self) -> str:  # pragma: no cover - trivial
-        return self.name
 
 
 MICRON_SIZE_CHOICES = [
@@ -45,6 +19,28 @@ MICRON_SIZE_CHOICES = [
     ("20", "20 µ"),
     ("100", "100 µ"),
 ]
+
+
+class FilterCategory(models.Model):
+    """Dedicated filter categories (legacy UI)."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=255, unique=True)
+    client_id = models.CharField(max_length=100, db_index=True, default="svu-enterprises")
+    description = models.TextField(blank=True, null=True)
+    micron_costs = models.JSONField(blank=True, null=True, default=dict)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "filter_categories"
+        ordering = ["name"]
+        verbose_name = "Filter Category"
+        verbose_name_plural = "Filter Categories"
+
+    def __str__(self) -> str:  # pragma: no cover - trivial
+        return self.name
 
 
 class FilterMaster(models.Model):
@@ -71,6 +67,8 @@ class FilterMaster(models.Model):
         FilterCategory,
         on_delete=models.PROTECT,
         related_name="filters",
+        blank=True,
+        null=True,
     )
     make = models.CharField(max_length=255)
     model = models.CharField(max_length=255)
@@ -114,6 +112,13 @@ class FilterMaster(models.Model):
         ordering = ["-created_at"]
         verbose_name = "Filter Master"
         verbose_name_plural = "Filter Masters"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["serial_number"],
+                condition=Q(serial_number__isnull=False) & ~Q(serial_number=""),
+                name="uniq_filter_master_serial_number_non_empty",
+            )
+        ]
 
     def __str__(self) -> str:  # pragma: no cover - trivial
         return f"{self.filter_id} - {self.make} {self.model}"
@@ -178,6 +183,7 @@ class FilterSchedule(models.Model):
         ("active", "Active"),
         ("overdue", "Overdue"),
         ("completed", "Completed"),
+        ("rejected", "Rejected"),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

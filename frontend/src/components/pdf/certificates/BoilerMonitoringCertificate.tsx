@@ -4,73 +4,122 @@ import { PDFHeader } from '../PDFHeader';
 
 const styles = StyleSheet.create({
   page: {
-    padding: 40,
-    fontSize: 10,
+    padding: 18,
+    fontSize: 8,
     fontFamily: 'Helvetica',
   },
+  titleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-end',
+    marginTop: 4,
+    marginBottom: 4,
+  },
   title: {
-    fontSize: 14,
+    fontSize: 10,
     fontWeight: 'bold',
     textAlign: 'center',
-    marginTop: 20,
-    marginBottom: 20,
-    textTransform: 'uppercase',
+    flexGrow: 1,
   },
-  subtitle: {
-    fontSize: 10,
+  brandRight: {
+    width: '18%',
+    textAlign: 'right',
+    fontSize: 8,
+    fontWeight: 'bold',
+  },
+  brandLeft: {
+    width: '18%',
+  },
+  metaTable: {
+    width: '100%',
+    border: '1 solid #000',
+    marginBottom: 4,
+  },
+  metaRow: {
+    flexDirection: 'row',
+    borderBottom: '1 solid #000',
+  },
+  metaRowLast: {
+    borderBottom: 'none',
+  },
+  metaCell: {
+    paddingVertical: 2,
+    paddingHorizontal: 3,
+    borderRight: '1 solid #000',
+    fontSize: 7,
+  },
+  metaCellLast: {
+    borderRight: 'none',
+  },
+  fieldRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 2,
+    marginBottom: 4,
+    fontSize: 8,
+  },
+  metaItem: {
+    width: '33.333%',
+  },
+  metaCenter: {
     textAlign: 'center',
-    marginTop: -10,
-    marginBottom: 10,
+  },
+  metaRight: {
+    textAlign: 'right',
+  },
+  freq: {
+    marginBottom: 4,
+    fontSize: 8,
   },
   table: {
     width: '100%',
-    marginTop: 10,
-    marginBottom: 20,
+    border: '1 solid #000',
   },
   tableRow: {
     flexDirection: 'row',
     borderBottom: '1 solid #000',
-    minHeight: 20,
+    minHeight: 18,
+    alignItems: 'stretch',
   },
   tableHeader: {
-    backgroundColor: '#e0e0e0',
     fontWeight: 'bold',
-    borderBottom: '2 solid #000',
   },
   tableCell: {
-    padding: 6,
-    fontSize: 8,
+    paddingVertical: 3,
+    paddingHorizontal: 3,
+    fontSize: 7.5,
     borderRight: '1 solid #000',
-    textAlign: 'center',
+    textAlign: 'left',
+    justifyContent: 'center',
   },
   tableCellLast: {
     borderRight: 'none',
   },
-  limitRow: {
-    backgroundColor: '#f0f0f0',
-    fontWeight: 'bold',
-  },
-  redText: {
-    color: '#ff0000',
-  },
   footer: {
-    marginTop: 20,
-    fontSize: 10,
+    marginTop: 8,
+    fontSize: 8,
   },
   footerLine: {
     marginBottom: 5,
   },
-  detailsTitle: {
-    fontSize: 12,
-    fontWeight: 'bold',
-    marginTop: 10,
-    marginBottom: 8,
-    textAlign: 'center',
-    textTransform: 'uppercase',
+  descCell: {
+    width: '30%',
   },
-  smallCell: {
-    fontSize: 7,
-    padding: 4,
+  rangeCell: {
+    width: '15%',
+    textAlign: 'center',
+  },
+  timeHeaderCell: {
+    textAlign: 'center',
+    fontWeight: 'bold',
+  },
+  timeCell: {
+    textAlign: 'center',
+  },
+  lowerTable: {
+    width: '100%',
+    border: '1 solid #000',
+    marginTop: 4,
   },
 });
 
@@ -81,11 +130,6 @@ interface BoilerMonitoringData {
     date: string;
     time: string;
     equipmentId: string;
-    feedWaterTemp?: number;
-    oilTemp?: number;
-    steamTemp?: number;
-    steamPressure?: number;
-    steamFlowLPH?: number;
     // Hourly/shift parameters
     foHsdNgDayTankLevel?: number;
     feedWaterTankLevel?: number;
@@ -100,21 +144,6 @@ interface BoilerMonitoringData {
     foHsdNgConsumption?: number;
     mobreyFunctioning?: string;
     manualBlowdownTime?: string;
-    // Stocks / costs
-    dieselStockLiters?: number | null;
-    dieselCostRupees?: number | null;
-    furnaceOilStockLiters?: number | null;
-    furnaceOilCostRupees?: number | null;
-    brigadeStockKg?: number | null;
-    brigadeCostRupees?: number | null;
-    // Daily consumption
-    dailyPowerConsumptionKwh?: number | null;
-    dailyWaterConsumptionLiters?: number | null;
-    dailyChemicalConsumptionKg?: number | null;
-    dailyDieselConsumptionLiters?: number | null;
-    dailyFurnaceOilConsumptionLiters?: number | null;
-    dailyBrigadeConsumptionKg?: number | null;
-    steamConsumptionKgHr?: number | null;
     comment?: string;
     remarks?: string;
     checkedBy?: string;
@@ -125,202 +154,316 @@ interface BoilerMonitoringCertificateProps {
   data: BoilerMonitoringData;
 }
 
+const normalizeTimeSlot = (t: string): string => {
+  const m = String(t ?? '')
+    .trim()
+    .match(/^(\d{1,2}):(\d{2})/);
+  if (!m) return '';
+  const h = Number(m[1]);
+  const mm = Number(m[2]);
+  if (!Number.isFinite(h) || !Number.isFinite(mm)) return '';
+  return `${h}:${String(mm).padStart(2, '0')}`;
+};
+
+const formatTimeColumnLabel = (normalizedKey: string): string => {
+  const m = normalizedKey.match(/^(\d+):(\d{2})$/);
+  if (!m) return normalizedKey;
+  return `${String(Number(m[1])).padStart(2, '0')}:${m[2]}`;
+};
+
 export function BoilerMonitoringCertificate({ data }: BoilerMonitoringCertificateProps) {
-  const limits = {
-    feedWaterTemp: { min: 50, unit: '°C', type: 'NLT' },
-    oilTemp: { min: 50, unit: '°C', type: 'NLT' },
-    steamTemp: { min: 150, unit: '°C', type: 'NLT' },
-    steamPressure: { min: 6, unit: 'bar', type: 'NLT' },
+  const logs = data.logs || [];
+  const equipmentId = logs[0]?.equipmentId || '-';
+  const reportDate = logs.find((l) => (l.date || '').trim())?.date || '';
+
+  const parseTimeToMinutes = (t: string): number => {
+    const m = String(t || '').match(/^(\d{1,2}):(\d{2})/);
+    if (!m) return Number.POSITIVE_INFINITY;
+    const hh = Number(m[1]);
+    const mm = Number(m[2]);
+    if (!Number.isFinite(hh) || !Number.isFinite(mm)) return Number.POSITIVE_INFINITY;
+    return hh * 60 + mm;
   };
 
-  const checkLimit = (field: string, value: number | undefined): boolean => {
-    if (value === undefined) return false;
-    const limit = limits[field as keyof typeof limits];
-    if (!limit) return false;
-    if (limit.type === 'NLT' && limit.min !== undefined) {
-      return value < limit.min;
-    }
-    return false;
+  const timeSlots = Array.from(
+    new Set(
+      logs
+        .map((l) => normalizeTimeSlot(l.time))
+        .filter((k) => k && Number.isFinite(parseTimeToMinutes(k))),
+    ),
+  ).sort((a, b) => parseTimeToMinutes(a) - parseTimeToMinutes(b));
+
+  const maxTimeCols = 8;
+  const timeCols = timeSlots.slice(0, maxTimeCols);
+  const timeColWidth = `${55 / Math.max(timeCols.length || 1, 1)}%`;
+
+  type FieldKey =
+    | 'foHsdNgDayTankLevel'
+    | 'feedWaterTankLevel'
+    | 'foPreHeaterTemp'
+    | 'burnerOilPressure'
+    | 'burnerHeaterTemp'
+    | 'boilerSteamPressure'
+    | 'stackTemperature'
+    | 'steamPressureAfterPrv';
+
+  type ShiftFieldKey =
+    | 'feedWaterHardnessPpm'
+    | 'feedWaterTdsPpm'
+    | 'foHsdNgConsumption'
+    | 'mobreyFunctioning'
+    | 'manualBlowdownTime';
+
+  /** Aligned with operational limits in BoilerLogBookPage (boilerLimits). */
+  const rows: { label: string; range: string; key: FieldKey }[] = [
+    { label: 'FO/HSD/NG Day tank level', range: 'NLT 200 L', key: 'foHsdNgDayTankLevel' },
+    { label: 'Feed water tank level', range: 'NLT 3 KL', key: 'feedWaterTankLevel' },
+    { label: 'FO Pre heater temp', range: '60 to 70°C', key: 'foPreHeaterTemp' },
+    { label: 'Burner Oil pressure', range: '18 to 25 kg/cm²', key: 'burnerOilPressure' },
+    { label: 'Burner heater temp', range: '110 to 130°C', key: 'burnerHeaterTemp' },
+    { label: 'Boiler Steam Pressure', range: 'NLT 5 kg/cm²', key: 'boilerSteamPressure' },
+    { label: 'Stack temp', range: '180 to 250°C', key: 'stackTemperature' },
+    { label: 'Steam pressure after PRV', range: 'NLT 5 kg/cm²', key: 'steamPressureAfterPrv' },
+  ];
+
+  const shiftRows: { label: string; range: string; key: ShiftFieldKey }[] = [
+    { label: 'Feed water Hardness (Starting of the Shift)', range: 'NMT 5 PPM', key: 'feedWaterHardnessPpm' },
+    { label: 'Feed water TDS (Starting of the Shift)', range: 'NMT 700 PPM', key: 'feedWaterTdsPpm' },
+    { label: 'FO/HSD/NG Consumption (Ending of the shift)', range: 'Actual', key: 'foHsdNgConsumption' },
+    { label: 'Mobrey functioning', range: 'Yes / No', key: 'mobreyFunctioning' },
+    { label: 'Manual Blow down (30 sec for every 4 hrs)', range: 'Actual time', key: 'manualBlowdownTime' },
+  ];
+
+  const valueAt = (timeKey: string, key: keyof BoilerMonitoringData['logs'][number]): string => {
+    const hit = logs.find((l) => normalizeTimeSlot(l.time) === timeKey);
+    const v = hit ? (hit as any)[key] : null;
+    return v === null || v === undefined || v === '' ? '' : String(v);
   };
 
-  const footerRemarks =
-    data.logs.find((log) => (log.remarks || '').toString().trim().length > 0)?.remarks || '';
-  const doneBy = data.logs[0]?.checkedBy ?? '';
-  const equipmentId = data.logs[0]?.equipmentId || '-';
+  const firstCheckedBy = logs.find((l) => (l.checkedBy || '').trim())?.checkedBy || '';
 
   return (
     <Document>
       <Page size="A4" style={styles.page}>
         <PDFHeader />
-        
-        <Text style={styles.title}>RAW DATA FOR BOILER MONITORING</Text>
-        <Text style={styles.subtitle}>Equipment ID: {equipmentId}</Text>
 
-        <View style={styles.table}>
-          {/* Header Row */}
-          <View style={[styles.tableRow, styles.tableHeader]}>
-            <Text style={[styles.tableCell, { width: '10%' }]}>Date</Text>
-            <Text style={[styles.tableCell, { width: '10%' }]}>Time</Text>
-            <Text style={[styles.tableCell, { width: '12%' }]}>Feed water temp</Text>
-            <Text style={[styles.tableCell, { width: '12%' }]}>Oil temp</Text>
-            <Text style={[styles.tableCell, { width: '12%' }]}>Steam temp</Text>
-            <Text style={[styles.tableCell, { width: '12%' }]}>Steam Pressure</Text>
-            <Text style={[styles.tableCell, { width: '12%' }]}>Steam Flow LPH</Text>
-            <Text style={[styles.tableCell, { width: '10%' }]}>Remarks</Text>
-            <Text style={[styles.tableCell, { width: '10%' }, styles.tableCellLast]}>Done By</Text>
+        <View style={styles.titleRow}>
+          <Text style={styles.brandLeft}> </Text>
+          <Text style={styles.title}>Equipment operation log: Boiler</Text>
+          <Text style={styles.brandRight}>Dr.Reddy&apos;s</Text>
+        </View>
+
+        <View style={styles.metaTable} wrap={false}>
+          <View style={styles.metaRow} wrap={false}>
+            <Text style={[styles.metaCell, { width: '55%' }]}>Document No.: FORM-FT08-EN-0197</Text>
+            <Text style={[styles.metaCell, styles.metaCellLast, { width: '45%' }]}>Version: 2.0, CURRENT</Text>
+          </View>
+          <View style={[styles.metaRow, styles.metaRowLast]} wrap={false}>
+            <Text style={[styles.metaCell, { width: '55%' }]}>Reference SOP No.: SOP-FT01-EN-0083</Text>
+            <Text style={[styles.metaCell, styles.metaCellLast, { width: '45%' }]}>
+              Legacy Document No.: FORM-FT08-EN-0081
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.fieldRow}>
+          <Text style={styles.metaItem}>Date: {reportDate || ' '}</Text>
+          <Text style={[styles.metaItem, styles.metaCenter]}>Shift: </Text>
+          <Text style={[styles.metaItem, styles.metaRight]}>Equipment Number: {equipmentId}</Text>
+        </View>
+        <Text style={styles.freq}>Recording Frequency: once in every 01 hour</Text>
+
+        <View style={styles.table} wrap={false}>
+          <View style={[styles.tableRow, styles.tableHeader]} wrap={false}>
+            <Text style={[styles.tableCell, styles.descCell]}>Description</Text>
+            <Text style={[styles.tableCell, styles.rangeCell]}>Range</Text>
+            <Text
+              style={[
+                styles.tableCell,
+                styles.tableCellLast,
+                { width: '55%', textAlign: 'center', fontWeight: 'bold' },
+              ]}
+            >
+              Time
+            </Text>
           </View>
 
-          {/* Limits Row */}
-          <View style={[styles.tableRow, styles.limitRow]}>
-            <Text style={[styles.tableCell, { width: '10%' }]}>Limits</Text>
-            <Text style={[styles.tableCell, { width: '10%' }]}></Text>
-            <Text style={[styles.tableCell, { width: '12%' }]}>NLT 50 °C</Text>
-            <Text style={[styles.tableCell, { width: '12%' }]}>NLT 50 °C</Text>
-            <Text style={[styles.tableCell, { width: '12%' }]}>NLT 150 °C</Text>
-            <Text style={[styles.tableCell, { width: '12%' }]}>NLT 6 bar</Text>
-            <Text style={[styles.tableCell, { width: '12%' }]}>LPH</Text>
-            <Text style={[styles.tableCell, { width: '10%' }]}></Text>
-            <Text style={[styles.tableCell, { width: '10%' }, styles.tableCellLast]}></Text>
+          <View style={[styles.tableRow, styles.tableHeader]} wrap={false}>
+            <Text style={[styles.tableCell, styles.descCell]} />
+            <Text style={[styles.tableCell, styles.rangeCell]} />
+            {timeCols.map((t, i) => (
+              <Text
+                key={`t-h-${t}`}
+                style={[
+                  styles.tableCell,
+                  { width: timeColWidth },
+                  styles.timeHeaderCell,
+                  i === timeCols.length - 1 && styles.tableCellLast,
+                ]}
+              >
+                {formatTimeColumnLabel(t)}
+              </Text>
+            ))}
+            {timeCols.length === 0 ? (
+              <Text style={[styles.tableCell, { width: '55%' }, styles.tableCellLast]} />
+            ) : null}
           </View>
 
-          {/* Data Rows */}
-          {data.logs.map((log, index) => (
-            <View key={index} style={styles.tableRow}>
-              <Text style={[styles.tableCell, { width: '10%' }]}>{log.date === 'Automatic' || !log.date ? 'Automatic' : log.date}</Text>
-              <Text style={[styles.tableCell, { width: '10%' }]}>{log.time === 'Automatic' || !log.time ? 'Automatic' : log.time}</Text>
-              <Text style={[
-                styles.tableCell, 
-                { width: '12%' },
-                checkLimit('feedWaterTemp', log.feedWaterTemp) && styles.redText
-              ]}>
-                {log.feedWaterTemp !== undefined ? log.feedWaterTemp : ''}
-              </Text>
-              <Text style={[
-                styles.tableCell, 
-                { width: '12%' },
-                checkLimit('oilTemp', log.oilTemp) && styles.redText
-              ]}>
-                {log.oilTemp !== undefined ? log.oilTemp : ''}
-              </Text>
-              <Text style={[
-                styles.tableCell, 
-                { width: '12%' },
-                checkLimit('steamTemp', log.steamTemp) && styles.redText
-              ]}>
-                {log.steamTemp !== undefined ? log.steamTemp : ''}
-              </Text>
-              <Text style={[
-                styles.tableCell, 
-                { width: '12%' },
-                checkLimit('steamPressure', log.steamPressure) && styles.redText
-              ]}>
-                {log.steamPressure !== undefined ? log.steamPressure : ''}
-              </Text>
-              <Text style={[styles.tableCell, { width: '12%' }]}>
-                {log.steamFlowLPH !== undefined ? log.steamFlowLPH : ''}
-              </Text>
-              <Text style={[styles.tableCell, { width: '10%' }]}>
-                {log.remarks || '-'}
-              </Text>
-              <Text style={[styles.tableCell, { width: '10%' }, styles.tableCellLast]}>
-                {log.checkedBy || ''}
-              </Text>
+          {rows.map((r) => (
+            <View key={r.key} style={styles.tableRow} wrap={false}>
+              <Text style={[styles.tableCell, styles.descCell]}>{r.label}</Text>
+              <Text style={[styles.tableCell, styles.rangeCell]}>{r.range}</Text>
+              {timeCols.map((t, i) => (
+                <Text
+                  key={`${r.key}-${t}`}
+                  style={[
+                    styles.tableCell,
+                    { width: timeColWidth },
+                    styles.timeCell,
+                    i === timeCols.length - 1 && styles.tableCellLast,
+                  ]}
+                >
+                  {valueAt(t, r.key)}
+                </Text>
+              ))}
+              {timeCols.length === 0 ? (
+                <Text style={[styles.tableCell, { width: '55%' }, styles.tableCellLast]} />
+              ) : null}
             </View>
           ))}
 
-          {/* Empty rows for additional entries */}
-          {Array.from({ length: Math.max(0, 10 - data.logs.length) }).map((_, index) => (
-            <View key={`empty-${index}`} style={styles.tableRow}>
-              <Text style={[styles.tableCell, { width: '10%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '10%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '12%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '12%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '12%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '12%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '12%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '10%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '10%' }, styles.tableCellLast]}></Text>
+          <View style={[styles.tableRow, { borderBottom: 'none' }]} wrap={false}>
+            <Text style={[styles.tableCell, styles.descCell]}>Recorded by</Text>
+            <Text style={[styles.tableCell, styles.rangeCell]} />
+            {timeCols.length === 0 ? (
+              <Text style={[styles.tableCell, styles.tableCellLast, { width: '55%' }]}>
+                {firstCheckedBy || ' '}
+              </Text>
+            ) : (
+              timeCols.map((t, i) => (
+                <Text
+                  key={`rec-by-${t}`}
+                  style={[
+                    styles.tableCell,
+                    { width: timeColWidth },
+                    styles.timeCell,
+                    i === timeCols.length - 1 && styles.tableCellLast,
+                  ]}
+                >
+                  {valueAt(t, 'checkedBy')}
+                </Text>
+              ))
+            )}
+          </View>
+        </View>
+
+        <View style={styles.lowerTable} wrap={false}>
+          <View style={[styles.tableRow, styles.tableHeader]} wrap={false}>
+            <Text style={[styles.tableCell, styles.descCell]}>Description</Text>
+            <Text style={[styles.tableCell, styles.rangeCell]}>Range</Text>
+            <Text
+              style={[
+                styles.tableCell,
+                styles.tableCellLast,
+                { width: '55%', textAlign: 'center', fontWeight: 'bold' },
+              ]}
+            >
+              Value / Time
+            </Text>
+          </View>
+          <View style={[styles.tableRow, styles.tableHeader]} wrap={false}>
+            <Text style={[styles.tableCell, styles.descCell]} />
+            <Text style={[styles.tableCell, styles.rangeCell]} />
+            {timeCols.map((t, i) => (
+              <Text
+                key={`shift-h-${t}`}
+                style={[
+                  styles.tableCell,
+                  { width: timeColWidth },
+                  styles.timeHeaderCell,
+                  i === timeCols.length - 1 && styles.tableCellLast,
+                ]}
+              >
+                {formatTimeColumnLabel(t)}
+              </Text>
+            ))}
+            {timeCols.length === 0 ? (
+              <Text style={[styles.tableCell, { width: '55%' }, styles.tableCellLast]} />
+            ) : null}
+          </View>
+          {shiftRows.map((r) => (
+            <View key={r.key} style={styles.tableRow} wrap={false}>
+              <Text style={[styles.tableCell, styles.descCell]}>{r.label}</Text>
+              <Text style={[styles.tableCell, styles.rangeCell]}>{r.range}</Text>
+              {timeCols.map((t, i) => (
+                <Text
+                  key={`${r.key}-${t}`}
+                  style={[
+                    styles.tableCell,
+                    { width: timeColWidth },
+                    styles.timeCell,
+                    i === timeCols.length - 1 && styles.tableCellLast,
+                  ]}
+                >
+                  {valueAt(t, r.key)}
+                </Text>
+              ))}
+              {timeCols.length === 0 ? (
+                <Text style={[styles.tableCell, { width: '55%' }, styles.tableCellLast]} />
+              ) : null}
             </View>
           ))}
+          <View style={styles.tableRow} wrap={false}>
+            <Text style={[styles.tableCell, styles.descCell]}>Recorded by</Text>
+            <Text style={[styles.tableCell, styles.rangeCell]} />
+            {timeCols.length === 0 ? (
+              <Text style={[styles.tableCell, styles.tableCellLast, { width: '55%' }]}>
+                {firstCheckedBy || ' '}
+              </Text>
+            ) : (
+              timeCols.map((t, i) => (
+                <Text
+                  key={`shift-rec-${t}`}
+                  style={[
+                    styles.tableCell,
+                    { width: timeColWidth },
+                    styles.timeCell,
+                    i === timeCols.length - 1 && styles.tableCellLast,
+                  ]}
+                >
+                  {valueAt(t, 'checkedBy')}
+                </Text>
+              ))
+            )}
+          </View>
+          <View style={[styles.tableRow, { borderBottom: 'none' }]} wrap={false}>
+            <Text style={[styles.tableCell, styles.descCell]}>Remarks</Text>
+            <Text style={[styles.tableCell, styles.rangeCell]} />
+            {timeCols.length === 0 ? (
+              <Text style={[styles.tableCell, styles.tableCellLast, { width: '55%' }]}>
+                {logs.find((l) => (l.remarks || '').toString().trim())?.remarks || ' '}
+              </Text>
+            ) : (
+              timeCols.map((t, i) => (
+                <Text
+                  key={`shift-rm-${t}`}
+                  style={[
+                    styles.tableCell,
+                    { width: timeColWidth },
+                    styles.timeCell,
+                    i === timeCols.length - 1 && styles.tableCellLast,
+                  ]}
+                >
+                  {valueAt(t, 'remarks')}
+                </Text>
+              ))
+            )}
+          </View>
         </View>
 
         <View style={styles.footer}>
-          <Text style={styles.footerLine}>Remarks: {footerRemarks ? String(footerRemarks) : '-'}</Text>
-          <Text style={styles.footerLine}>Done By: {doneBy || '-'}</Text>
           <Text style={styles.footerLine}>Approved By: {data.approvedBy || '-'}</Text>
           <Text style={styles.footerLine}>Printed By: {data.printedBy || '-'}</Text>
-        </View>
-      </Page>
-
-      {/* DETAILS – Hourly / Shift parameters */}
-      <Page size="A4" style={styles.page}>
-        <PDFHeader />
-        <Text style={styles.detailsTitle}>RAW DATA FOR BOILER MONITORING (DETAILS – HOURLY/SHIFT)</Text>
-        <Text style={styles.subtitle}>Equipment ID: {equipmentId}</Text>
-
-        <View style={styles.table}>
-          <View style={[styles.tableRow, styles.tableHeader]}>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '8%' }]}>Date</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '8%' }]}>Time</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>Day tank (L)</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>FW tank (KL)</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>Preheater °C</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>Burner P</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>Heater °C</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>Stack °C</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>Hardness</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }, styles.tableCellLast]}>TDS</Text>
-          </View>
-
-          {data.logs.map((log, index) => (
-            <View key={index} style={styles.tableRow}>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '8%' }]}>{log.date || ''}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '8%' }]}>{log.time || ''}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>{log.foHsdNgDayTankLevel ?? ''}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>{log.feedWaterTankLevel ?? ''}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>{log.foPreHeaterTemp ?? ''}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>{log.burnerOilPressure ?? ''}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>{log.burnerHeaterTemp ?? ''}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>{log.stackTemperature ?? ''}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>{log.feedWaterHardnessPpm ?? ''}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }, styles.tableCellLast]}>{log.feedWaterTdsPpm ?? ''}</Text>
-            </View>
-          ))}
-        </View>
-      </Page>
-
-      {/* DETAILS – Daily consumption / stock */}
-      <Page size="A4" style={styles.page}>
-        <PDFHeader />
-        <Text style={styles.detailsTitle}>RAW DATA FOR BOILER MONITORING (DETAILS – DAILY)</Text>
-        <Text style={styles.subtitle}>Equipment ID: {equipmentId}</Text>
-
-        <View style={styles.table}>
-          <View style={[styles.tableRow, styles.tableHeader]}>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '8%' }]}>Date</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '8%' }]}>Time</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>Power kWh</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>Water L</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>Chem kg</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>Diesel L</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>FO L</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>Brigade kg</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }, styles.tableCellLast]}>Steam kg/hr</Text>
-          </View>
-
-          {data.logs.map((log, index) => (
-            <View key={index} style={styles.tableRow}>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '8%' }]}>{log.date || ''}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '8%' }]}>{log.time || ''}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>{log.dailyPowerConsumptionKwh ?? ''}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>{log.dailyWaterConsumptionLiters ?? ''}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>{log.dailyChemicalConsumptionKg ?? ''}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>{log.dailyDieselConsumptionLiters ?? ''}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>{log.dailyFurnaceOilConsumptionLiters ?? ''}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>{log.dailyBrigadeConsumptionKg ?? ''}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }, styles.tableCellLast]}>{log.steamConsumptionKgHr ?? ''}</Text>
-            </View>
-          ))}
         </View>
       </Page>
     </Document>

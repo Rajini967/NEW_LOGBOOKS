@@ -2,6 +2,7 @@ from typing import Any
 from datetime import timedelta
 
 from django.db import transaction
+from django.db.models import Q
 from django.db.models import IntegerField, Max
 from django.db.models.functions import Cast, Substr
 from rest_framework import serializers
@@ -33,10 +34,6 @@ class FilterCategorySerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "created_at", "updated_at"]
 
     def validate_micron_costs(self, value):
-        """
-        Expect a mapping of micron_size -> numeric cost.
-        Only known micron sizes are allowed.
-        """
         if value in (None, ""):
             return {}
         if not isinstance(value, dict):
@@ -105,6 +102,19 @@ class FilterMasterSerializer(serializers.ModelSerializer):
                 f"Invalid micron size. Allowed values are: {', '.join(sorted(allowed_values))}."
             )
         return value
+
+    def validate_serial_number(self, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value).strip()
+        if not normalized:
+            return None
+        qs = FilterMaster.objects.filter(serial_number__iexact=normalized)
+        if self.instance is not None:
+            qs = qs.exclude(id=self.instance.id)
+        if qs.exists():
+            raise serializers.ValidationError("Serial Number already exists. Please use a unique value.")
+        return normalized
 
     def _generate_filter_id(self) -> str:
         """
@@ -197,6 +207,35 @@ class FilterAssignmentSerializer(serializers.ModelSerializer):
             )
         return value
 
+    def validate(self, attrs):
+        equipment_obj = attrs.get("equipment") or getattr(self.instance, "equipment", None)
+        area_category = attrs.get("area_category", getattr(self.instance, "area_category", None))
+        if not equipment_obj:
+            return attrs
+
+        normalized_area = str(area_category or "").strip()
+        qs = FilterAssignment.objects.filter(
+            equipment=equipment_obj,
+            is_active=True,
+        )
+        if normalized_area:
+            qs = qs.filter(area_category__iexact=normalized_area)
+        else:
+            qs = qs.filter(Q(area_category__isnull=True) | Q(area_category__exact=""))
+
+        if self.instance is not None:
+            qs = qs.exclude(id=self.instance.id)
+
+        if qs.exists():
+            raise serializers.ValidationError(
+                {
+                    "area_category": (
+                        "This equipment is already assigned for the same area category."
+                    )
+                }
+            )
+        return attrs
+
     def create(self, validated_data):
         request = self.context.get("request")
         user = getattr(request, "user", None)
@@ -266,6 +305,7 @@ class FilterScheduleSerializer(serializers.ModelSerializer):
             "equipment_id": str(equipment.id),
             "equipment_number": equipment.equipment_number,
             "equipment_name": equipment.name,
+            "area_category": assignment.area_category,
             "tag_info": assignment.tag_info,
         }
 

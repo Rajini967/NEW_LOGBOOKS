@@ -1,7 +1,7 @@
 import React from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { Header } from "@/components/layout/Header";
-import { Filter, FilePlus2, ArrowLeft, ClipboardCheck } from "lucide-react";
+import { Tags, FilePlus2, ArrowLeft, ClipboardCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -20,7 +20,7 @@ const FilterLogBookSettingsPage: React.FC = () => {
     <div className="min-h-screen">
       <Header
         title="Filter Log Book Settings"
-        subtitle="Select an option to configure filter categories and registration"
+        subtitle="Select an option to configure filter registration and schedules"
       />
 
       <div className="px-6 pt-2">
@@ -56,7 +56,7 @@ const FilterLogBookSettingsPage: React.FC = () => {
                   "text-white"
                 )}
               >
-                <Filter className="w-8 h-8" />
+                <Tags className="w-8 h-8" />
               </div>
 
               <div className="flex-1 w-full">
@@ -64,8 +64,7 @@ const FilterLogBookSettingsPage: React.FC = () => {
                   Filter Categories
                 </h3>
                 <p className="text-sm text-muted-foreground">
-                  Create and manage filter categories such as HVAC, Water System, Compressed Air,
-                  Nitrogen Air and Utilities.
+                  Managed from Equipment Master categories and used in Filter Register.
                 </p>
               </div>
             </div>

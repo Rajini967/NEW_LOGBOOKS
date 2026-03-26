@@ -292,4 +292,55 @@ class BriquetteLogViewSet(viewsets.ModelViewSet):
         if remarks:
             log.remarks = remarks
         log.save()
+
+        if action_type == "approve" and log.status == "approved":
+            from reports.utils import create_report_entry
+            from reports.models import Report
+            title = f"Briquette Boiler Monitoring - {log.equipment_id or 'N/A'}"
+            # Idempotent: avoid duplicates if approve called twice.
+            exists = Report.objects.filter(source_id=log.id, source_table="briquette_logs").exists()
+            if not exists:
+                create_report_entry(
+                    report_type="utility",
+                    source_id=str(log.id),
+                    source_table="briquette_logs",
+                    title=title,
+                    site=log.equipment_id or "N/A",
+                    created_by=log.operator_name or "Unknown",
+                    created_at=log.created_at,
+                    approved_by=request.user,
+                    remarks=remarks,
+                )
         return Response(self.get_serializer(log).data)
+
+    @action(detail=False, methods=["post"], url_path="backfill-reports", permission_classes=[IsAuthenticated, CanApproveReports])
+    def backfill_reports(self, request):
+        """
+        Create missing rows in centralized reports table for already-approved briquette logs.
+        Safe to run multiple times.
+        """
+        from reports.models import Report
+        from reports.utils import create_report_entry
+
+        created = 0
+        skipped = 0
+        qs = BriquetteLog.objects.filter(status="approved")
+        for log in qs.iterator():
+            if Report.objects.filter(source_id=log.id, source_table="briquette_logs").exists():
+                skipped += 1
+                continue
+            title = f"Briquette Boiler Monitoring - {log.equipment_id or 'N/A'}"
+            r = create_report_entry(
+                report_type="utility",
+                source_id=str(log.id),
+                source_table="briquette_logs",
+                title=title,
+                site=log.equipment_id or "N/A",
+                created_by=log.operator_name or "Unknown",
+                created_at=log.created_at,
+                approved_by=log.approved_by,
+                remarks=log.remarks,
+            )
+            if r is not None:
+                created += 1
+        return Response({"created": created, "skipped": skipped})

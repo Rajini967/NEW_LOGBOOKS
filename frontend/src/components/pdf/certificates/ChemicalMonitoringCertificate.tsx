@@ -68,6 +68,10 @@ const styles = StyleSheet.create({
     fontSize: 7,
     padding: 4,
   },
+  emailCell: {
+    fontSize: 6,
+    padding: 3,
+  },
 });
 
 interface ChemicalMonitoringData {
@@ -99,10 +103,13 @@ interface ChemicalMonitoringCertificateProps {
 }
 
 export function ChemicalMonitoringCertificate({ data }: ChemicalMonitoringCertificateProps) {
-  const footerRemarks =
-    data.logs.find((log) => (log.remarks || '').toString().trim().length > 0)?.remarks || '';
-  const doneBy = data.logs[0]?.checkedBy ?? '';
   const equipmentId = (data.logs[0] as any)?.equipmentId || data.logs[0]?.equipmentName || '-';
+  const approvedByForRow = (log: ChemicalMonitoringData['logs'][number]): string =>
+    (log as any)?.approvedBy ||
+    (log as any)?.approved_by_name ||
+    (log as any)?.raw?.approved_by_name ||
+    data.approvedBy ||
+    '-';
   return (
     <Document>
       <Page size="A4" style={styles.page}>
@@ -117,13 +124,14 @@ export function ChemicalMonitoringCertificate({ data }: ChemicalMonitoringCertif
             <Text style={[styles.tableCell, { width: '10%' }]}>Date</Text>
             <Text style={[styles.tableCell, { width: '10%' }]}>Time</Text>
             <Text style={[styles.tableCell, { width: '12%' }]}>EqP Name</Text>
-            <Text style={[styles.tableCell, { width: '12%' }]}>Chemical name</Text>
-            <Text style={[styles.tableCell, { width: '10%' }]}>Chemical %</Text>
-            <Text style={[styles.tableCell, { width: '12%' }]}>Solution concentration %</Text>
-            <Text style={[styles.tableCell, { width: '10%' }]}>Water Qty</Text>
-            <Text style={[styles.tableCell, { width: '10%' }]}>Chemical Qty</Text>
-            <Text style={[styles.tableCell, { width: '7%' }]}>Remarks</Text>
-            <Text style={[styles.tableCell, { width: '7%' }, styles.tableCellLast]}>Done By</Text>
+            <Text style={[styles.tableCell, { width: '10%' }]}>Chemical name</Text>
+            <Text style={[styles.tableCell, { width: '8%' }]}>Chemical %</Text>
+            <Text style={[styles.tableCell, { width: '9%' }]}>Solution concentration %</Text>
+            <Text style={[styles.tableCell, { width: '7%' }]}>Water Qty</Text>
+            <Text style={[styles.tableCell, { width: '7%' }]}>Chemical Qty</Text>
+            <Text style={[styles.tableCell, { width: '5%' }]}>Remarks</Text>
+            <Text style={[styles.tableCell, { width: '11%' }]}>Done By</Text>
+            <Text style={[styles.tableCell, { width: '11%' }, styles.tableCellLast]}>Approved By</Text>
           </View>
 
           {/* Data Rows */}
@@ -134,26 +142,29 @@ export function ChemicalMonitoringCertificate({ data }: ChemicalMonitoringCertif
               <Text style={[styles.tableCell, styles.tableCellLeft, { width: '12%' }]}>
                 {log.equipmentName || ''}
               </Text>
-              <Text style={[styles.tableCell, { width: '12%' }]}>
+              <Text style={[styles.tableCell, { width: '10%' }]}>
                 {log.chemicalName || ''}
               </Text>
-              <Text style={[styles.tableCell, { width: '10%' }]}>
+              <Text style={[styles.tableCell, { width: '8%' }]}>
                 {log.chemicalPercent !== undefined ? `${log.chemicalPercent}% - Automatic` : ''}
               </Text>
-              <Text style={[styles.tableCell, { width: '12%' }]}>
+              <Text style={[styles.tableCell, { width: '9%' }]}>
                 {log.solutionConcentration !== undefined ? `${log.solutionConcentration} %` : ''}
               </Text>
-              <Text style={[styles.tableCell, { width: '10%' }]}>
+              <Text style={[styles.tableCell, { width: '7%' }]}>
                 {log.waterQty !== undefined ? `${log.waterQty} L` : ''}
               </Text>
-              <Text style={[styles.tableCell, { width: '10%' }]}>
+              <Text style={[styles.tableCell, { width: '7%' }]}>
                 {log.chemicalQty !== undefined ? `${log.chemicalQty} G` : ''}
               </Text>
-              <Text style={[styles.tableCell, { width: '7%' }]}>
+              <Text style={[styles.tableCell, { width: '5%' }]}>
                 {log.remarks || '-'}
               </Text>
-              <Text style={[styles.tableCell, { width: '7%' }, styles.tableCellLast]}>
+              <Text style={[styles.tableCell, styles.emailCell, { width: '11%' }]}>
                 {log.checkedBy || ''}
+              </Text>
+              <Text style={[styles.tableCell, styles.emailCell, { width: '11%' }, styles.tableCellLast]}>
+                {approvedByForRow(log)}
               </Text>
             </View>
           ))}
@@ -164,21 +175,19 @@ export function ChemicalMonitoringCertificate({ data }: ChemicalMonitoringCertif
               <Text style={[styles.tableCell, { width: '10%' }]}></Text>
               <Text style={[styles.tableCell, { width: '10%' }]}></Text>
               <Text style={[styles.tableCell, { width: '12%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '12%' }]}></Text>
               <Text style={[styles.tableCell, { width: '10%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '12%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '10%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '10%' }]}></Text>
+              <Text style={[styles.tableCell, { width: '8%' }]}></Text>
+              <Text style={[styles.tableCell, { width: '9%' }]}></Text>
               <Text style={[styles.tableCell, { width: '7%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '7%' }, styles.tableCellLast]}></Text>
+              <Text style={[styles.tableCell, { width: '7%' }]}></Text>
+              <Text style={[styles.tableCell, { width: '5%' }]}></Text>
+              <Text style={[styles.tableCell, { width: '11%' }]}></Text>
+              <Text style={[styles.tableCell, { width: '11%' }, styles.tableCellLast]}></Text>
             </View>
           ))}
         </View>
 
         <View style={styles.footer}>
-          <Text style={styles.footerLine}>Remarks: {footerRemarks ? String(footerRemarks) : '-'}</Text>
-          <Text style={styles.footerLine}>Done By: {doneBy || '-'}</Text>
-          <Text style={styles.footerLine}>Approved By: {data.approvedBy || '-'}</Text>
           <Text style={styles.footerLine}>Printed By: {data.printedBy || '-'}</Text>
         </View>
       </Page>

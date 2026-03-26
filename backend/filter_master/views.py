@@ -1,7 +1,6 @@
 import calendar
 from datetime import date, datetime, timedelta
 
-from django.db.models.deletion import ProtectedError
 from django.db.models import Count
 from django.utils import timezone
 from rest_framework import status, viewsets
@@ -54,26 +53,6 @@ class FilterCategoryViewSet(viewsets.ModelViewSet):
             field_name="deleted",
         )
         instance.delete()
-
-    def destroy(self, request, *args, **kwargs):
-        """
-        Categories cannot be deleted if they are referenced by any registered filter
-        (FilterMaster.category uses PROTECT). Return a user-friendly error instead
-        of a 500 traceback.
-        """
-        instance: FilterCategory = self.get_object()
-        try:
-            return super().destroy(request, *args, **kwargs)
-        except ProtectedError:
-            return Response(
-                {
-                    "detail": (
-                        "This category cannot be deleted because it is already used by one or more filters. "
-                        "Deactivate it instead."
-                    )
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
 
 
 class FilterMasterViewSet(viewsets.ModelViewSet):
@@ -507,6 +486,18 @@ class FilterScheduleViewSet(viewsets.ModelViewSet):
             field_name="status",
             new_value="rejected",
         )
-        instance.delete()
-        return Response(status=status.HTTP_204_NO_CONTENT)
+        instance.status = "rejected"
+        instance.is_approved = False
+        instance.approved_by = request.user
+        instance.approved_at = timezone.now()
+        instance.save(
+            update_fields=[
+                "status",
+                "is_approved",
+                "approved_by",
+                "approved_at",
+                "updated_at",
+            ]
+        )
+        return Response(self.get_serializer(instance).data, status=status.HTTP_200_OK)
 
