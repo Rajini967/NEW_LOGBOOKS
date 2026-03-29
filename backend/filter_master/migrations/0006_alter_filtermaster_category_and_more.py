@@ -4,6 +4,13 @@ from django.db import migrations, models
 import django.db.models.deletion
 
 
+def _clear_category_before_equipment_fk(apps, schema_editor):
+    """category_id values point at filter_categories; repointing the FK to
+    equipment_categories requires matching UUIDs there. Clear so AlterField succeeds."""
+    FilterMaster = apps.get_model("filter_master", "FilterMaster")
+    FilterMaster.objects.filter(category_id__isnull=False).update(category_id=None)
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -12,6 +19,12 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        # category_id may still be NOT NULL from 0001; allow NULL before we clear and repoint FK.
+        migrations.RunSQL(
+            "ALTER TABLE filter_master ALTER COLUMN category_id DROP NOT NULL",
+            reverse_sql=migrations.RunSQL.noop,
+        ),
+        migrations.RunPython(_clear_category_before_equipment_fk, migrations.RunPython.noop),
         migrations.AlterField(
             model_name='filtermaster',
             name='category',

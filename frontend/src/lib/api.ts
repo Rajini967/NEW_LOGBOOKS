@@ -616,6 +616,29 @@ export const filterScheduleAPI = {
     return Array.isArray(response.data) ? response.data : [];
   },
 
+  /** All pages (default API page size is 20). Use when building lists keyed by schedule approval. */
+  listAll: async (params?: {
+    overdue?: boolean;
+    equipment?: string;
+    approval?: "pending" | "approved";
+  }) => {
+    const queryParams: Record<string, string> = {};
+    if (params?.overdue) queryParams.overdue = "true";
+    if (params?.equipment) queryParams.equipment = params.equipment;
+    if (params?.approval) queryParams.approval = params.approval;
+    const all: any[] = [];
+    for (let page = 1; page <= 100; page++) {
+      const response = await api.get("/filter-schedules/", {
+        params: { ...queryParams, page },
+      });
+      const data = response.data as { results?: any[]; next?: string | null };
+      const batch = Array.isArray(data.results) ? data.results : [];
+      all.push(...batch);
+      if (!data.next || batch.length === 0) break;
+    }
+    return all;
+  },
+
   create: async (data: {
     assignment: string;
     schedule_type: "replacement" | "cleaning" | "integrity";

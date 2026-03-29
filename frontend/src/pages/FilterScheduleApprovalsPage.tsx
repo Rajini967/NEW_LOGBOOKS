@@ -41,6 +41,8 @@ interface FilterScheduleRow {
     equipment_name: string;
     area_category?: string | null;
     tag_info?: string | null;
+    /** User who assigned filter to equipment; cannot approve/reject own assignment schedules. */
+    assigned_by_id?: string | null;
   };
   created_at: string;
 }
@@ -72,6 +74,12 @@ const FilterScheduleApprovalsPage: React.FC = () => {
     () => rows.filter((r) => !r.is_approved).length,
     [rows]
   );
+
+  const userIsAssignmentAssigner = (row: FilterScheduleRow) => {
+    const aid = row.assignment_info?.assigned_by_id;
+    const uid = user?.id != null ? String(user.id) : "";
+    return !!(aid && uid && aid === uid);
+  };
 
   const load = async () => {
     setIsLoading(true);
@@ -260,6 +268,15 @@ const FilterScheduleApprovalsPage: React.FC = () => {
                               className="h-8 w-8 text-emerald-600"
                               disabled={workingId === row.id || row.is_approved || row.status === "rejected"}
                               onClick={() => {
+                                if (userIsAssignmentAssigner(row)) {
+                                  toast({
+                                    title: "Cannot approve your own assignment",
+                                    description:
+                                      "Someone else must approve schedules for equipment you assigned the filter to.",
+                                    variant: "destructive",
+                                  });
+                                  return;
+                                }
                                 if (!row.is_approved && row.status !== "rejected") {
                                   setSelectedScheduleId(row.id);
                                   setApproveConfirmOpen(true);
@@ -279,6 +296,15 @@ const FilterScheduleApprovalsPage: React.FC = () => {
                               className="h-8 w-8 text-rose-600"
                               disabled={workingId === row.id || row.is_approved || row.status === "rejected"}
                               onClick={() => {
+                                if (userIsAssignmentAssigner(row)) {
+                                  toast({
+                                    title: "Cannot reject your own assignment",
+                                    description:
+                                      "Someone else must reject schedules for equipment you assigned the filter to.",
+                                    variant: "destructive",
+                                  });
+                                  return;
+                                }
                                 if (!row.is_approved && row.status !== "rejected") {
                                   setSelectedScheduleId(row.id);
                                   setRejectConfirmOpen(true);

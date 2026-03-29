@@ -40,10 +40,10 @@ export function MissedReadingPopup({
   const renderEquipmentList = () => {
     if (!hasEquipment) return null;
     return (
-      <div className="mt-3 max-h-[60vh] space-y-2 overflow-y-auto pr-1">
+      <div className="mt-3 max-h-[min(70vh,32rem)] space-y-3 overflow-y-auto pr-1">
         {equipmentList!.map((eq) => {
-          const lastStr = eq.lastTimestamp ? format(eq.lastTimestamp, 'PPp') : 'no readings yet';
-          const nextStr = eq.nextDue ? format(eq.nextDue, 'PPp') : 'not scheduled';
+          const lastStr = eq.lastTimestamp ? format(eq.lastTimestamp, 'PPp') : 'No readings yet';
+          const nextStr = eq.nextDue ? format(eq.nextDue, 'PPp') : 'Not scheduled';
           const intervalLabel =
             eq.interval === 'hourly'
               ? 'Hourly'
@@ -51,35 +51,48 @@ export function MissedReadingPopup({
               ? `Shift (${eq.shiftHours}h)`
               : 'Daily';
           const missedCount = eq.missingSlotCount ?? (eq.isMissed ? 1 : 0);
+          const friendly =
+            eq.equipmentName?.trim() &&
+            eq.equipmentName.trim() !== eq.equipmentId.trim();
+          const title = friendly ? eq.equipmentName!.trim() : `Equipment ${eq.equipmentId}`;
           return (
             <div
               key={eq.equipmentId}
-              className="flex flex-col rounded-md border border-border px-3 py-2 text-sm bg-muted/40"
+              className="flex flex-col gap-1.5 rounded-lg border border-border bg-muted/30 px-3 py-3 text-sm"
             >
-              <div className="font-medium text-foreground">
-                Equipment {eq.equipmentId}
-                {eq.equipmentName ? ` – ${eq.equipmentName}` : ''}
-                {eq.equipmentTypeLabel ? ` (${eq.equipmentTypeLabel})` : ''}
+              <div className="text-base font-semibold leading-snug text-foreground">{title}</div>
+              {eq.equipmentTypeLabel ? (
+                <div className="text-xs text-muted-foreground">Type: {eq.equipmentTypeLabel}</div>
+              ) : null}
+              <div className="text-muted-foreground">
+                Last reading: <span className="text-foreground">{lastStr}</span>
               </div>
               <div className="text-muted-foreground">
-                Last reading: <span className="font-mono">{lastStr}</span>
-              </div>
-              <div className="text-muted-foreground">
-                Next due: <span className="font-mono">{nextStr}</span> ({intervalLabel})
+                Next due: <span className="text-foreground">{nextStr}</span>{' '}
+                <span className="text-muted-foreground">({intervalLabel})</span>
               </div>
               <div className="text-muted-foreground">
                 Missed slots: <span className="font-semibold text-foreground">{missedCount}</span>
               </div>
+              {missedCount === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  No missed readings for this day—this equipment already has the expected log(s) for its
+                  interval, or remaining slots are not due yet.
+                </p>
+              ) : null}
               {!!eq.missingSlotRanges?.length && (
-                <div className="mt-2 rounded border border-border/70 bg-background p-2">
-                  <div className="mb-1 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                    Missing slot ranges
+                <div className="mt-1 rounded-md border border-border/60 bg-background/80 p-2">
+                  <div className="mb-2 text-xs font-medium text-muted-foreground">
+                    Missing time windows (log one entry per window)
                   </div>
-                  <div className="max-h-32 overflow-y-auto space-y-1">
+                  <div className="flex flex-wrap gap-1.5">
                     {eq.missingSlotRanges.map((slot, idx) => (
-                      <div key={`${eq.equipmentId}-${idx}`} className="font-mono text-xs text-foreground">
+                      <span
+                        key={`${eq.equipmentId}-${idx}`}
+                        className="inline-flex rounded-md border border-border bg-muted/50 px-2 py-1 font-mono text-xs text-foreground"
+                      >
                         {slot.label}
-                      </div>
+                      </span>
                     ))}
                   </div>
                 </div>
@@ -101,10 +114,12 @@ export function MissedReadingPopup({
 
   return (
     <AlertDialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <AlertDialogContent className="max-h-[80vh] overflow-y-auto">
+      <AlertDialogContent className="max-h-[85vh] max-w-2xl w-[min(100%,42rem)] overflow-y-auto sm:max-w-2xl">
         <AlertDialogHeader>
-          <AlertDialogTitle>Scheduled reading missed</AlertDialogTitle>
-          <AlertDialogDescription>{defaultDescription}</AlertDialogDescription>
+          <AlertDialogTitle>Missing scheduled readings</AlertDialogTitle>
+          <AlertDialogDescription className="text-left">
+            {defaultDescription}
+          </AlertDialogDescription>
         </AlertDialogHeader>
         {renderEquipmentList()}
         <AlertDialogFooter>

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Header } from "@/components/layout/Header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,7 +28,6 @@ import {
   equipmentCategoryAPI,
   filterAssignmentAPI,
   filterLogAPI,
-  filterMasterAPI,
   filterScheduleAPI,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -68,29 +67,26 @@ interface EquipmentOption {
   name: string;
 }
 
-/** Option from Filter Register (approved filters) for the New Filter Log Entry dropdown */
-interface FilterRegisterOption {
-  id: string;
+/** Distinct filter_id values for list-filter dialog (from assignments). */
+interface FilterIdFilterOption {
   filter_id: string;
-  category_name: string;
-  make: string;
-  model: string;
-  serial_number?: string | null;
-  size_l?: number | null;
-  size_w?: number | null;
-  size_h?: number | null;
-  micron_size: string;
+  label: string;
 }
 
 interface FilterAssignmentRow {
   id: string;
   filter: string;
   filter_id: string;
+  filter_category_name?: string;
+  filter_make?: string;
+  filter_model?: string;
+  is_active?: boolean;
   filter_micron_size?: string;
   filter_size_l?: number | null;
   filter_size_w?: number | null;
   filter_size_h?: number | null;
   tag_info?: string | null;
+  area_category?: string | null;
   equipment?: string;
   equipment_number?: string;
   equipment_name?: string;
@@ -104,6 +100,8 @@ interface FilterLog {
   filterMicron?: string;
   filterSize?: string;
   tagInfo?: string;
+  /** From API / assignment; list view shows stored value or resolves from assignments. */
+  areaCategory?: string | null;
   installedDate: string;
   integrityDoneDate?: string | null;
   integrityDueDate: string;
@@ -130,7 +128,214 @@ interface FilterLog {
 }
 type LogEntryIntervalType = "hourly" | "shift" | "daily";
 
+type ScheduleFreqState = {
+  replacement: number | null;
+  cleaning: number | null;
+  integrity: number | null;
+};
+
+const emptyScheduleFreq = (): ScheduleFreqState => ({
+  replacement: null,
+  cleaning: null,
+  integrity: null,
+});
+
+/** Due dates: installed + frequency_days when set; else legacy rules (6mo+15d / 1y+30d). */
+function dueDatesForInstalled(installedDate: string, freq: ScheduleFreqState): {
+  integrityDueDate: string;
+  cleaningDueDate: string;
+  replacementDueDate: string;
+} {
+  if (!installedDate) {
+    return { integrityDueDate: "", cleaningDueDate: "", replacementDueDate: "" };
+  }
+  const base = new Date(`${installedDate}T12:00:00`);
+  if (Number.isNaN(base.getTime())) {
+    return { integrityDueDate: "", cleaningDueDate: "", replacementDueDate: "" };
+  }
+  const addDays = (d: Date, days: number) => {
+    const copy = new Date(d.getTime());
+    copy.setDate(copy.getDate() + days);
+    return copy;
+  };
+  const addMonths = (d: Date, months: number) => {
+    const copy = new Date(d.getTime());
+    const day = copy.getDate();
+    copy.setMonth(copy.getMonth() + months);
+    if (copy.getDate() !== day) {
+      copy.setDate(0);
+    }
+    return copy;
+  };
+  const addYears = (d: Date, years: number) => {
+    const copy = new Date(d.getTime());
+    const day = copy.getDate();
+    copy.setFullYear(copy.getFullYear() + years);
+    if (copy.getDate() !== day) {
+      copy.setDate(0);
+    }
+    return copy;
+  };
+  const fmt = (d: Date) => format(d, "yyyy-MM-dd");
+  const legacyInt = fmt(addDays(addMonths(base, 6), 15));
+  const legacyRepl = fmt(addDays(addYears(base, 1), 30));
+  const fromFreq = (days: number | null) =>
+    days != null && !Number.isNaN(days) && days >= 0 ? fmt(addDays(base, days)) : null;
+
+  return {
+    integrityDueDate: fromFreq(freq.integrity) ?? legacyInt,
+    cleaningDueDate: fromFreq(freq.cleaning) ?? legacyInt,
+    replacementDueDate: fromFreq(freq.replacement) ?? legacyRepl,
+  };
+}
+
 const CREATOR_ONLY_REJECTED_EDIT_MESSAGE = "Only the original creator can edit/correct a rejected entry.";
+
+/** Normalize assignment area_category for grouping (Register → Assign → Area category). */
+const AREA_CATEGORY_DEFAULT_KEY = "__area_default__";
+function assignmentAreaCategoryKey(area: string | null | undefined): string {
+  const t = String(area ?? "").trim();
+  return t ? t : AREA_CATEGORY_DEFAULT_KEY;
+}
+function assignmentAreaCategoryLabel(key: string): string {
+  return key === AREA_CATEGORY_DEFAULT_KEY ? "General (unspecified area)" : key;
+}
+
+function formatAssignmentSelectLabel(
+  a: FilterAssignmentRow,
+  siblings: FilterAssignmentRow[],
+): string {
+  const makeModel =
+    a.filter_make || a.filter_model
+      ? ` – ${[a.filter_make, a.filter_model].filter(Boolean).join(" ")}`
+      : "";
+  let label = `${a.filter_id}${makeModel}`;
+  const sameFilter = siblings.filter((x) => x.filter_id === a.filter_id);
+  if (sameFilter.length > 1) {
+    const hint = (a.tag_info || "").trim() || `id ${a.id.slice(0, 8)}…`;
+    const short = hint.length > 44 ? `${hint.slice(0, 41)}…` : hint;
+    label = `${label} · ${short}`;
+  }
+  return label;
+}
+
+/** "EN-001 – Name" from Filter Register assignment row. */
+function formatAssignmentEquipmentLabel(a: FilterAssignmentRow): string {
+  const num = (a.equipment_number ?? "").trim();
+  const name = (a.equipment_name ?? "").trim();
+  if (num && name) return `${num} – ${name}`;
+  return name || num || "";
+}
+
+function narrowAssignmentPoolByLogContext(
+  pool: FilterAssignmentRow[],
+  log: Pick<FilterLog, "areaCategory" | "tagInfo">,
+): FilterAssignmentRow[] {
+  let p = pool;
+  const areaNorm = (log.areaCategory || "").trim().toLowerCase();
+  if (p.length > 1 && areaNorm) {
+    const byA = p.filter((a) => (a.area_category || "").trim().toLowerCase() === areaNorm);
+    if (byA.length >= 1) p = byA;
+  }
+  if (p.length > 1 && (log.tagInfo || "").trim()) {
+    const logTag = (log.tagInfo || "").trim();
+    const narrowed = p.filter((m) => {
+      const t = (m.tag_info || "").trim();
+      if (!t) return false;
+      return t === logTag || logTag.startsWith(t) || t.startsWith(logTag);
+    });
+    if (narrowed.length >= 1) p = narrowed;
+  }
+  return p;
+}
+
+/**
+ * Pick the assignment row that best matches a list log (for equipment label).
+ * Register list includes all assignments; equipment dropdown options may omit equipment
+ * without fully approved schedules, so this must not depend on equipmentOptions alone.
+ */
+function pickAssignmentForEquipmentColumn(
+  log: Pick<FilterLog, "equipmentId" | "filterNo" | "areaCategory" | "tagInfo">,
+  rows: FilterAssignmentRow[],
+): FilterAssignmentRow | null {
+  const raw = (log.equipmentId || "").trim();
+  const filterNo = (log.filterNo || "").trim();
+  if (!rows.length) return null;
+
+  if (raw) {
+    let pool = rows.filter((a) => a.equipment && a.equipment.toLowerCase() === raw.toLowerCase());
+    if (pool.length && filterNo) {
+      const byF = pool.filter((a) => a.filter_id === filterNo);
+      if (byF.length) pool = byF;
+    }
+    pool = narrowAssignmentPoolByLogContext(pool, log);
+    if (pool.length) return pool.find((x) => x.is_active !== false) ?? pool[0];
+
+    let pool2 = rows.filter((a) => a.filter_id === raw);
+    if (pool2.length && filterNo && raw !== filterNo) {
+      pool2 = pool2.filter((a) => a.filter_id === filterNo);
+    }
+    pool2 = narrowAssignmentPoolByLogContext(pool2, log);
+    if (pool2.length) return pool2.find((x) => x.is_active !== false) ?? pool2[0];
+  }
+
+  if (filterNo) {
+    let pool3 = rows.filter((a) => a.filter_id === filterNo);
+    pool3 = narrowAssignmentPoolByLogContext(pool3, log);
+    if (pool3.length === 1) return pool3[0];
+    if (pool3.length > 1) return pool3.find((x) => x.is_active !== false) ?? pool3[0];
+  }
+
+  return null;
+}
+
+/** Resolve equipment UUID for a log row (stored id may be UUID or legacy filter_id). */
+function equipmentUuidForFilterLogRow(
+  log: Pick<FilterLog, "equipmentId" | "filterNo">,
+  equipmentOptions: EquipmentOption[],
+  filterIdToEquipmentInterval: Map<
+    string,
+    {
+      equipment_id?: string;
+      log_entry_interval?: string | null;
+      shift_duration_hours?: number | null;
+      tolerance_minutes?: number | null;
+    }
+  >,
+): string | null {
+  const raw = (log.equipmentId || "").trim();
+  if (!raw) return null;
+  const optHit = equipmentOptions.find((o) => o.id && o.id.toLowerCase() === raw.toLowerCase());
+  if (optHit) return optHit.id;
+  const meta =
+    filterIdToEquipmentInterval.get(raw) ??
+    filterIdToEquipmentInterval.get(raw.toLowerCase()) ??
+    filterIdToEquipmentInterval.get(log.filterNo);
+  return meta?.equipment_id ?? null;
+}
+
+/** Assignment must have all three schedule types approved before it appears in the filter log equipment list. */
+function assignmentIdsWithFullyApprovedSchedules(
+  schedules: { assignment: string; schedule_type: string }[],
+): Set<string> {
+  const byAssignment = new Map<string, Set<string>>();
+  for (const s of schedules) {
+    if (!s?.assignment) continue;
+    if (!byAssignment.has(s.assignment)) byAssignment.set(s.assignment, new Set());
+    byAssignment.get(s.assignment)!.add(s.schedule_type);
+  }
+  const out = new Set<string>();
+  for (const [aid, types] of byAssignment) {
+    if (
+      types.has("replacement") &&
+      types.has("cleaning") &&
+      types.has("integrity")
+    ) {
+      out.add(aid);
+    }
+  }
+  return out;
+}
 
 const FilterLogBookPage: React.FC = () => {
   const { user, sessionSettings } = useAuth();
@@ -169,11 +374,43 @@ const FilterLogBookPage: React.FC = () => {
       }
     >
   >(new Map());
+  /** All filter assignments for resolving area category on list rows (legacy logs). */
+  const [filterAssignmentsLookup, setFilterAssignmentsLookup] = useState<FilterAssignmentRow[]>([]);
   const [entryLogInterval, setEntryLogInterval] = useState<"" | LogEntryIntervalType>("");
   const [entryShiftDurationHours, setEntryShiftDurationHours] = useState<number | "">("");
   const [entryToleranceMinutes, setEntryToleranceMinutes] = useState<number | "">("");
-  const [filterRegisterOptions, setFilterRegisterOptions] = useState<FilterRegisterOption[]>([]);
+  const [filterIdFilterOptions, setFilterIdFilterOptions] = useState<FilterIdFilterOption[]>([]);
+  const [assignmentsOnEquipment, setAssignmentsOnEquipment] = useState<FilterAssignmentRow[]>([]);
+  const [selectedAreaCategoryKey, setSelectedAreaCategoryKey] = useState<string>(
+    AREA_CATEGORY_DEFAULT_KEY,
+  );
+  const [selectedAssignmentId, setSelectedAssignmentId] = useState<string>("");
+  const [scheduleFrequencies, setScheduleFrequencies] = useState<ScheduleFreqState>(emptyScheduleFreq());
+  const scheduleFreqRef = useRef<ScheduleFreqState>(emptyScheduleFreq());
   const [selectedEquipmentUuid, setSelectedEquipmentUuid] = useState<string>("");
+
+  useEffect(() => {
+    scheduleFreqRef.current = scheduleFrequencies;
+  }, [scheduleFrequencies]);
+
+  const uniqueAreaCategoryKeys = useMemo(() => {
+    const set = new Set<string>();
+    for (const a of assignmentsOnEquipment) {
+      set.add(assignmentAreaCategoryKey(a.area_category));
+    }
+    return Array.from(set).sort((a, b) =>
+      assignmentAreaCategoryLabel(a).localeCompare(assignmentAreaCategoryLabel(b)),
+    );
+  }, [assignmentsOnEquipment]);
+
+  const assignmentsForSelectedArea = useMemo(
+    () =>
+      assignmentsOnEquipment.filter(
+        (a) => assignmentAreaCategoryKey(a.area_category) === selectedAreaCategoryKey,
+      ),
+    [assignmentsOnEquipment, selectedAreaCategoryKey],
+  );
+
   const [previousReadingsForEquipment, setPreviousReadingsForEquipment] = useState<FilterLog[]>([]);
   const [previousReadingsLoading, setPreviousReadingsLoading] = useState(false);
   const [maintenanceTimings, setMaintenanceTimings] = useState<MaintenanceTimingsValue>({
@@ -214,50 +451,19 @@ const FilterLogBookPage: React.FC = () => {
       return;
     }
 
-    const base = new Date(installedDate);
+    const base = new Date(`${installedDate}T12:00:00`);
     if (Number.isNaN(base.getTime())) {
       setFormData((prev) => ({ ...prev, installedDate }));
       return;
     }
 
-    const addDays = (d: Date, days: number) => {
-      const copy = new Date(d.getTime());
-      copy.setDate(copy.getDate() + days);
-      return copy;
-    };
-
-    const addMonths = (d: Date, months: number) => {
-      const copy = new Date(d.getTime());
-      const day = copy.getDate();
-      copy.setMonth(copy.getMonth() + months);
-      if (copy.getDate() !== day) {
-        copy.setDate(0);
-      }
-      return copy;
-    };
-
-    const addYears = (d: Date, years: number) => {
-      const copy = new Date(d.getTime());
-      const day = copy.getDate();
-      copy.setFullYear(copy.getFullYear() + years);
-      if (copy.getDate() !== day) {
-        copy.setDate(0);
-      }
-      return copy;
-    };
-
-    const fmt = (d: Date) => d.toISOString().slice(0, 10);
-
-    const integrityDue = addDays(addMonths(base, 6), 15);
-    const cleaningDue = addDays(addMonths(base, 6), 15);
-    const replacementDue = addDays(addYears(base, 1), 30);
-
+    const due = dueDatesForInstalled(installedDate, scheduleFreqRef.current);
     setFormData((prev) => ({
       ...prev,
       installedDate,
-      integrityDueDate: prev.integrityDueDate || fmt(integrityDue),
-      cleaningDueDate: prev.cleaningDueDate || fmt(cleaningDue),
-      replacementDueDate: prev.replacementDueDate || fmt(replacementDue),
+      integrityDueDate: due.integrityDueDate,
+      cleaningDueDate: due.cleaningDueDate,
+      replacementDueDate: due.replacementDueDate,
     }));
   };
 
@@ -292,6 +498,7 @@ const FilterLogBookPage: React.FC = () => {
   const loadFilterIdToEquipmentInterval = async () => {
     try {
       const assignments = (await filterAssignmentAPI.list()) as FilterAssignmentRow[];
+      setFilterAssignmentsLookup((assignments || []) as FilterAssignmentRow[]);
       const equipmentIds = [...new Set((assignments || []).map((a) => a.equipment).filter(Boolean))] as string[];
       if (equipmentIds.length === 0) {
         setFilterIdToEquipmentInterval(new Map());
@@ -308,7 +515,7 @@ const FilterLogBookPage: React.FC = () => {
         }
       >();
       for (const e of allEquipment || []) {
-        if (e?.id && (e.log_entry_interval != null || e.shift_duration_hours != null)) {
+        if (e?.id) {
           eqIntervalMap.set(e.id, {
             equipment_id: e.id,
             log_entry_interval: e.log_entry_interval ?? null,
@@ -326,68 +533,83 @@ const FilterLogBookPage: React.FC = () => {
           tolerance_minutes?: number | null;
         }
       >();
+      const filterIdAssignmentCount = new Map<string, number>();
+      for (const a of assignments || []) {
+        if (a.filter_id) {
+          filterIdAssignmentCount.set(
+            a.filter_id,
+            (filterIdAssignmentCount.get(a.filter_id) || 0) + 1,
+          );
+        }
+      }
       for (const a of assignments || []) {
         if (a.filter_id && a.equipment) {
           const interval = eqIntervalMap.get(a.equipment);
           if (interval) {
-            filterToInterval.set(a.filter_id, interval);
+            // Same filter_id on multiple equipment: do not map filter_id → one arbitrary row.
+            if (filterIdAssignmentCount.get(a.filter_id) === 1) {
+              filterToInterval.set(a.filter_id, interval);
+            }
+            filterToInterval.set(a.equipment, interval);
           }
         }
       }
       setFilterIdToEquipmentInterval(filterToInterval);
     } catch {
       setFilterIdToEquipmentInterval(new Map());
+      setFilterAssignmentsLookup([]);
     }
   };
 
   const loadEquipment = async () => {
     try {
-      // Show only equipment that have a filter assignment (from Filter Register → Assign Filter to Equipment).
       const assignments = (await filterAssignmentAPI.list()) as any[];
+      let approvedSchedules: { assignment: string; schedule_type: string }[] = [];
+      try {
+        approvedSchedules = (await filterScheduleAPI.listAll({
+          approval: "approved",
+        })) as { assignment: string; schedule_type: string }[];
+      } catch {
+        approvedSchedules = [];
+      }
+      const eligibleAssignmentIds = assignmentIdsWithFullyApprovedSchedules(approvedSchedules);
+      const activeAssignments = (assignments || []).filter(
+        (a) => a?.is_active !== false && a?.id && eligibleAssignmentIds.has(a.id),
+      );
+
       const seen = new Set<string>();
       const options: EquipmentOption[] = [];
-      for (const a of assignments || []) {
+      const seenFilterId = new Set<string>();
+      const filterOpts: FilterIdFilterOption[] = [];
+      for (const a of activeAssignments) {
         const id = a?.equipment;
-        if (!id || seen.has(id)) continue;
-        seen.add(id);
-        options.push({
-          id,
-          equipment_number: a.equipment_number ?? "",
-          name: a.equipment_name ?? "",
-        });
+        if (id && !seen.has(id)) {
+          seen.add(id);
+          options.push({
+            id,
+            equipment_number: a.equipment_number ?? "",
+            name: a.equipment_name ?? "",
+          });
+        }
+        const fid = a?.filter_id as string | undefined;
+        if (fid && !seenFilterId.has(fid)) {
+          seenFilterId.add(fid);
+          filterOpts.push({
+            filter_id: fid,
+            label: `${fid}${a.equipment_number ? ` – ${a.equipment_number}` : ""}`,
+          });
+        }
       }
       options.sort((a, b) =>
         `${a.equipment_number} ${a.name}`.localeCompare(`${b.equipment_number} ${b.name}`)
       );
+      filterOpts.sort((a, b) => a.filter_id.localeCompare(b.filter_id));
       setEquipmentOptions(options);
+      setFilterIdFilterOptions(filterOpts);
     } catch (error) {
       console.error("Error loading equipment from assignments:", error);
       setEquipmentOptions([]);
-    }
-  };
-
-  /** Load approved filters from Filter Register for the dropdown */
-  const loadFilterRegister = async () => {
-    try {
-      const raw = await filterMasterAPI.list({ status: "approved" });
-      const list = Array.isArray(raw) ? raw : [];
-      const options: FilterRegisterOption[] = list
-        .filter((f: any) => f?.filter_id)
-        .map((f: any) => ({
-          id: f.id,
-          filter_id: f.filter_id,
-          category_name: f.category_name ?? (f.category?.name ?? ""),
-          make: f.make ?? "",
-          model: f.model ?? "",
-          serial_number: f.serial_number,
-          size_l: f.size_l,
-          size_w: f.size_w,
-          size_h: f.size_h,
-          micron_size: f.micron_size ?? "",
-        }));
-      setFilterRegisterOptions(options);
-    } catch (error) {
-      console.error("Error loading filter register:", error);
+      setFilterIdFilterOptions([]);
     }
   };
 
@@ -399,32 +621,70 @@ const FilterLogBookPage: React.FC = () => {
     return "";
   };
 
-  const onEquipmentSelected = async (equipmentUuid: string) => {
-    const eq = equipmentOptions.find((e) => e.id === equipmentUuid);
+  const applyAssignmentRowToForm = (active: FilterAssignmentRow) => {
+    const catRaw = (active.filter_category_name || "").trim();
     setFormData((prev) => ({
       ...prev,
-      equipmentId: eq?.equipment_number || prev.equipmentId,
+      equipmentId: active.filter_id || "",
+      category: (catRaw || prev.category || "hvac") as FilterCategory,
+      filterNo: active.filter_id || "",
+      filterMicron: active.filter_micron_size || prev.filterMicron,
+      filterSize: formatFilterSize(active) || prev.filterSize,
+      tagInfo: active.tag_info ?? prev.tagInfo,
     }));
+    const timingMeta = filterIdToEquipmentInterval.get(active.filter_id || "");
+    if (timingMeta) {
+      setEntryLogInterval((timingMeta.log_entry_interval as LogEntryIntervalType) || "");
+      setEntryShiftDurationHours(timingMeta.shift_duration_hours ?? "");
+      setEntryToleranceMinutes(timingMeta.tolerance_minutes ?? "");
+    } else {
+      setEntryLogInterval("");
+      setEntryShiftDurationHours("");
+      setEntryToleranceMinutes("");
+    }
+  };
 
+  const loadApprovedSchedulesForAssignment = async (
+    equipmentUuid: string,
+    assignmentId: string,
+  ) => {
+    const nextFreq = emptyScheduleFreq();
     try {
-      const assignments = (await filterAssignmentAPI.list({
+      const rows = (await filterScheduleAPI.list({
         equipment: equipmentUuid,
-      })) as FilterAssignmentRow[];
-      const active = assignments?.[0];
-      if (active) {
-        setFormData((prev) => ({
-          ...prev,
-          filterNo: prev.filterNo?.trim() ? prev.filterNo : active.filter_id || "",
-          filterMicron:
-            prev.filterMicron?.trim() ? prev.filterMicron : active.filter_micron_size || "",
-          filterSize: prev.filterSize?.trim() ? prev.filterSize : formatFilterSize(active),
-          tagInfo: prev.tagInfo?.trim() ? prev.tagInfo : active.tag_info || "",
-        }));
+        approval: "approved",
+      })) as any[];
+      const mine = (rows || []).filter(
+        (s) => s.assignment === assignmentId && s.is_approved === true,
+      );
+      for (const s of mine) {
+        const d =
+          s.frequency_days != null && !Number.isNaN(Number(s.frequency_days))
+            ? Number(s.frequency_days)
+            : null;
+        if (s.schedule_type === "replacement") nextFreq.replacement = d;
+        else if (s.schedule_type === "cleaning") nextFreq.cleaning = d;
+        else if (s.schedule_type === "integrity") nextFreq.integrity = d;
       }
     } catch {
-      // ignore
+      /* ignore */
     }
+    setScheduleFrequencies(nextFreq);
+    scheduleFreqRef.current = nextFreq;
+    setFormData((prev) => {
+      const installed = prev.installedDate || getTodayDateString();
+      const due = dueDatesForInstalled(installed, nextFreq);
+      return {
+        ...prev,
+        installedDate: installed,
+        integrityDueDate: due.integrityDueDate,
+        cleaningDueDate: due.cleaningDueDate,
+        replacementDueDate: due.replacementDueDate,
+      };
+    });
+  };
 
+  const maybeToastScheduleOverdue = async (equipmentUuid: string) => {
     try {
       const overdue = await filterScheduleAPI.list({
         equipment: equipmentUuid,
@@ -439,69 +699,76 @@ const FilterLogBookPage: React.FC = () => {
     }
   };
 
-  /** When user selects a filter from the Filter Register, fill form from that filter */
-  const onFilterFromRegisterSelected = (filterId: string) => {
-    const filter = filterRegisterOptions.find((f) => f.filter_id === filterId);
-    if (!filter) return;
-    const timingMeta = filterIdToEquipmentInterval.get(filter.filter_id);
-    const sizeStr =
-      [filter.size_l, filter.size_w, filter.size_h].every((v) => v != null)
-        ? `${filter.size_l} × ${filter.size_w} × ${filter.size_h}`
-        : "";
-    setFormData((prev) => ({
-      ...prev,
-      equipmentId: filter.filter_id,
-      filterNo: filter.filter_id,
-      filterMicron: filter.micron_size || prev.filterMicron,
-      filterSize: sizeStr || prev.filterSize,
-      category: (filter.category_name ?? prev.category) as FilterCategory,
-    }));
-    if (timingMeta?.equipment_id) {
-      setSelectedEquipmentUuid(timingMeta.equipment_id);
-    }
-    setEntryLogInterval((timingMeta?.log_entry_interval as LogEntryIntervalType) || "");
-    setEntryShiftDurationHours(timingMeta?.shift_duration_hours ?? "");
-    setEntryToleranceMinutes(timingMeta?.tolerance_minutes ?? "");
+  const onAssignmentRowSelected = async (assignmentId: string, equipmentUuid: string) => {
+    const row =
+      assignmentsForSelectedArea.find((a) => a.id === assignmentId) ??
+      assignmentsOnEquipment.find((a) => a.id === assignmentId);
+    if (!row) return;
+    setSelectedAssignmentId(assignmentId);
+    applyAssignmentRowToForm(row);
+    await loadApprovedSchedulesForAssignment(equipmentUuid, assignmentId);
+    await maybeToastScheduleOverdue(equipmentUuid);
   };
 
-  /** When user selects equipment, fetch tag information (and assignment details) from filter assignment */
+  const onAreaCategorySelected = async (areaKey: string, equipmentUuid: string) => {
+    setSelectedAreaCategoryKey(areaKey);
+    const filtered = assignmentsOnEquipment.filter(
+      (a) => assignmentAreaCategoryKey(a.area_category) === areaKey,
+    );
+    const chosen = filtered[0];
+    if (!chosen) return;
+    setSelectedAssignmentId(chosen.id);
+    applyAssignmentRowToForm(chosen);
+    await loadApprovedSchedulesForAssignment(equipmentUuid, chosen.id);
+    await maybeToastScheduleOverdue(equipmentUuid);
+  };
+
+  /** Equipment drives filter assignment(s), approved schedules, and due dates. */
   const onEquipmentSelectedForTagInfo = async (equipmentUuid: string) => {
     setSelectedEquipmentUuid(equipmentUuid);
     try {
       const assignments = (await filterAssignmentAPI.list({
         equipment: equipmentUuid,
       })) as FilterAssignmentRow[];
-      const selectedFilterUuid = formData.equipmentId
-        ? filterRegisterOptions.find((f) => f.filter_id === formData.equipmentId)?.id
-        : null;
-      const active = selectedFilterUuid
-        ? assignments?.find((a: any) => a.filter === selectedFilterUuid)
-        : assignments?.[0];
-      if (active) {
+      const activeList = (assignments || []).filter((a) => a.is_active !== false);
+      if (!activeList.length) {
+        toast.error(
+          "No filter assignment for this equipment. Assign an approved filter in Filter Register first.",
+        );
+        setAssignmentsOnEquipment([]);
+        setSelectedAreaCategoryKey(AREA_CATEGORY_DEFAULT_KEY);
+        setSelectedAssignmentId("");
+        setScheduleFrequencies(emptyScheduleFreq());
+        scheduleFreqRef.current = emptyScheduleFreq();
         setFormData((prev) => ({
           ...prev,
-          tagInfo: prev.tagInfo?.trim() ? prev.tagInfo : (active.tag_info ?? ""),
-          filterNo: prev.filterNo?.trim() ? prev.filterNo : active.filter_id || prev.filterNo,
-          filterMicron: prev.filterMicron?.trim() ? prev.filterMicron : (active.filter_micron_size ?? prev.filterMicron),
-          filterSize: prev.filterSize?.trim() ? prev.filterSize : formatFilterSize(active),
+          tagInfo: "",
+          filterNo: "",
+          equipmentId: "",
+          filterMicron: "",
+          filterSize: "",
         }));
-      } else {
-        setFormData((prev) => ({ ...prev, tagInfo: "" }));
+        return;
       }
+
+      setAssignmentsOnEquipment(activeList);
+      const keys = [
+        ...new Set(activeList.map((a) => assignmentAreaCategoryKey(a.area_category))),
+      ].sort((a, b) =>
+        assignmentAreaCategoryLabel(a).localeCompare(assignmentAreaCategoryLabel(b)),
+      );
+      const defaultKey = keys[0] ?? AREA_CATEGORY_DEFAULT_KEY;
+      setSelectedAreaCategoryKey(defaultKey);
+      const inArea = activeList.filter(
+        (a) => assignmentAreaCategoryKey(a.area_category) === defaultKey,
+      );
+      const chosen = inArea[0] ?? activeList[0];
+      setSelectedAssignmentId(chosen.id);
+      applyAssignmentRowToForm(chosen);
+      await loadApprovedSchedulesForAssignment(equipmentUuid, chosen.id);
+      await maybeToastScheduleOverdue(equipmentUuid);
     } catch {
       setFormData((prev) => ({ ...prev, tagInfo: "" }));
-    }
-    try {
-      const overdue = await filterScheduleAPI.list({
-        equipment: equipmentUuid,
-        overdue: true,
-      });
-      if (Array.isArray(overdue) && overdue.length > 0) {
-        const types = Array.from(new Set(overdue.map((s: any) => s.schedule_type))).join(", ");
-        toast.warning(`Maintenance overdue for this equipment: ${types}`);
-      }
-    } catch {
-      // ignore
     }
   };
 
@@ -518,12 +785,13 @@ const FilterLogBookPage: React.FC = () => {
         const timestamp = new Date(log.timestamp);
         allLogs.push({
           id: log.id,
-          equipmentId: log.equipment_id,
+          equipmentId: log.equipment_id ?? "",
           category: log.category,
           filterNo: log.filter_no,
           filterMicron: log.filter_micron || "",
           filterSize: log.filter_size || "",
           tagInfo: log.tag_info || "",
+          areaCategory: log.area_category ?? null,
           installedDate: log.installed_date,
           integrityDoneDate: log.integrity_done_date,
           integrityDueDate: log.integrity_due_date,
@@ -571,7 +839,6 @@ const FilterLogBookPage: React.FC = () => {
   useEffect(() => {
     void loadCategories();
     void loadEquipment();
-    void loadFilterRegister();
     void loadFilterIdToEquipmentInterval();
     void refreshLogs();
   }, []);
@@ -581,38 +848,42 @@ const FilterLogBookPage: React.FC = () => {
     filterLogAPI
       .missingSlots({ date: selectedDate })
       .then((payload) => {
-        const missedOnly: EquipmentMissInfo[] = (payload?.equipments || [])
-          .filter((eq) => (eq.missing_slot_count || 0) > 0)
-          .map((eq) => ({
-            equipmentId: eq.equipment_id,
-            equipmentName: eq.equipment_name,
-            lastTimestamp: null,
-            nextDue: eq.next_due ? new Date(eq.next_due) : null,
-            isMissed: (eq.missing_slot_count || 0) > 0,
-            interval: eq.interval,
-            shiftHours: eq.shift_duration_hours || 8,
-            expectedSlotCount: eq.expected_slot_count,
-            presentSlotCount: eq.present_slot_count,
-            missingSlotCount: eq.missing_slot_count,
-            missingSlotRanges: (eq.missing_slots || []).map((slot) => ({
-              slotStart: new Date(slot.slot_start),
-              slotEnd: new Date(slot.slot_end),
-              label: slot.label,
-            })),
-          }));
-        if (missedOnly.length > 0) {
-          setMissedEquipments(missedOnly);
-          const firstNext =
-            missedOnly
-              .map((m) => m.nextDue)
-              .filter((d): d is Date => !!d)
-              .sort((a, b) => a.getTime() - b.getTime())[0] || null;
-          setMissedReadingNextDue(firstNext);
+        const mapped: EquipmentMissInfo[] = (payload?.equipments || []).map((eq) => ({
+          equipmentId: eq.equipment_id,
+          equipmentName: eq.equipment_name,
+          lastTimestamp: eq.last_reading_timestamp ? new Date(eq.last_reading_timestamp) : null,
+          nextDue: eq.next_due ? new Date(eq.next_due) : null,
+          isMissed: (eq.missing_slot_count || 0) > 0,
+          interval: eq.interval,
+          shiftHours: eq.shift_duration_hours || 8,
+          expectedSlotCount: eq.expected_slot_count,
+          presentSlotCount: eq.present_slot_count,
+          missingSlotCount: eq.missing_slot_count,
+          missingSlotRanges: (eq.missing_slots || []).map((slot) => ({
+            slotStart: new Date(slot.slot_start),
+            slotEnd: new Date(slot.slot_end),
+            label: slot.label,
+          })),
+        }));
+        const anyMisses = mapped.some((m) => (m.missingSlotCount || 0) > 0);
+        if (!anyMisses) {
+          setMissedEquipments(null);
+          setShowMissedReadingPopup(false);
+          setMissedReadingNextDue(null);
           return;
         }
-        setMissedEquipments(null);
-        setShowMissedReadingPopup(false);
-        setMissedReadingNextDue(null);
+        mapped.sort((a, b) => {
+          const diff = (b.missingSlotCount || 0) - (a.missingSlotCount || 0);
+          if (diff !== 0) return diff;
+          return (a.equipmentName || a.equipmentId).localeCompare(b.equipmentName || b.equipmentId);
+        });
+        setMissedEquipments(mapped);
+        const firstNext =
+          mapped
+            .map((m) => m.nextDue)
+            .filter((d): d is Date => !!d)
+            .sort((a, b) => a.getTime() - b.getTime())[0] || null;
+        setMissedReadingNextDue(firstNext);
       })
       .catch(() => {
         setMissedEquipments(null);
@@ -640,27 +911,29 @@ const FilterLogBookPage: React.FC = () => {
     entryToleranceMinutes,
   ]);
 
-  const hasMissedReadings =
-    !!missedReadingNextDue || (missedEquipments?.length ?? 0) > 0;
   const missedReadingsCount = getTotalMissingSlots(missedEquipments);
+  const hasMissedReadings = missedReadingsCount > 0;
 
   // After equipment selection, fetch previous readings with entered-by for that equipment
   useEffect(() => {
-    if (!formData.equipmentId) {
+    const timingMeta = filterIdToEquipmentInterval.get(formData.equipmentId);
+    const eqIdForApi =
+      selectedEquipmentUuid || timingMeta?.equipment_id || formData.equipmentId;
+    if (!eqIdForApi) {
       setPreviousReadingsForEquipment([]);
       return;
     }
     let cancelled = false;
     setPreviousReadingsLoading(true);
     filterLogAPI
-      .list({ equipment_id: formData.equipmentId })
+      .list({ equipment_id: eqIdForApi })
       .then((raw: any[]) => {
         if (cancelled) return;
         const list: FilterLog[] = (Array.isArray(raw) ? raw : []).slice(0, 10).map((log: any) => {
           const timestamp = new Date(log.timestamp);
           return {
             id: log.id,
-            equipmentId: log.equipment_id,
+            equipmentId: log.equipment_id ?? "",
             category: log.category,
             filterNo: log.filter_no,
             filterMicron: log.filter_micron || "",
@@ -702,12 +975,94 @@ const FilterLogBookPage: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [formData.equipmentId]);
+  }, [formData.equipmentId, selectedEquipmentUuid, filterIdToEquipmentInterval]);
 
   const uniqueCheckedBy = useMemo(() => {
     if (!logs.length) return [];
     return Array.from(new Set(logs.map((log) => log.checkedBy).filter(Boolean))).sort();
   }, [logs]);
+
+  /** List column: DB may store Equipment.id or legacy filter_id in equipment_id. */
+  const resolveEquipmentDisplayForLog = useCallback(
+    (log: FilterLog): string => {
+      const raw = (log.equipmentId || "").trim();
+
+      const byId = equipmentOptions.find(
+        (o) => o.id && raw && o.id.toLowerCase() === raw.toLowerCase(),
+      );
+      if (byId) return `${byId.equipment_number} – ${byId.name}`;
+
+      const fromAssign = pickAssignmentForEquipmentColumn(log, filterAssignmentsLookup);
+      const assignLabel = fromAssign ? formatAssignmentEquipmentLabel(fromAssign) : "";
+      if (assignLabel) return assignLabel;
+
+      const meta =
+        filterIdToEquipmentInterval.get(raw) ??
+        (raw ? filterIdToEquipmentInterval.get(raw.toLowerCase()) : undefined) ??
+        filterIdToEquipmentInterval.get(log.filterNo);
+      const uuid = meta?.equipment_id;
+      if (uuid) {
+        const byUuid = equipmentOptions.find(
+          (o) => o.id && o.id.toLowerCase() === uuid.toLowerCase(),
+        );
+        if (byUuid) return `${byUuid.equipment_number} – ${byUuid.name}`;
+        const a2 = pickAssignmentForEquipmentColumn(
+          { ...log, equipmentId: uuid },
+          filterAssignmentsLookup,
+        );
+        const lab = a2 ? formatAssignmentEquipmentLabel(a2) : "";
+        if (lab) return lab;
+      }
+
+      const tag = (log.tagInfo || "").trim();
+      const pipe = tag.indexOf(" | ");
+      if (pipe > 0) return tag.slice(0, pipe).trim();
+
+      return raw || "—";
+    },
+    [equipmentOptions, filterIdToEquipmentInterval, filterAssignmentsLookup],
+  );
+
+  const resolveAreaCategoryForLog = useCallback(
+    (log: FilterLog): string => {
+      const stored = (log.areaCategory || "").trim();
+      if (stored) return stored;
+      const eq = equipmentUuidForFilterLogRow(log, equipmentOptions, filterIdToEquipmentInterval);
+      if (!eq) return "—";
+      const matches = filterAssignmentsLookup.filter(
+        (a) =>
+          a.equipment === eq &&
+          a.filter_id === log.filterNo &&
+          a.is_active !== false,
+      );
+      if (matches.length === 0) return "—";
+      const distinct = [
+        ...new Set(matches.map((m) => (m.area_category || "").trim()).filter(Boolean)),
+      ];
+      if (distinct.length === 1) return distinct[0];
+      if (distinct.length > 1) {
+        const logTag = (log.tagInfo || "").trim();
+        if (logTag) {
+          const narrowed = matches.filter((m) => {
+            const t = (m.tag_info || "").trim();
+            if (!t) return false;
+            return t === logTag || logTag.startsWith(t) || t.startsWith(logTag);
+          });
+          if (narrowed.length === 1) {
+            const ac = (narrowed[0].area_category || "").trim();
+            return ac || "General (unspecified area)";
+          }
+          const narrowedAreas = [
+            ...new Set(narrowed.map((m) => (m.area_category || "").trim()).filter(Boolean)),
+          ];
+          if (narrowedAreas.length === 1) return narrowedAreas[0];
+        }
+        return "—";
+      }
+      return "General (unspecified area)";
+    },
+    [equipmentOptions, filterIdToEquipmentInterval, filterAssignmentsLookup],
+  );
 
   const applyFilters = () => {
     let result = [...logs];
@@ -721,11 +1076,16 @@ const FilterLogBookPage: React.FC = () => {
       result = result.filter((log) => log.status === filters.status);
     }
     if (filters.equipmentId) {
-      result = result.filter(
-        (log) =>
-          log.equipmentId &&
-          log.equipmentId.toString().toLowerCase() === filters.equipmentId.toLowerCase(),
-      );
+      const fid = filters.equipmentId.toLowerCase();
+      result = result.filter((log) => {
+        if (!log.equipmentId) return false;
+        if (log.equipmentId.toString().toLowerCase() === fid) return true;
+        const fromStored = filterIdToEquipmentInterval.get(log.equipmentId)?.equipment_id;
+        if (fromStored && fromStored.toLowerCase() === fid) return true;
+        const fromFilterNo = filterIdToEquipmentInterval.get(log.filterNo)?.equipment_id;
+        if (fromFilterNo && fromFilterNo.toLowerCase() === fid) return true;
+        return false;
+      });
     }
     if (filters.category !== "all") {
       result = result.filter((log) => log.category === filters.category);
@@ -841,34 +1201,16 @@ const FilterLogBookPage: React.FC = () => {
 
   const resetForm = () => {
     setSelectedEquipmentUuid("");
+    setAssignmentsOnEquipment([]);
+    setSelectedAreaCategoryKey(AREA_CATEGORY_DEFAULT_KEY);
+    setSelectedAssignmentId("");
+    setScheduleFrequencies(emptyScheduleFreq());
+    scheduleFreqRef.current = emptyScheduleFreq();
     setEntryLogInterval("");
     setEntryShiftDurationHours("");
     setEntryToleranceMinutes("");
     const today = getTodayDateString();
-    const base = new Date(today);
-    const addDays = (d: Date, days: number) => {
-      const copy = new Date(d.getTime());
-      copy.setDate(copy.getDate() + days);
-      return copy;
-    };
-    const addMonths = (d: Date, months: number) => {
-      const copy = new Date(d.getTime());
-      const day = copy.getDate();
-      copy.setMonth(copy.getMonth() + months);
-      if (copy.getDate() !== day) copy.setDate(0);
-      return copy;
-    };
-    const addYears = (d: Date, years: number) => {
-      const copy = new Date(d.getTime());
-      const day = copy.getDate();
-      copy.setFullYear(copy.getFullYear() + years);
-      if (copy.getDate() !== day) copy.setDate(0);
-      return copy;
-    };
-    const fmt = (d: Date) => format(d, "yyyy-MM-dd");
-    const integrityDue = addDays(addMonths(base, 6), 15);
-    const cleaningDue = addDays(addMonths(base, 6), 15);
-    const replacementDue = addDays(addYears(base, 1), 30);
+    const due = dueDatesForInstalled(today, emptyScheduleFreq());
     setFormData({
       equipmentId: "",
       category: "hvac",
@@ -879,9 +1221,9 @@ const FilterLogBookPage: React.FC = () => {
       installedDate: today,
       integrityDoneDate: "",
       cleaningDoneDate: "",
-      integrityDueDate: fmt(integrityDue),
-      cleaningDueDate: fmt(cleaningDue),
-      replacementDueDate: fmt(replacementDue),
+      integrityDueDate: due.integrityDueDate,
+      cleaningDueDate: due.cleaningDueDate,
+      replacementDueDate: due.replacementDueDate,
       remarks: "",
       date: "",
       time: "",
@@ -937,6 +1279,46 @@ const FilterLogBookPage: React.FC = () => {
       fromTime: log.activity_from_time || "",
       toTime: log.activity_to_time || "",
     });
+    setScheduleFrequencies(emptyScheduleFreq());
+    scheduleFreqRef.current = emptyScheduleFreq();
+    const timingMeta = filterIdToEquipmentInterval.get(log.equipmentId);
+    if (timingMeta?.equipment_id) {
+      setSelectedEquipmentUuid(timingMeta.equipment_id);
+      void (async () => {
+        try {
+          const assigns = (await filterAssignmentAPI.list({
+            equipment: timingMeta.equipment_id!,
+          })) as FilterAssignmentRow[];
+          const list = assigns.filter((a) => a.is_active !== false);
+          setAssignmentsOnEquipment(list);
+          const m = list.find(
+            (a) =>
+              a.equipment === log.equipmentId ||
+              a.filter_id === log.filterNo ||
+              a.filter_id === log.equipmentId,
+          );
+          if (m) {
+            setSelectedAreaCategoryKey(assignmentAreaCategoryKey(m.area_category));
+            setSelectedAssignmentId(m.id);
+          } else {
+            const first = list[0];
+            setSelectedAreaCategoryKey(
+              first ? assignmentAreaCategoryKey(first.area_category) : AREA_CATEGORY_DEFAULT_KEY,
+            );
+            setSelectedAssignmentId(first?.id ?? "");
+          }
+        } catch {
+          setAssignmentsOnEquipment([]);
+          setSelectedAreaCategoryKey(AREA_CATEGORY_DEFAULT_KEY);
+          setSelectedAssignmentId("");
+        }
+      })();
+    } else {
+      setSelectedEquipmentUuid("");
+      setAssignmentsOnEquipment([]);
+      setSelectedAreaCategoryKey(AREA_CATEGORY_DEFAULT_KEY);
+      setSelectedAssignmentId("");
+    }
     setEditingLogId(log.id);
     setIsDialogOpen(true);
   };
@@ -949,11 +1331,17 @@ const FilterLogBookPage: React.FC = () => {
     }
     // For non-operation activities, do not block submit on all readings fields.
     if (!formData.equipmentId) {
-      toast.error("Please select Filter (from Register).");
+      toast.error("Select equipment with an assigned filter (Filter Register → Assign to equipment).");
       return;
     }
-    const timingMeta = filterIdToEquipmentInterval.get(formData.equipmentId);
-    const equipmentIdForPatch = timingMeta?.equipment_id || selectedEquipmentUuid || "";
+    // formData.equipmentId is the assignment filter_id (e.g. FMT-0001). The interval map uses that
+    // key for only one row when the same filter is on multiple equipment—wrong for save. Always
+    // prefer the equipment UUID from the Equipment Name dropdown.
+    const equipUuid = (selectedEquipmentUuid || "").trim();
+    const timingMeta =
+      (equipUuid ? filterIdToEquipmentInterval.get(equipUuid) : undefined) ??
+      filterIdToEquipmentInterval.get(formData.equipmentId);
+    const equipmentIdForPatch = equipUuid || timingMeta?.equipment_id || "";
     if (equipmentIdForPatch) {
       if (
         entryLogInterval === "shift" &&
@@ -975,7 +1363,7 @@ const FilterLogBookPage: React.FC = () => {
       });
       setFilterIdToEquipmentInterval((prev) => {
         const next = new Map(prev);
-        next.set(formData.equipmentId, {
+        const meta = {
           ...(next.get(formData.equipmentId) || {}),
           equipment_id: equipmentIdForPatch,
           log_entry_interval: entryLogInterval || null,
@@ -985,7 +1373,11 @@ const FilterLogBookPage: React.FC = () => {
               : null,
           tolerance_minutes:
             entryToleranceMinutes === "" ? null : Math.max(0, Number(entryToleranceMinutes) || 0),
-        });
+        };
+        next.set(formData.equipmentId, meta);
+        if (equipmentIdForPatch && equipmentIdForPatch !== formData.equipmentId) {
+          next.set(equipmentIdForPatch, { ...meta, equipment_id: equipmentIdForPatch });
+        }
         return next;
       });
     }
@@ -995,7 +1387,7 @@ const FilterLogBookPage: React.FC = () => {
     }
     if (maintenanceTimings.activityType === "operation") {
       const required = [
-        { key: "equipmentId", label: "Filter (from Register)" },
+        { key: "equipmentId", label: "Assigned filter (select equipment above)" },
         { key: "filterNo", label: "Filter No" },
         { key: "tagInfo", label: "Tag Information" },
         { key: "filterMicron", label: "Filter Micron" },
@@ -1026,8 +1418,14 @@ const FilterLogBookPage: React.FC = () => {
           ? new Date(`${formData.date}T${formData.time}:00`)
           : new Date();
 
+      const assignmentForSubmit =
+        assignmentsForSelectedArea.find((a) => a.id === selectedAssignmentId) ??
+        assignmentsOnEquipment.find((a) => a.id === selectedAssignmentId);
+      const areaCategorySubmit = (assignmentForSubmit?.area_category || "").trim() || null;
+
       const payload: any = {
-        equipment_id: formData.equipmentId,
+        equipment_id: equipmentIdForPatch || formData.equipmentId,
+        area_category: areaCategorySubmit,
         activity_type: maintenanceTimings.activityType,
         activity_from_date: maintenanceTimings.fromDate || null,
         activity_to_date: maintenanceTimings.toDate || null,
@@ -1088,7 +1486,14 @@ const FilterLogBookPage: React.FC = () => {
       await refreshLogs();
     } catch (error: any) {
       console.error("Error saving filter log:", error);
-      toast.error(error?.message || "Failed to save filter log entry");
+      const raw = error?.data?.detail;
+      const msg =
+        typeof raw === "string"
+          ? raw
+          : Array.isArray(raw)
+            ? raw.map((x: unknown) => (typeof x === "string" ? x : String(x))).join(" ")
+            : error?.message || "Failed to save filter log entry";
+      toast.error(msg);
     }
   };
 
@@ -1320,7 +1725,11 @@ const FilterLogBookPage: React.FC = () => {
               variant="outline"
               disabled={!hasMissedReadings}
               onClick={() => setShowMissedReadingPopup(true)}
-              title={!hasMissedReadings ? "No missed readings" : "Show missing readings"}
+              title={
+                !hasMissedReadings
+                  ? "No missed readings"
+                  : "Expected readings for the selected day across all eligible filter equipment (hourly/shift). The count is not limited to rows shown in the table below."
+              }
             >
               <Clock className="w-4 h-4 mr-2" />
               Missing Readings
@@ -1416,37 +1825,123 @@ const FilterLogBookPage: React.FC = () => {
                     );
                   })()}
 
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Equipment Name *</Label>
+                    <Select
+                      value={selectedEquipmentUuid}
+                      onValueChange={(value) => onEquipmentSelectedForTagInfo(value)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select equipment (loads assigned filter & approved schedules)" />
+                      </SelectTrigger>
+                      <SelectContent
+                        className="!z-[9999] max-h-60 max-w-[min(100vw-2rem,24rem)] overflow-y-auto"
+                        position="popper"
+                      >
+                        {equipmentOptions.length === 0 ? (
+                          <SelectItem value="__none__" disabled className="text-muted-foreground">
+                            No equipment available
+                          </SelectItem>
+                        ) : (
+                          equipmentOptions.map((eq) => (
+                            <SelectItem key={eq.id} value={eq.id}>
+                              {eq.equipment_number} – {eq.name}
+                            </SelectItem>
+                          ))
+                        )}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground max-w-full break-words">
+                      {equipmentOptions.length === 0 ? (
+                        <>
+                          No eligible equipment yet. Assign a filter in{" "}
+                          <span className="font-medium">Filter Register</span>, then approve{" "}
+                          <span className="font-medium">replacement</span>,{" "}
+                          <span className="font-medium">cleaning</span>, and{" "}
+                          <span className="font-medium">integrity</span> schedules under{" "}
+                          <span className="font-medium">Filter → Schedule approvals</span>.
+                        </>
+                      ) : (
+                        <>
+                          Uses the active assignment and only{" "}
+                          <span className="font-medium">approved</span> filter schedules for frequencies and due
+                          dates.
+                        </>
+                      )}
+                    </p>
+                  </div>
+
+                  {assignmentsOnEquipment.length > 0 ? (
                     <div className="space-y-2">
-                      <Label>Filter (from Register) *</Label>
+                      <Label>Area category{uniqueAreaCategoryKeys.length > 1 ? " *" : ""}</Label>
+                      {uniqueAreaCategoryKeys.length > 1 ? (
+                        <Select
+                          value={selectedAreaCategoryKey}
+                          onValueChange={(value) => {
+                            if (selectedEquipmentUuid) {
+                              void onAreaCategorySelected(value, selectedEquipmentUuid);
+                            }
+                          }}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select area for this equipment" />
+                          </SelectTrigger>
+                          <SelectContent className="!z-[9999] max-h-60 overflow-y-auto" position="popper">
+                            {uniqueAreaCategoryKeys.map((k) => (
+                              <SelectItem key={k} value={k}>
+                                {assignmentAreaCategoryLabel(k)}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <Input
+                          type="text"
+                          value={assignmentAreaCategoryLabel(selectedAreaCategoryKey)}
+                          readOnly
+                          disabled
+                          className="bg-muted"
+                          aria-label="Area category"
+                        />
+                      )}
+                      <p className="text-xs text-muted-foreground max-w-full break-words">
+                        {uniqueAreaCategoryKeys.length > 1
+                          ? "Choose the area when this equipment has filters assigned under more than one area category in Filter Register."
+                          : "From Filter Register when assigning the filter to this equipment. Shown for all equipment so it matches Schedule approvals."}
+                      </p>
+                    </div>
+                  ) : null}
+
+                  {assignmentsForSelectedArea.length > 1 ? (
+                    <div className="space-y-2">
+                      <Label>Assigned filter *</Label>
                       <Select
-                        value={formData.equipmentId}
-                        onValueChange={(value) => onFilterFromRegisterSelected(value)}
+                        value={selectedAssignmentId || "__none__"}
+                        onValueChange={(value) => {
+                          if (value !== "__none__" && selectedEquipmentUuid) {
+                            void onAssignmentRowSelected(value, selectedEquipmentUuid);
+                          }
+                        }}
                       >
                         <SelectTrigger>
-                          <SelectValue placeholder="Select filter from register" />
+                          <SelectValue placeholder="Select filter on this equipment" />
                         </SelectTrigger>
                         <SelectContent className="!z-[9999] max-h-60 overflow-y-auto" position="popper">
-                          {filterRegisterOptions.length === 0 ? (
-                            <SelectItem value="__none__" disabled className="text-muted-foreground">
-                              No approved filters. Add and approve in Filter Register.
+                          {assignmentsForSelectedArea.map((a) => (
+                            <SelectItem key={a.id} value={a.id}>
+                              {formatAssignmentSelectLabel(a, assignmentsForSelectedArea)}
                             </SelectItem>
-                          ) : (
-                            filterRegisterOptions.map((f) => (
-                              <SelectItem key={f.id} value={f.filter_id}>
-                                {f.filter_id} – {f.make} {f.model}
-                                {f.category_name ? ` (${f.category_name})` : ""}
-                              </SelectItem>
-                            ))
-                          )}
+                          ))}
                         </SelectContent>
                       </Select>
-                      {formData.equipmentId ? (
-                        <div className="text-xs text-muted-foreground">
-                          Selected: {formData.equipmentId}
-                        </div>
-                      ) : null}
+                      <p className="text-xs text-muted-foreground max-w-full break-words">
+                        If two lines look the same, the extra text is tag info or assignment id to tell them
+                        apart.
+                      </p>
                     </div>
+                  ) : null}
+
+                  <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label>Category</Label>
                       <Input
@@ -1455,13 +1950,26 @@ const FilterLogBookPage: React.FC = () => {
                         readOnly
                         disabled
                         className="bg-muted"
-                        placeholder="Auto-filled from selected filter"
+                        placeholder="From assignment"
                       />
-                      <p className="text-xs text-muted-foreground">
-                        Fetched from Filter Register when you select a filter above.
-                      </p>
+                      <p className="text-xs text-muted-foreground">From filter assignment category.</p>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Filter No *</Label>
+                      <Input
+                        type="text"
+                        value={formData.filterNo}
+                        onChange={(e) =>
+                          setFormData({
+                            ...formData,
+                            filterNo: e.target.value,
+                          })
+                        }
+                        placeholder="e.g., FMT-0001"
+                      />
                     </div>
                   </div>
+
                   <div className="grid grid-cols-3 gap-4">
                     <div className="space-y-2">
                       <Label>Log entry interval</Label>
@@ -1548,49 +2056,6 @@ const FilterLogBookPage: React.FC = () => {
                   <MaintenanceTimingsSection value={maintenanceTimings} onChange={setMaintenanceTimings} />
 
                   <div className="space-y-2">
-                    <Label>Equipment Name (for tag info)</Label>
-                    <Select
-                      value={selectedEquipmentUuid}
-                      onValueChange={(value) => onEquipmentSelectedForTagInfo(value)}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select equipment to fetch tag information" />
-                      </SelectTrigger>
-                      <SelectContent className="!z-[9999] max-h-60 overflow-y-auto" position="popper">
-                        {equipmentOptions.length === 0 ? (
-                          <SelectItem value="__none__" disabled className="text-muted-foreground">
-                            No equipment found. Assign filters to equipment in Filter Register first.
-                          </SelectItem>
-                        ) : (
-                          equipmentOptions.map((eq) => (
-                            <SelectItem key={eq.id} value={eq.id}>
-                              {eq.equipment_number} – {eq.name}
-                            </SelectItem>
-                          ))
-                        )}
-                      </SelectContent>
-                    </Select>
-                    <p className="text-xs text-muted-foreground">
-                      Select the equipment where this filter is installed; tag information will be auto-filled from the filter assignment.
-                    </p>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label>Filter No *</Label>
-                    <Input
-                      type="text"
-                      value={formData.filterNo}
-                      onChange={(e) =>
-                        setFormData({
-                          ...formData,
-                          filterNo: e.target.value,
-                        })
-                      }
-                      placeholder="e.g., F-001"
-                    />
-                  </div>
-
-                  <div className="space-y-2">
                     <Label>Tag Information (auto-fetched)</Label>
                     <Input
                       type="text"
@@ -1601,7 +2066,7 @@ const FilterLogBookPage: React.FC = () => {
                           tagInfo: e.target.value,
                         })
                       }
-                      placeholder="Select equipment above to auto-fill from assignment (editable)"
+                      placeholder="Auto-filled from assignment (editable)"
                     />
                   </div>
 
@@ -1675,6 +2140,22 @@ const FilterLogBookPage: React.FC = () => {
 
                   <div className="grid grid-cols-3 gap-4">
                     <div className="space-y-2">
+                      <Label>Replacement Due Date</Label>
+                      <Input
+                        type="date"
+                        value={formData.replacementDueDate}
+                        onChange={(e) =>
+                          setFormData({
+                            ...formData,
+                            replacementDueDate: e.target.value,
+                          })
+                        }
+                      />
+                      <p className="mt-1 text-[11px] text-muted-foreground">
+                        Calculated from installed date and approved assignment schedules; you may override.
+                      </p>
+                    </div>
+                    <div className="space-y-2">
                       <Label>Integrity Due Date</Label>
                       <Input
                         type="date"
@@ -1687,7 +2168,7 @@ const FilterLogBookPage: React.FC = () => {
                         }
                       />
                       <p className="mt-1 text-[11px] text-muted-foreground">
-                        Auto from installed date (6 months + 15 days); you may override.
+                        Calculated from installed date and approved assignment schedules; you may override.
                       </p>
                     </div>
                     <div className="space-y-2">
@@ -1703,23 +2184,7 @@ const FilterLogBookPage: React.FC = () => {
                         }
                       />
                       <p className="mt-1 text-[11px] text-muted-foreground">
-                        Auto from installed date (6 months + 15 days); you may override.
-                      </p>
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Replacement Due Date</Label>
-                      <Input
-                        type="date"
-                        value={formData.replacementDueDate}
-                        onChange={(e) =>
-                          setFormData({
-                            ...formData,
-                            replacementDueDate: e.target.value,
-                          })
-                        }
-                      />
-                      <p className="mt-1 text-[11px] text-muted-foreground">
-                        Target 1 year ±30 days from installed date; you may override.
+                        Calculated from installed date and approved assignment schedules; you may override.
                       </p>
                     </div>
                   </div>
@@ -1837,10 +2302,9 @@ const FilterLogBookPage: React.FC = () => {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All</SelectItem>
-                    {filterRegisterOptions.map((f) => (
-                      <SelectItem key={f.id} value={f.filter_id}>
-                        {f.filter_id}
-                        {f.category_name ? ` – ${f.category_name}` : ""}
+                    {filterIdFilterOptions.map((f) => (
+                      <SelectItem key={f.filter_id} value={f.filter_id}>
+                        {f.label}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -2167,7 +2631,7 @@ const FilterLogBookPage: React.FC = () => {
             )}
           </div>
           <div className="overflow-x-auto">
-            <table className="min-w-full text-xs md:text-sm" style={{ minWidth: '1500px' }}>
+            <table className="min-w-full text-xs md:text-sm" style={{ minWidth: "1780px" }}>
               <thead className="bg-muted">
                 <tr className="border-b">
                   <th className="px-3 py-2 text-center align-middle w-12">
@@ -2185,8 +2649,11 @@ const FilterLogBookPage: React.FC = () => {
                   <th className="px-3 py-2 text-center align-middle w-[100px]">
                     Time
                   </th>
-                  <th className="px-3 py-2 text-center align-middle w-[150px]">
-                    Equipment name
+                  <th className="px-3 py-2 text-center align-middle min-w-[280px] w-[280px]">
+                    <span className="whitespace-nowrap">Equipment name</span>
+                  </th>
+                  <th className="px-3 py-2 text-center align-middle min-w-[130px] w-[140px]">
+                    <span className="whitespace-nowrap">Area category</span>
                   </th>
                   <th className="px-3 py-2 text-center align-middle w-[130px]">
                     Category
@@ -2249,7 +2716,7 @@ const FilterLogBookPage: React.FC = () => {
               <tbody>
                 {filteredLogs.length === 0 && (
                   <tr>
-                    <td colSpan={21} className="px-4 py-6 text-center text-sm text-muted-foreground">
+                    <td colSpan={22} className="px-4 py-6 text-center text-sm text-muted-foreground">
                       {isLoading ? "Loading entries..." : "No entries found"}
                     </td>
                   </tr>
@@ -2295,7 +2762,12 @@ const FilterLogBookPage: React.FC = () => {
                       </td>
                       <td className="px-3 py-2 align-top">{dateStr}</td>
                       <td className="px-3 py-2 align-top">{timeStr}</td>
-                      <td className="px-3 py-2 align-top">{log.equipmentId}</td>
+                      <td className="px-3 py-2 align-top text-center whitespace-nowrap min-w-[280px]">
+                        {resolveEquipmentDisplayForLog(log)}
+                      </td>
+                      <td className="px-3 py-2 align-top text-center text-sm whitespace-nowrap min-w-[130px]">
+                        {resolveAreaCategoryForLog(log)}
+                      </td>
                       <td className="px-3 py-2 align-top text-center text-sm whitespace-nowrap min-w-[150px]">
                         {log.category === "hvac" && "HVAC"}
                         {log.category === "water_system" && "Water system"}

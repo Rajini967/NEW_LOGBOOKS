@@ -2,46 +2,70 @@ import React from 'react';
 import { Document, Page, View, Text, StyleSheet } from '@react-pdf/renderer';
 import { PDFHeader } from '../PDFHeader';
 
+/** Column widths — must total 100% (landscape A4). */
+const W = {
+  date: '5%',
+  time: '4%',
+  equipment: '15%',
+  category: '6%',
+  filterNo: '7%',
+  micron: '5%',
+  fsize: '8%',
+  installed: '6%',
+  intDue: '5%',
+  clnDue: '5%',
+  repDue: '5%',
+  remarks: '11%',
+  doneBy: '9%',
+  apprBy: '9%',
+} as const;
+
 const styles = StyleSheet.create({
   page: {
-    padding: 40,
-    fontSize: 10,
+    padding: 24,
+    fontSize: 8,
     fontFamily: 'Helvetica',
   },
   title: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: 'bold',
     textAlign: 'center',
-    marginTop: 20,
-    marginBottom: 20,
+    marginTop: 12,
+    marginBottom: 6,
     textTransform: 'uppercase',
   },
   subtitle: {
     fontSize: 10,
     textAlign: 'center',
-    marginTop: -10,
-    marginBottom: 10,
+    marginBottom: 2,
+  },
+  subsubtitle: {
+    fontSize: 9,
+    textAlign: 'center',
+    marginBottom: 8,
+    color: '#333333',
   },
   table: {
     width: '100%',
-    marginTop: 10,
-    marginBottom: 20,
+    marginTop: 6,
+    marginBottom: 12,
   },
   tableRow: {
     flexDirection: 'row',
     borderBottom: '1 solid #000',
-    minHeight: 20,
+    alignItems: 'stretch',
   },
   tableHeader: {
-    backgroundColor: '#e0e0e0',
+    backgroundColor: '#e8e8e8',
     fontWeight: 'bold',
     borderBottom: '2 solid #000',
   },
   tableCell: {
-    padding: 6,
-    fontSize: 8,
+    padding: 4,
+    fontSize: 7,
     borderRight: '1 solid #000',
     textAlign: 'center',
+    justifyContent: 'center',
   },
   tableCellLeft: {
     textAlign: 'left',
@@ -49,12 +73,17 @@ const styles = StyleSheet.create({
   tableCellLast: {
     borderRight: 'none',
   },
-  footer: {
-    marginTop: 20,
-    fontSize: 10,
+  cellHeader: {
+    fontSize: 7,
+    fontWeight: 'bold',
   },
-  footerLine: {
-    marginBottom: 5,
+  filterNoCell: {
+    fontSize: 8,
+    fontWeight: 'bold',
+  },
+  footer: {
+    marginTop: 16,
+    fontSize: 9,
   },
 });
 
@@ -62,6 +91,7 @@ export interface FilterMonitoringLog {
   date: string;
   time: string;
   equipmentId: string;
+  equipmentDisplayName?: string;
   category: string;
   filterNo: string;
   filterMicron?: string;
@@ -76,6 +106,7 @@ export interface FilterMonitoringLog {
   replacementDueDate: string;
   remarks?: string;
   checkedBy?: string;
+  approvedByName?: string;
 }
 
 interface FilterMonitoringData {
@@ -89,77 +120,127 @@ interface FilterMonitoringCertificateProps {
 }
 
 export function FilterMonitoringCertificate({ data }: FilterMonitoringCertificateProps) {
-  const footerRemarks =
-    data.logs.find((log) => (log.remarks || '').toString().trim().length > 0)?.remarks || '';
-  const doneBy = data.logs[0]?.checkedBy ?? '';
-  const equipmentId = data.logs[0]?.equipmentId || '-';
+  const first = data.logs[0];
+  const equipTitle =
+    (first?.equipmentDisplayName && String(first.equipmentDisplayName).trim()) ||
+    first?.equipmentId ||
+    '—';
+
+  const renderRow = (log: FilterMonitoringLog, index: number, isHeader: boolean) => (
+    <View key={isHeader ? 'hdr' : `row-${index}`} style={[styles.tableRow, isHeader && styles.tableHeader]}>
+      <Text style={[styles.tableCell, { width: W.date }, isHeader && styles.cellHeader]} wrap>
+        {isHeader ? 'Date' : log.date || '—'}
+      </Text>
+      <Text style={[styles.tableCell, { width: W.time }, isHeader && styles.cellHeader]} wrap>
+        {isHeader ? 'Time' : log.time || '—'}
+      </Text>
+      <Text
+        style={[styles.tableCell, styles.tableCellLeft, { width: W.equipment }, isHeader && styles.cellHeader]}
+        wrap
+      >
+        {isHeader ? 'Equipment' : log.equipmentDisplayName || log.equipmentId || '—'}
+      </Text>
+      <Text
+        style={[styles.tableCell, styles.tableCellLeft, { width: W.category }, isHeader && styles.cellHeader]}
+        wrap
+      >
+        {isHeader ? 'Category' : log.category || '—'}
+      </Text>
+      <Text
+        style={[
+          styles.tableCell,
+          { width: W.filterNo },
+          isHeader ? styles.cellHeader : styles.filterNoCell,
+        ]}
+        wrap
+      >
+        {isHeader ? 'Filter No' : log.filterNo || '—'}
+      </Text>
+      <Text style={[styles.tableCell, { width: W.micron }, isHeader && styles.cellHeader]} wrap>
+        {isHeader ? 'Micron' : log.filterMicron ?? '—'}
+      </Text>
+      <Text style={[styles.tableCell, { width: W.fsize }, isHeader && styles.cellHeader]} wrap>
+        {isHeader ? 'Filter size' : log.filterSize ?? '—'}
+      </Text>
+      <Text style={[styles.tableCell, { width: W.installed }, isHeader && styles.cellHeader]} wrap>
+        {isHeader ? 'Installed' : log.installedDate || '—'}
+      </Text>
+      <Text style={[styles.tableCell, { width: W.intDue }, isHeader && styles.cellHeader]} wrap>
+        {isHeader ? 'Int. due' : log.integrityDueDate || '—'}
+      </Text>
+      <Text style={[styles.tableCell, { width: W.clnDue }, isHeader && styles.cellHeader]} wrap>
+        {isHeader ? 'Cln. due' : log.cleaningDueDate || '—'}
+      </Text>
+      <Text style={[styles.tableCell, { width: W.repDue }, isHeader && styles.cellHeader]} wrap>
+        {isHeader ? 'Repl. due' : log.replacementDueDate || '—'}
+      </Text>
+      <Text
+        style={[styles.tableCell, styles.tableCellLeft, { width: W.remarks }, isHeader && styles.cellHeader]}
+        wrap
+      >
+        {isHeader ? 'Remarks' : log.remarks || '—'}
+      </Text>
+      <Text
+        style={[styles.tableCell, styles.tableCellLeft, { width: W.doneBy }, isHeader && styles.cellHeader]}
+        wrap
+      >
+        {isHeader ? 'Done by' : log.checkedBy || '—'}
+      </Text>
+      <Text
+        style={[
+          styles.tableCell,
+          styles.tableCellLeft,
+          { width: W.apprBy },
+          isHeader && styles.cellHeader,
+          styles.tableCellLast,
+        ]}
+        wrap
+      >
+        {isHeader ? 'Approved by' : log.approvedByName || '—'}
+      </Text>
+    </View>
+  );
+
+  const emptyRow = (key: string) => (
+    <View key={key} style={styles.tableRow}>
+      <Text style={[styles.tableCell, { width: W.date }]}> </Text>
+      <Text style={[styles.tableCell, { width: W.time }]}> </Text>
+      <Text style={[styles.tableCell, { width: W.equipment }]}> </Text>
+      <Text style={[styles.tableCell, { width: W.category }]}> </Text>
+      <Text style={[styles.tableCell, { width: W.filterNo }]}> </Text>
+      <Text style={[styles.tableCell, { width: W.micron }]}> </Text>
+      <Text style={[styles.tableCell, { width: W.fsize }]}> </Text>
+      <Text style={[styles.tableCell, { width: W.installed }]}> </Text>
+      <Text style={[styles.tableCell, { width: W.intDue }]}> </Text>
+      <Text style={[styles.tableCell, { width: W.clnDue }]}> </Text>
+      <Text style={[styles.tableCell, { width: W.repDue }]}> </Text>
+      <Text style={[styles.tableCell, { width: W.remarks }]}> </Text>
+      <Text style={[styles.tableCell, { width: W.doneBy }]}> </Text>
+      <Text style={[styles.tableCell, styles.tableCellLast, { width: W.apprBy }]}> </Text>
+    </View>
+  );
+
   return (
     <Document>
-      <Page size="A4" style={styles.page}>
+      <Page size="A4" orientation="landscape" style={styles.page}>
         <PDFHeader />
 
         <Text style={styles.title}>RAW DATA FOR FILTER MONITORING</Text>
-        <Text style={styles.subtitle}>Equipment ID: {equipmentId}</Text>
+        <Text style={styles.subtitle}>Equipment: {equipTitle}</Text>
+        {first?.filterNo ? (
+          <Text style={styles.subsubtitle}>Filter number: {first.filterNo}</Text>
+        ) : null}
 
         <View style={styles.table}>
-          <View style={[styles.tableRow, styles.tableHeader]}>
-            <Text style={[styles.tableCell, { width: '8%' }]}>Date</Text>
-            <Text style={[styles.tableCell, { width: '6%' }]}>Time</Text>
-            <Text style={[styles.tableCell, styles.tableCellLeft, { width: '10%' }]}>Equipment ID</Text>
-            <Text style={[styles.tableCell, styles.tableCellLeft, { width: '10%' }]}>Category</Text>
-            <Text style={[styles.tableCell, { width: '8%' }]}>Filter No</Text>
-            <Text style={[styles.tableCell, { width: '6%' }]}>Filter Micron</Text>
-            <Text style={[styles.tableCell, { width: '10%' }]}>Filter Size</Text>
-            <Text style={[styles.tableCell, { width: '8%' }]}>Installed Date</Text>
-            <Text style={[styles.tableCell, { width: '8%' }]}>Integrity Due</Text>
-            <Text style={[styles.tableCell, { width: '8%' }]}>Cleaning Due</Text>
-            <Text style={[styles.tableCell, { width: '8%' }]}>Replacement Due</Text>
-            <Text style={[styles.tableCell, { width: '6%' }]}>Remarks</Text>
-            <Text style={[styles.tableCell, { width: '10%' }, styles.tableCellLast]}>Done By</Text>
-          </View>
-
-          {data.logs.map((log, index) => (
-            <View key={index} style={styles.tableRow}>
-              <Text style={[styles.tableCell, { width: '8%' }]}>{log.date || '-'}</Text>
-              <Text style={[styles.tableCell, { width: '6%' }]}>{log.time || '-'}</Text>
-              <Text style={[styles.tableCell, styles.tableCellLeft, { width: '10%' }]}>{log.equipmentId || '-'}</Text>
-              <Text style={[styles.tableCell, styles.tableCellLeft, { width: '10%' }]}>{log.category || '-'}</Text>
-              <Text style={[styles.tableCell, { width: '8%' }]}>{log.filterNo || '-'}</Text>
-              <Text style={[styles.tableCell, { width: '6%' }]}>{log.filterMicron ?? '-'}</Text>
-              <Text style={[styles.tableCell, { width: '10%' }]}>{log.filterSize ?? '-'}</Text>
-              <Text style={[styles.tableCell, { width: '8%' }]}>{log.installedDate || '-'}</Text>
-              <Text style={[styles.tableCell, { width: '8%' }]}>{log.integrityDueDate || '-'}</Text>
-              <Text style={[styles.tableCell, { width: '8%' }]}>{log.cleaningDueDate || '-'}</Text>
-              <Text style={[styles.tableCell, { width: '8%' }]}>{log.replacementDueDate || '-'}</Text>
-              <Text style={[styles.tableCell, { width: '6%' }]}>{log.remarks || '-'}</Text>
-              <Text style={[styles.tableCell, styles.tableCellLeft, { width: '10%' }, styles.tableCellLast]}>{log.checkedBy || '-'}</Text>
-            </View>
-          ))}
-
-          {Array.from({ length: Math.max(0, 10 - data.logs.length) }).map((_, index) => (
-            <View key={`empty-${index}`} style={styles.tableRow}>
-              <Text style={[styles.tableCell, { width: '8%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '6%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '10%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '10%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '8%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '6%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '10%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '8%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '8%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '8%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '8%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '6%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '10%' }, styles.tableCellLast]}></Text>
-            </View>
-          ))}
+          {renderRow(data.logs[0] || ({} as FilterMonitoringLog), -1, true)}
+          {data.logs.map((log, index) => renderRow(log, index, false))}
+          {Array.from({ length: Math.max(0, 8 - data.logs.length) }).map((_, i) =>
+            emptyRow(`empty-${i}`),
+          )}
         </View>
 
         <View style={styles.footer}>
-          <Text style={styles.footerLine}>Remarks: {footerRemarks ? String(footerRemarks) : '-'}</Text>
-          <Text style={styles.footerLine}>Done By: {doneBy || '-'}</Text>
-          <Text style={styles.footerLine}>Approved By: {data.approvedBy || '-'}</Text>
-          <Text style={styles.footerLine}>Printed By: {data.printedBy || '-'}</Text>
+          <Text>Printed by: {data.printedBy || '—'}</Text>
         </View>
       </Page>
     </Document>

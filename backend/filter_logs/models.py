@@ -22,6 +22,12 @@ class FilterLog(models.Model):
     filter_micron = models.CharField(max_length=100, blank=True, null=True)
     filter_size = models.CharField(max_length=100, blank=True, null=True)
     tag_info = models.CharField(max_length=255, blank=True, null=True)
+    area_category = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text="Area category from filter assignment (Register), e.g. Utility, AHU Room.",
+    )
 
     ACTIVITY_TYPE_CHOICES = [
         ("operation", "Operation"),

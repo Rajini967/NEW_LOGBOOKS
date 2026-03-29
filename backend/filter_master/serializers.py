@@ -157,6 +157,7 @@ class FilterAssignmentSerializer(serializers.ModelSerializer):
     equipment_number = serializers.CharField(source="equipment.equipment_number", read_only=True)
     equipment_name = serializers.CharField(source="equipment.name", read_only=True)
     filter_id = serializers.CharField(source="filter.filter_id", read_only=True)
+    filter_category_name = serializers.SerializerMethodField()
     filter_make = serializers.CharField(source="filter.make", read_only=True)
     filter_model = serializers.CharField(source="filter.model", read_only=True)
     filter_micron_size = serializers.CharField(source="filter.micron_size", read_only=True)
@@ -176,6 +177,7 @@ class FilterAssignmentSerializer(serializers.ModelSerializer):
             "id",
             "filter",
             "filter_id",
+            "filter_category_name",
             "filter_make",
             "filter_model",
             "filter_micron_size",
@@ -196,6 +198,12 @@ class FilterAssignmentSerializer(serializers.ModelSerializer):
             "assigned_at",
             "assigned_by",
         ]
+
+    def get_filter_category_name(self, obj: FilterAssignment) -> str:
+        cat = getattr(getattr(obj, "filter", None), "category", None)
+        if cat is not None and getattr(cat, "name", None):
+            return str(cat.name)
+        return ""
 
     def validate_filter(self, value: FilterMaster) -> FilterMaster:
         """
@@ -307,5 +315,8 @@ class FilterScheduleSerializer(serializers.ModelSerializer):
             "equipment_name": equipment.name,
             "area_category": assignment.area_category,
             "tag_info": assignment.tag_info,
+            "assigned_by_id": str(assignment.assigned_by_id)
+            if assignment.assigned_by_id
+            else None,
         }
 

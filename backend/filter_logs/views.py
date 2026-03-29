@@ -1,13 +1,16 @@
+from django.db.models import Q
 from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+import uuid
 from datetime import datetime, timedelta
 from collections import defaultdict
 
 from accounts.permissions import CanApproveReports, CanLogEntries
+from equipment.models import Equipment
 from core.log_slot_utils import (
     get_interval_for_equipment,
     get_slot_range,
@@ -22,6 +25,48 @@ from .models import FilterLog
 from .serializers import FilterLogSerializer
 
 CREATOR_ONLY_REJECTED_EDIT_MESSAGE = "Only the original creator can edit/correct a rejected entry."
+
+FILTER_LOG_DUPLICATE_SLOT_DETAIL = (
+    "An entry already exists for this equipment, area, filter number, and time slot."
+)
+
+
+def _filter_report_equipment_title(equipment_id: str) -> str:
+    """Human-readable equipment line for approved report title (site stays UUID for matching)."""
+    if not equipment_id:
+        return "N/A"
+    try:
+        uid = uuid.UUID(str(equipment_id))
+        eq = Equipment.objects.only("equipment_number", "name").filter(pk=uid).first()
+        if eq:
+            num = (eq.equipment_number or "").strip()
+            name = (eq.name or "").strip()
+            if num and name:
+                return f"{num} – {name}"
+            return name or num or equipment_id
+    except (ValueError, TypeError, AttributeError):
+        pass
+    return equipment_id
+
+
+def filterlog_same_slot_bucket_qs(queryset, equipment_id, area_category, filter_no):
+    """
+    Same equipment + same area category + same filter number share one hourly/shift/daily slot
+    for duplicate checks. Blank/null area_category or filter_no each form a single bucket so
+    legacy rows do not block each other by text alone.
+    """
+    qs = queryset.filter(equipment_id=equipment_id)
+    ac = (area_category or "").strip() if area_category is not None else ""
+    if ac:
+        qs = qs.filter(area_category__iexact=ac)
+    else:
+        qs = qs.filter(Q(area_category__isnull=True) | Q(area_category=""))
+    fn = (filter_no or "").strip() if filter_no is not None else ""
+    if fn:
+        qs = qs.filter(filter_no__iexact=fn)
+    else:
+        qs = qs.filter(Q(filter_no__isnull=True) | Q(filter_no=""))
+    return qs
 
 
 class FilterLogViewSet(viewsets.ModelViewSet):
@@ -71,14 +116,16 @@ class FilterLogViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         validated = serializer.validated_data
         equipment_id = validated.get('equipment_id')
+        area_category = validated.get('area_category')
+        filter_no = validated.get('filter_no')
         timestamp = validated.get('timestamp') or timezone.now()
-        base_qs = FilterLog.objects.filter(equipment_id=equipment_id)
+        base_qs = filterlog_same_slot_bucket_qs(
+            FilterLog.objects.all(), equipment_id, area_category, filter_no
+        )
         interval, shift_hours = get_interval_for_equipment(equipment_id or "", "filter")
         slot_start, slot_end = get_slot_range(timestamp, interval, shift_hours)
         if base_qs.filter(timestamp__gte=slot_start, timestamp__lt=slot_end).exists():
-            raise ValidationError(
-                {'detail': ['An entry for this equipment already exists for this time slot.']}
-            )
+            raise ValidationError({"detail": [FILTER_LOG_DUPLICATE_SLOT_DETAIL]})
         log = serializer.save(
             operator=self.request.user,
             operator_name=self.request.user.name or self.request.user.email,
@@ -124,19 +171,24 @@ class FilterLogViewSet(viewsets.ModelViewSet):
         else:
             parsed_timestamp = instance.timestamp
         next_equipment_id = request.data.get("equipment_id") or instance.equipment_id
+        next_area = request.data.get("area_category")
+        if next_area is None:
+            next_area = instance.area_category
+        next_filter_no = request.data.get("filter_no")
+        if next_filter_no is None:
+            next_filter_no = instance.filter_no
         interval, shift_hours = get_interval_for_equipment(next_equipment_id or "", "filter")
         slot_start, slot_end = get_slot_range(parsed_timestamp, interval, shift_hours)
         duplicate_exists = (
-            FilterLog.objects.filter(
-                equipment_id=next_equipment_id,
-                timestamp__gte=slot_start,
-                timestamp__lt=slot_end,
+            filterlog_same_slot_bucket_qs(
+                FilterLog.objects.all(), next_equipment_id, next_area, next_filter_no
             )
+            .filter(timestamp__gte=slot_start, timestamp__lt=slot_end)
             .exclude(pk=instance.pk)
             .exists()
         )
         if duplicate_exists:
-            raise ValidationError({"detail": ["An entry for this equipment already exists for this time slot."]})
+            raise ValidationError({"detail": [FILTER_LOG_DUPLICATE_SLOT_DETAIL]})
 
         tracked_fields = [
             'equipment_id',
@@ -251,6 +303,37 @@ class FilterLogViewSet(viewsets.ModelViewSet):
         if equipment_id_filter:
             equipment_ids.add(equipment_id_filter)
 
+        uuid_pk_list = []
+        for eid in equipment_ids:
+            if not eid:
+                continue
+            try:
+                uuid_pk_list.append(uuid.UUID(str(eid)))
+            except (ValueError, TypeError, AttributeError):
+                continue
+        equipment_by_id = {
+            str(obj.id): obj
+            for obj in Equipment.objects.filter(pk__in=uuid_pk_list).only(
+                "id", "equipment_number", "name"
+            )
+        }
+
+        def display_name_for_row(equipment_id: str) -> str:
+            if not equipment_id:
+                return ""
+            try:
+                uid = uuid.UUID(str(equipment_id))
+            except (ValueError, TypeError, AttributeError):
+                return equipment_id
+            eq = equipment_by_id.get(str(uid))
+            if eq is None:
+                return equipment_id
+            num = (eq.equipment_number or "").strip()
+            name = (eq.name or "").strip()
+            if num and name:
+                return f"{num} – {name}"
+            return name or num or equipment_id
+
         equipments_payload = []
         total_expected_slots = 0
         total_present_slots = 0
@@ -270,6 +353,10 @@ class FilterLogViewSet(viewsets.ModelViewSet):
             expected_count = stats["expected_slot_count"]
             present_count = stats["present_slot_count"]
             missing_count = stats["missing_slot_count"]
+            has_activity_today = equipment_id in timestamps_by_equipment
+            # Skip idle historical equipment with no logs today and nothing missing (keeps payload small).
+            if missing_count == 0 and not has_activity_today:
+                continue
             total_expected_slots += expected_count
             total_present_slots += present_count
             total_missing_slots += missing_count
@@ -304,7 +391,7 @@ class FilterLogViewSet(viewsets.ModelViewSet):
             equipments_payload.append(
                 {
                     "equipment_id": equipment_id,
-                    "equipment_name": equipment_id,
+                    "equipment_name": display_name_for_row(equipment_id),
                     "interval": interval,
                     "shift_duration_hours": shift_hours,
                     "expected_slot_count": expected_count,
@@ -370,13 +457,20 @@ class FilterLogViewSet(viewsets.ModelViewSet):
             payload['timestamp'] = timestamp
 
         check_ts = payload.get('timestamp') or timezone.now()
+        correction_area = validated.get('area_category')
+        if correction_area is None:
+            correction_area = original.area_category
+        correction_filter_no = validated.get('filter_no')
+        if correction_filter_no is None:
+            correction_filter_no = original.filter_no
         interval, shift_hours = get_interval_for_equipment(original.equipment_id or '', 'filter')
         slot_start, slot_end = get_slot_range(check_ts, interval, shift_hours)
-        slot_qs = FilterLog.objects.filter(
-            equipment_id=original.equipment_id,
-            timestamp__gte=slot_start,
-            timestamp__lt=slot_end,
-        )
+        slot_qs = filterlog_same_slot_bucket_qs(
+            FilterLog.objects.all(),
+            original.equipment_id,
+            correction_area,
+            correction_filter_no,
+        ).filter(timestamp__gte=slot_start, timestamp__lt=slot_end)
         chain_root_id = original.corrects_id or original.pk
         conflict_exists = (
             slot_qs
@@ -387,9 +481,7 @@ class FilterLogViewSet(viewsets.ModelViewSet):
             .exists()
         )
         if conflict_exists:
-            raise ValidationError(
-                {'detail': ['An entry for this equipment already exists for this time slot.']}
-            )
+            raise ValidationError({"detail": [FILTER_LOG_DUPLICATE_SLOT_DETAIL]})
 
         new_log = FilterLog.objects.create(**payload)
         log_audit_event(
@@ -524,7 +616,11 @@ class FilterLogViewSet(viewsets.ModelViewSet):
         ])
 
         if action_type == 'approve' and log.status == 'approved':
-            title = f"Filter Monitoring - {log.equipment_id or 'N/A'}"
+            eq_title = _filter_report_equipment_title(log.equipment_id or "")
+            fn = (log.filter_no or "").strip()
+            title = f"Filter Monitoring - {eq_title}"
+            if fn:
+                title = f"{title} · {fn}"
             create_report_entry(
                 report_type='utility',
                 source_id=str(log.id),

@@ -2,6 +2,7 @@
 Utilities for computing log entry time slots from SessionSetting (hourly / shift / daily).
 Used to enforce one entry per equipment per slot and prevent duplicates.
 """
+import uuid
 from datetime import timedelta, datetime, time
 from typing import Tuple, Literal, TypedDict, Optional, List, Dict, Any
 from zoneinfo import ZoneInfo
@@ -61,6 +62,34 @@ def get_slot_day_bounds(day_value):
     return day_start, day_end
 
 
+def _resolve_equipment_for_filter_log_identifier(identifier: str):
+    """
+    FilterLog.equipment_id may store Equipment.id (UUID) from the assignment UI,
+    or legacy filter_id (e.g. FMT-0001).
+    """
+    if not identifier or not isinstance(identifier, str):
+        return None
+    identifier = identifier.strip()
+    # UUIDField rejects non-UUID strings (e.g. legacy filter_id "FMT-0001") at query prep time.
+    try:
+        pk = uuid.UUID(identifier)
+        eq = Equipment.objects.filter(pk=pk).first()
+        if eq:
+            return eq
+    except (ValueError, TypeError, AttributeError):
+        pass
+    fm = FilterMaster.objects.filter(filter_id=identifier).first()
+    if fm:
+        assignment = (
+            FilterAssignment.objects.filter(filter=fm, is_active=True)
+            .select_related("equipment")
+            .first()
+        )
+        if assignment:
+            return assignment.equipment
+    return None
+
+
 def _resolve_equipment_for_log_type(equipment_identifier: str, log_type: str):
     if not equipment_identifier or not isinstance(equipment_identifier, str):
         return None
@@ -69,15 +98,7 @@ def _resolve_equipment_for_log_type(equipment_identifier: str, log_type: str):
     if log_type in ("chiller", "boiler"):
         equipment = Equipment.objects.filter(equipment_number=identifier).first()
     elif log_type == "filter":
-        fm = FilterMaster.objects.filter(filter_id=identifier).first()
-        if fm:
-            assignment = (
-                FilterAssignment.objects.filter(filter=fm, is_active=True)
-                .select_related("equipment")
-                .first()
-            )
-            if assignment:
-                equipment = assignment.equipment
+        equipment = _resolve_equipment_for_filter_log_identifier(identifier)
     elif log_type == "chemical":
         part_before_dash = identifier.split(" – ")[0].strip() if " – " in identifier else identifier
         equipment = Equipment.objects.filter(equipment_number=part_before_dash).first()
@@ -354,16 +375,7 @@ def get_tolerance_status(save_time, equipment_identifier: str, log_type: str) ->
         if log_type in ("chiller", "boiler"):
             equipment = Equipment.objects.filter(equipment_number=equipment_identifier).first()
         elif log_type == "filter":
-            fm = FilterMaster.objects.filter(filter_id=equipment_identifier).first()
-            equipment = None
-            if fm:
-                assignment = (
-                    FilterAssignment.objects.filter(filter=fm, is_active=True)
-                    .select_related("equipment")
-                    .first()
-                )
-                if assignment:
-                    equipment = assignment.equipment
+            equipment = _resolve_equipment_for_filter_log_identifier(equipment_identifier)
         elif log_type == "chemical":
             part_before_dash = (
                 equipment_identifier.split(" – ")[0].strip()
@@ -499,16 +511,7 @@ def compute_slot_status(
         if log_type in ("chiller", "boiler"):
             equipment = Equipment.objects.filter(equipment_number=equipment_identifier).first()
         elif log_type == "filter":
-            fm = FilterMaster.objects.filter(filter_id=equipment_identifier).first()
-            equipment = None
-            if fm:
-                assignment = (
-                    FilterAssignment.objects.filter(filter=fm, is_active=True)
-                    .select_related("equipment")
-                    .first()
-                )
-                if assignment:
-                    equipment = assignment.equipment
+            equipment = _resolve_equipment_for_filter_log_identifier(equipment_identifier)
         elif log_type == "chemical":
             part_before_dash = (
                 equipment_identifier.split(" – ")[0].strip()

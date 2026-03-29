@@ -187,6 +187,19 @@ class FilterMasterViewSet(viewsets.ModelViewSet):
         Reject a pending filter.
         """
         instance: FilterMaster = self.get_object()
+
+        # Same separation-of-duties rule as approve: registrar cannot reject their own entry.
+        if instance.created_by_id and instance.created_by_id == request.user.id:
+            return Response(
+                {
+                    "detail": (
+                        "Filter must be rejected by a different user than the one who "
+                        "registered it (Done By)."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         if instance.status not in ["pending"]:
             return Response(
                 {"detail": "Only pending filters can be rejected."},
@@ -212,7 +225,7 @@ class FilterMasterViewSet(viewsets.ModelViewSet):
 
 
 class FilterAssignmentViewSet(viewsets.ModelViewSet):
-    queryset = FilterAssignment.objects.select_related("filter", "equipment").all()
+    queryset = FilterAssignment.objects.select_related("filter", "filter__category", "equipment").all()
     serializer_class = FilterAssignmentSerializer
     permission_classes = [IsAuthenticated]
 
@@ -253,7 +266,11 @@ class FilterAssignmentViewSet(viewsets.ModelViewSet):
 
 
 class FilterScheduleViewSet(viewsets.ModelViewSet):
-    queryset = FilterSchedule.objects.select_related("assignment", "assignment__equipment").all()
+    queryset = FilterSchedule.objects.select_related(
+        "assignment",
+        "assignment__equipment",
+        "assignment__assigned_by",
+    ).all()
     serializer_class = FilterScheduleSerializer
     permission_classes = [IsAuthenticated]
 
@@ -448,6 +465,18 @@ class FilterScheduleViewSet(viewsets.ModelViewSet):
         if not instance.frequency_days:
             return Response({"detail": "Frequency (days) is required to approve a schedule."}, status=status.HTTP_400_BAD_REQUEST)
 
+        assignment = instance.assignment
+        if assignment.assigned_by_id and assignment.assigned_by_id == request.user.id:
+            return Response(
+                {
+                    "detail": (
+                        "This schedule must be approved by a different user than the one who "
+                        "assigned the filter to this equipment."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         instance.is_approved = True
         instance.approved_by = request.user
         instance.approved_at = timezone.now()
@@ -478,6 +507,19 @@ class FilterScheduleViewSet(viewsets.ModelViewSet):
         instance: FilterSchedule = self.get_object()
         if instance.is_approved:
             return Response({"detail": "Approved schedules cannot be rejected."}, status=status.HTTP_400_BAD_REQUEST)
+
+        assignment = instance.assignment
+        if assignment.assigned_by_id and assignment.assigned_by_id == request.user.id:
+            return Response(
+                {
+                    "detail": (
+                        "This schedule must be rejected by a different user than the one who "
+                        "assigned the filter to this equipment."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         log_audit_event(
             user=request.user,
             event_type="entity_rejected",

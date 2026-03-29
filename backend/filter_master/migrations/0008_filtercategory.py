@@ -11,23 +11,29 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.CreateModel(
-            name='FilterCategory',
-            fields=[
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('name', models.CharField(max_length=255, unique=True)),
-                ('client_id', models.CharField(db_index=True, default='svu-enterprises', max_length=100)),
-                ('description', models.TextField(blank=True, null=True)),
-                ('micron_costs', models.JSONField(blank=True, default=dict, null=True)),
-                ('is_active', models.BooleanField(default=True)),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
+        # Table filter_categories already exists from 0001; only restore model state after 0006.
+        migrations.SeparateDatabaseAndState(
+            database_operations=[],
+            state_operations=[
+                migrations.CreateModel(
+                    name='FilterCategory',
+                    fields=[
+                        ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
+                        ('name', models.CharField(max_length=255, unique=True)),
+                        ('client_id', models.CharField(db_index=True, default='svu-enterprises', max_length=100)),
+                        ('description', models.TextField(blank=True, null=True)),
+                        ('micron_costs', models.JSONField(blank=True, default=dict, null=True)),
+                        ('is_active', models.BooleanField(default=True)),
+                        ('created_at', models.DateTimeField(auto_now_add=True)),
+                        ('updated_at', models.DateTimeField(auto_now=True)),
+                    ],
+                    options={
+                        'verbose_name': 'Filter Category',
+                        'verbose_name_plural': 'Filter Categories',
+                        'db_table': 'filter_categories',
+                        'ordering': ['name'],
+                    },
+                ),
             ],
-            options={
-                'verbose_name': 'Filter Category',
-                'verbose_name_plural': 'Filter Categories',
-                'db_table': 'filter_categories',
-                'ordering': ['name'],
-            },
         ),
     ]

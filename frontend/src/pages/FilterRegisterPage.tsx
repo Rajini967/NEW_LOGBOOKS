@@ -262,6 +262,13 @@ const FilterRegisterPage: React.FC = () => {
     void loadFilters();
   }, []);
 
+  /** Approve/reject must be done by someone other than the user who registered the filter. */
+  const isOwnRegisteredFilter = (filter: FilterMaster) => {
+    const currentUserId = user?.id ? String(user.id) : "";
+    const createdById = filter.created_by ? String(filter.created_by) : "";
+    return !!(createdById && currentUserId && createdById === currentUserId);
+  };
+
   const handleRegisterInputChange = (
     field: keyof typeof registerForm,
     value: any
@@ -617,18 +624,7 @@ const FilterRegisterPage: React.FC = () => {
                                   variant="outline"
                                   className="h-8 w-8 text-emerald-600"
                                   onClick={() => {
-                                    const currentUserId = user?.id
-                                      ? String(user.id)
-                                      : "";
-                                    const createdById = filter.created_by
-                                      ? String(filter.created_by)
-                                      : "";
-
-                                    if (
-                                      createdById &&
-                                      currentUserId &&
-                                      createdById === currentUserId
-                                    ) {
+                                    if (isOwnRegisteredFilter(filter)) {
                                       toast({
                                         title:
                                           "Cannot approve your own registered filter",
@@ -648,7 +644,20 @@ const FilterRegisterPage: React.FC = () => {
                                   size="icon"
                                   variant="outline"
                                   className="h-8 w-8 text-rose-600"
-                                  onClick={() => setPendingRejectFilter(filter)}
+                                  onClick={() => {
+                                    if (isOwnRegisteredFilter(filter)) {
+                                      toast({
+                                        title:
+                                          "Cannot reject your own registered filter",
+                                        description:
+                                          "Filter Register Done By and Rejected By users must be different.",
+                                        variant: "destructive",
+                                      });
+                                      return;
+                                    }
+
+                                    setPendingRejectFilter(filter);
+                                  }}
                                 >
                                   <XCircle className="w-4 h-4" />
                                 </Button>
@@ -1178,7 +1187,7 @@ const FilterRegisterPage: React.FC = () => {
             <AlertDialogTitle>Reject filter?</AlertDialogTitle>
             <AlertDialogDescription>
               {pendingRejectFilter
-                ? `Reject filter ${pendingRejectFilter.make} ${pendingRejectFilter.model}? This action will mark it as rejected.`
+                ? `Reject filter ${pendingRejectFilter.make} ${pendingRejectFilter.model}? You will be asked for a required comment on the next step, same as approval.`
                 : null}
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -1195,7 +1204,7 @@ const FilterRegisterPage: React.FC = () => {
                 setRejectCommentOpen(true);
               }}
             >
-              Reject
+              OK
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -1219,13 +1228,18 @@ const FilterRegisterPage: React.FC = () => {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
-            <Textarea
-              value={rejectionComment}
-              onChange={(e) => setRejectionComment(e.target.value)}
-              placeholder="Enter rejection comment..."
-              rows={3}
-              className="resize-none"
-            />
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-foreground">
+                Comment <span className="text-destructive">*</span>
+              </label>
+              <Textarea
+                value={rejectionComment}
+                onChange={(e) => setRejectionComment(e.target.value)}
+                placeholder="Enter rejection comment..."
+                rows={3}
+                className="resize-none"
+              />
+            </div>
             <div className="flex justify-end gap-2">
               <Button
                 type="button"

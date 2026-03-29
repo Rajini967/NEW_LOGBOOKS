@@ -83,6 +83,9 @@ interface Report {
   type: ApprovedReportType;
   title: string;
   site: string;
+  /** Resolved labels for filter log reports (raw `site` stays UUID for export matching). */
+  displayTitle?: string;
+  displaySite?: string;
   createdBy: string;
   createdAt: Date;
   approvedBy?: string;
@@ -380,12 +383,17 @@ const mapChemicalLogForMonitoringPdf = (l: any) => ({
 
 const mapFilterLogForMonitoringPdf = (l: any) => {
   const fd = (val: string | null | undefined) => (val ? format(new Date(val), 'dd/MM/yyyy') : '');
+  const appr =
+    (l.secondary_approved_by_name && String(l.secondary_approved_by_name).trim()) ||
+    (l.approved_by_name && String(l.approved_by_name).trim()) ||
+    '';
   return {
     date: l.timestamp ? format(new Date(l.timestamp), 'dd/MM/yy') : '',
     time: l.timestamp ? format(new Date(l.timestamp), 'HH:mm') : '',
     id: l.id,
     equipmentType: 'filter',
     equipmentId: l.equipment_id ?? '',
+    equipmentDisplayName: '',
     category: l.category ?? '',
     filterNo: l.filter_no ?? '',
     filterMicron: l.filter_micron ?? '',
@@ -400,11 +408,104 @@ const mapFilterLogForMonitoringPdf = (l: any) => {
     replacementDueDate: fd(l.replacement_due_date),
     remarks: l.remarks ?? '',
     checkedBy: l.operator_name ?? '',
+    approvedByName: appr,
     timestamp: l.timestamp ? new Date(l.timestamp) : new Date(),
     status: l.status,
     raw: l,
   };
 };
+
+/** Resolve EN-xxx – name for PDF from tag_info or Equipment master (UUID). */
+const FILTER_MONITORING_UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function buildEquipmentLabelMap(rows: any[]): Map<string, string> {
+  const m = new Map<string, string>();
+  for (const e of rows || []) {
+    if (e?.id) {
+      const num = (e.equipment_number ?? '').toString().trim();
+      const name = (e.name ?? '').toString().trim();
+      m.set(
+        String(e.id).toLowerCase(),
+        num && name ? `${num} – ${name}` : name || num || String(e.id),
+      );
+    }
+  }
+  return m;
+}
+
+/** Friendly title/site for approved reports list (filter monitoring rows stored UUID in DB). */
+function enrichFilterMonitoringReportDisplay(
+  report: {
+    type: string;
+    title: string;
+    site: string;
+    originalData?: { sourceTable?: string };
+  },
+  equipmentById: Map<string, string>,
+): { displayTitle: string; displaySite: string } {
+  const title = String(report.title || '');
+  const site = String(report.site || '').trim();
+  const isFilterLogReport =
+    report.type === 'utility' &&
+    (report.originalData?.sourceTable === 'filter_logs' ||
+      /^Filter Monitoring\b/i.test(title));
+  if (!isFilterLogReport) {
+    return { displayTitle: title, displaySite: site };
+  }
+
+  let displaySite = site;
+  let displayTitle = title;
+
+  if (FILTER_MONITORING_UUID_RE.test(site)) {
+    const friendly = equipmentById.get(site.toLowerCase());
+    if (friendly) {
+      displaySite = friendly;
+      if (title.includes(site)) {
+        displayTitle = title.split(site).join(friendly);
+      }
+    }
+  }
+
+  const prefixMatch = displayTitle.match(/^(Filter Monitoring\s*-\s*)(.+)$/i);
+  if (prefixMatch) {
+    const rest = prefixMatch[2].trim();
+    if (FILTER_MONITORING_UUID_RE.test(rest)) {
+      const fr = equipmentById.get(rest.toLowerCase());
+      if (fr) displayTitle = `${prefixMatch[1]}${fr}`;
+    }
+  }
+
+  return { displayTitle, displaySite };
+}
+
+async function enrichFilterMonitoringLogsForPdf(logs: any[]): Promise<any[]> {
+  if (!logs.length) return logs;
+  let equipList: any[] = [];
+  try {
+    equipList = (await equipmentAPI.list()) as any[];
+  } catch {
+    equipList = [];
+  }
+  const byId = new Map<string, string>();
+  for (const e of equipList) {
+    if (e?.id) {
+      const num = (e.equipment_number ?? '').toString().trim();
+      const name = (e.name ?? '').toString().trim();
+      const label = num && name ? `${num} – ${name}` : name || num || String(e.id);
+      byId.set(String(e.id).toLowerCase(), label);
+    }
+  }
+  return logs.map((row) => {
+    const tag = (row.tagInfo || '').trim();
+    let display = '';
+    const pipe = tag.indexOf(' | ');
+    if (pipe > 0) display = tag.slice(0, pipe).trim();
+    const id = String(row.equipmentId || '').trim();
+    if (!display && id) display = byId.get(id.toLowerCase()) || id;
+    return { ...row, equipmentDisplayName: display || id || '—' };
+  });
+}
 
 const isApprovedReportRow = (row: any): boolean =>
   String(row?.status ?? '').toLowerCase() === 'approved';
@@ -479,31 +580,46 @@ export default function ReportsPage() {
   // Load reports from centralized reports API (only approved reports for all roles)
   const loadReportsFromAPI = useCallback(async () => {
     try {
-      const reportsData = await reportsAPI.list();
-      
+      const [reportsData, equipRows] = await Promise.all([
+        reportsAPI.list(),
+        equipmentAPI.list().catch(() => []),
+      ]);
+      const equipmentById = buildEquipmentLabelMap(Array.isArray(equipRows) ? equipRows : []);
+
       // Transform API response to Report format; only include approved reports
       const reportsList: Report[] = reportsData
         .filter((report: any) => report.approved_at != null)
-        .map((report: any) => ({
-          id: report.id,
-          type: report.report_type,
-          title: report.title,
-          site: report.site,
-          createdBy: report.created_by,
-          createdAt: new Date(report.created_at),
-          approvedBy:
-            (report.approved_by_name && String(report.approved_by_name).trim()) ||
-            (report.approved_by_email && String(report.approved_by_email).trim()) ||
-            undefined,
-          approvedAt: report.approved_at ? new Date(report.approved_at) : undefined,
-          status: 'approved' as const,
-          remarks: report.remarks,
-          originalData: {
-            sourceId: report.source_id,
-            sourceTable: report.source_table,
-          },
-        }));
-      
+        .map((report: any) => {
+          const base: Report = {
+            id: report.id,
+            type: report.report_type,
+            title: report.title,
+            site: report.site,
+            createdBy: report.created_by,
+            createdAt: new Date(report.created_at),
+            approvedBy:
+              (report.approved_by_name && String(report.approved_by_name).trim()) ||
+              (report.approved_by_email && String(report.approved_by_email).trim()) ||
+              undefined,
+            approvedAt: report.approved_at ? new Date(report.approved_at) : undefined,
+            status: 'approved' as const,
+            remarks: report.remarks,
+            originalData: {
+              sourceId: report.source_id,
+              sourceTable: report.source_table,
+            },
+          };
+          const { displayTitle, displaySite } = enrichFilterMonitoringReportDisplay(
+            base,
+            equipmentById,
+          );
+          return {
+            ...base,
+            displayTitle: displayTitle !== base.title ? displayTitle : undefined,
+            displaySite: displaySite !== base.site ? displaySite : undefined,
+          };
+        });
+
       return reportsList;
     } catch (error) {
       console.error('Error loading reports from API:', error);
@@ -598,9 +714,13 @@ export default function ReportsPage() {
     if (report.status !== 'approved') return false;
 
     const matchesType = filterType === 'all' || report.type === filterType;
+    const q = searchQuery.toLowerCase();
     const matchesSearch =
-      report.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      report.id.toLowerCase().includes(searchQuery.toLowerCase());
+      report.title.toLowerCase().includes(q) ||
+      (report.displayTitle && report.displayTitle.toLowerCase().includes(q)) ||
+      report.site.toLowerCase().includes(q) ||
+      (report.displaySite && report.displaySite.toLowerCase().includes(q)) ||
+      report.id.toLowerCase().includes(q);
 
     if (!matchesType || !matchesSearch) return false;
 
@@ -1609,6 +1729,7 @@ export default function ReportsPage() {
             toast.error('No logs found for this equipment');
             return;
           }
+          allLogs = await enrichFilterMonitoringLogsForPdf(allLogs);
           const filterPdfData: MonitoringPDFData = { logs: allLogs, approvedBy: report.approvedBy, printedBy: user?.name || user?.email || '' };
           const blob = await generateFilterMonitoringPDF(filterPdfData);
           downloadPDF(blob, 'Filter Monitoring.pdf');
@@ -2088,6 +2209,7 @@ export default function ReportsPage() {
             toast.error('No logs found for this equipment');
             return;
           }
+          allLogs = await enrichFilterMonitoringLogsForPdf(allLogs);
           const filterPdfData: MonitoringPDFData = { logs: allLogs, approvedBy: report.approvedBy, printedBy: user?.name || user?.email || '' };
           const blob = await generateFilterMonitoringPDF(filterPdfData);
           const success = printPDF(blob);
@@ -2471,6 +2593,7 @@ export default function ReportsPage() {
                   <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Type</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Site</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Created By</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Approved By</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Date</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Status</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Actions</th>
@@ -2488,18 +2611,41 @@ export default function ReportsPage() {
                     </td>
                     <td className="px-4 py-3">
                       <div>
-                        <p className="text-sm font-medium text-foreground">{report.title}</p>
-                        <p className="text-xs text-muted-foreground font-mono">{report.id}</p>
+                        <p className="text-sm font-medium text-foreground">
+                          {report.displayTitle ?? report.title}
+                        </p>
+                        <p
+                          className={
+                            report.type === 'utility' &&
+                            (report.originalData?.sourceTable === 'filter_logs' ||
+                              /^Filter Monitoring\b/i.test(report.title))
+                              ? 'text-xs text-muted-foreground'
+                              : 'text-xs text-muted-foreground font-mono'
+                          }
+                        >
+                          {report.type === 'utility' &&
+                          (report.originalData?.sourceTable === 'filter_logs' ||
+                            /^Filter Monitoring\b/i.test(report.title)) ? (
+                            <span className="font-mono text-[10px] opacity-80">Report ID: {report.id}</span>
+                          ) : (
+                            report.id
+                          )}
+                        </p>
                       </div>
                     </td>
                     <td className="px-4 py-3">
                       <Badge variant="accent">{typeLabels[report.type]}</Badge>
                     </td>
                     <td className="px-4 py-3">
-                      <span className="text-sm text-foreground">{report.site}</span>
+                      <span className="text-sm text-foreground">
+                        {report.displaySite ?? report.site}
+                      </span>
                     </td>
                     <td className="px-4 py-3">
                       <span className="text-sm text-foreground">{report.createdBy}</span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className="text-sm text-foreground">{report.approvedBy || '—'}</span>
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1 text-sm text-muted-foreground">
@@ -2570,7 +2716,9 @@ export default function ReportsPage() {
                 <div className="bg-muted/50 rounded-lg p-4 space-y-3">
                   <div>
                     <Label className="text-xs text-muted-foreground">Report Title</Label>
-                    <p className="text-sm font-medium">{selectedReport.title}</p>
+                    <p className="text-sm font-medium">
+                      {selectedReport.displayTitle ?? selectedReport.title}
+                    </p>
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
@@ -2606,7 +2754,12 @@ export default function ReportsPage() {
                     </div>
                     <div>
                       <Label className="text-xs text-muted-foreground">Site</Label>
-                      <p className="text-sm">{selectedReport.site}</p>
+                      <p className="text-sm">{selectedReport.displaySite ?? selectedReport.site}</p>
+                      {selectedReport.displaySite && selectedReport.displaySite !== selectedReport.site ? (
+                        <p className="text-xs text-muted-foreground font-mono mt-1">
+                          Reference ID: {selectedReport.site}
+                        </p>
+                      ) : null}
                     </div>
                     <div>
                       <Label className="text-xs text-muted-foreground">Created By</Label>
