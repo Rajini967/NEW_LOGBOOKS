@@ -15,10 +15,10 @@ from django.conf import settings
 class UserRole(models.TextChoices):
     """User role choices."""
     SUPER_ADMIN = 'super_admin', 'Super Admin'
-    MANAGER = 'manager', 'Admin'
+    ADMIN = 'admin', 'Admin'
     SUPERVISOR = 'supervisor', 'Supervisor'
     OPERATOR = 'operator', 'Operator'
-    CLIENT = 'client', 'Client'
+    MANAGER = 'manager', 'Manager'
 
 
 class UserManager(BaseUserManager):
@@ -138,10 +138,15 @@ class User(AbstractBaseUser, PermissionsMixin):
         return self.role == UserRole.SUPER_ADMIN
     
     @property
+    def is_admin(self):
+        """Check if user is Admin."""
+        return self.role == UserRole.ADMIN
+
+    @property
     def is_manager(self):
-        """Check if user is Manager."""
+        """Check if user is Manager (formerly Client)."""
         return self.role == UserRole.MANAGER
-    
+
     @property
     def is_supervisor(self):
         """Check if user is Supervisor."""
@@ -151,11 +156,6 @@ class User(AbstractBaseUser, PermissionsMixin):
     def is_operator(self):
         """Check if user is Operator."""
         return self.role == UserRole.OPERATOR
-    
-    @property
-    def is_client(self):
-        """Check if user is Client."""
-        return self.role == UserRole.CLIENT
 
 
 class UserActivityLog(models.Model):
@@ -169,6 +169,10 @@ class UserActivityLog(models.Model):
         ("manual_login", "Manual Login"),
         ("manual_logout", "Manual Logout"),
         ("auto_logout", "Auto Logout"),
+        ("user_created", "User Created"),
+        ("password_changed", "Password Changed"),
+        ("user_locked", "User Locked"),
+        ("user_unlocked", "User Unlocked"),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

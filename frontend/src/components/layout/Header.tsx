@@ -1,8 +1,8 @@
 import React from 'react';
-import { Bell, Search, LogOut, User } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Bell, Search, LogOut, KeyRound } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Badge } from '@/components/ui/badge';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -21,6 +21,7 @@ interface HeaderProps {
 
 export function Header({ title, subtitle }: HeaderProps) {
   const { user, logout } = useAuth();
+  const navigate = useNavigate();
 
   return (
     <header className="sticky top-0 z-30 bg-background/80 backdrop-blur-md border-b border-border">
@@ -85,9 +86,12 @@ export function Header({ title, subtitle }: HeaderProps) {
                     </div>
                   </DropdownMenuLabel>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem className="cursor-pointer">
-                    <User className="mr-2 h-4 w-4" />
-                    <span>Profile</span>
+                  <DropdownMenuItem
+                    className="cursor-pointer"
+                    onClick={() => navigate('/change-password')}
+                  >
+                    <KeyRound className="mr-2 h-4 w-4" />
+                    <span>Change password</span>
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem 

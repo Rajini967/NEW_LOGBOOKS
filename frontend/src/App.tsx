@@ -45,10 +45,10 @@ import NotFound from "./pages/NotFound";
 const queryClient = new QueryClient();
 
 const isFilterAdmin = (role?: string) =>
-  role === "manager" || role === "super_admin";
+  role === "admin" || role === "super_admin";
 
 const isChemicalAdmin = (role?: string) =>
-  role === "manager" || role === "super_admin";
+  role === "admin" || role === "super_admin";
 
 function AdminFilterLandingRoute() {
   const { user, isLoading } = useAuth();

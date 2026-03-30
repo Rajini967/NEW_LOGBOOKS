@@ -10,6 +10,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -146,8 +147,11 @@ const FilterRegisterPage: React.FC = () => {
     equipment: "",
     area_category: "",
     tag_info: "",
+    replacement_selected: false,
     replacement_frequency_days: "",
+    cleaning_selected: false,
     cleaning_frequency_days: "",
+    integrity_selected: false,
     integrity_frequency_days: "",
   });
   const [isAssignSubmitting, setIsAssignSubmitting] = useState(false);
@@ -400,8 +404,11 @@ const FilterRegisterPage: React.FC = () => {
       equipment: "",
       area_category: "",
       tag_info: "",
+      replacement_selected: false,
       replacement_frequency_days: "",
+      cleaning_selected: false,
       cleaning_frequency_days: "",
+      integrity_selected: false,
       integrity_frequency_days: "",
     });
     setIsAssignDialogOpen(true);
@@ -421,6 +428,27 @@ const FilterRegisterPage: React.FC = () => {
 
     setIsAssignSubmitting(true);
     try {
+      if (assignForm.replacement_selected && !assignForm.replacement_frequency_days) {
+        toast({
+          title: "Replacement frequency is required",
+          variant: "destructive",
+        });
+        return;
+      }
+      if (assignForm.cleaning_selected && !assignForm.cleaning_frequency_days) {
+        toast({
+          title: "Cleaning frequency is required",
+          variant: "destructive",
+        });
+        return;
+      }
+      if (assignForm.integrity_selected && !assignForm.integrity_frequency_days) {
+        toast({
+          title: "Integrity frequency is required",
+          variant: "destructive",
+        });
+        return;
+      }
       const assignment = await filterAssignmentAPI.create({
         filter: assignForFilter.id,
         equipment: assignForm.equipment,
@@ -429,7 +457,7 @@ const FilterRegisterPage: React.FC = () => {
       });
 
       const schedulePromises: Promise<any>[] = [];
-      if (assignForm.replacement_frequency_days) {
+      if (assignForm.replacement_selected && Number(assignForm.replacement_frequency_days) > 0) {
         schedulePromises.push(
           filterScheduleAPI.create({
             assignment: assignment.id,
@@ -438,7 +466,7 @@ const FilterRegisterPage: React.FC = () => {
           })
         );
       }
-      if (assignForm.cleaning_frequency_days) {
+      if (assignForm.cleaning_selected && Number(assignForm.cleaning_frequency_days) > 0) {
         schedulePromises.push(
           filterScheduleAPI.create({
             assignment: assignment.id,
@@ -447,7 +475,7 @@ const FilterRegisterPage: React.FC = () => {
           })
         );
       }
-      if (assignForm.integrity_frequency_days) {
+      if (assignForm.integrity_selected && Number(assignForm.integrity_frequency_days) > 0) {
         schedulePromises.push(
           filterScheduleAPI.create({
             assignment: assignment.id,
@@ -1000,12 +1028,23 @@ const FilterRegisterPage: React.FC = () => {
               </div>
 
               <div className="space-y-1">
-                <label className="text-sm font-medium text-foreground">
+                <label className="text-sm font-medium text-foreground flex items-center gap-2">
+                  <Checkbox
+                    checked={assignForm.replacement_selected}
+                    onCheckedChange={(checked) =>
+                      setAssignForm((prev) => ({
+                        ...prev,
+                        replacement_selected: !!checked,
+                        replacement_frequency_days: !!checked ? prev.replacement_frequency_days : "",
+                      }))
+                    }
+                  />
                   Replacement Frequency (days)
                 </label>
                 <Input
                   type="number"
                   min={0}
+                  disabled={!assignForm.replacement_selected}
                   value={assignForm.replacement_frequency_days}
                   onChange={(e) =>
                     setAssignForm((prev) => ({
@@ -1017,12 +1056,23 @@ const FilterRegisterPage: React.FC = () => {
               </div>
 
               <div className="space-y-1">
-                <label className="text-sm font-medium text-foreground">
+                <label className="text-sm font-medium text-foreground flex items-center gap-2">
+                  <Checkbox
+                    checked={assignForm.cleaning_selected}
+                    onCheckedChange={(checked) =>
+                      setAssignForm((prev) => ({
+                        ...prev,
+                        cleaning_selected: !!checked,
+                        cleaning_frequency_days: !!checked ? prev.cleaning_frequency_days : "",
+                      }))
+                    }
+                  />
                   Cleaning Frequency (days)
                 </label>
                 <Input
                   type="number"
                   min={0}
+                  disabled={!assignForm.cleaning_selected}
                   value={assignForm.cleaning_frequency_days}
                   onChange={(e) =>
                     setAssignForm((prev) => ({
@@ -1034,12 +1084,23 @@ const FilterRegisterPage: React.FC = () => {
               </div>
 
               <div className="space-y-1">
-                <label className="text-sm font-medium text-foreground">
+                <label className="text-sm font-medium text-foreground flex items-center gap-2">
+                  <Checkbox
+                    checked={assignForm.integrity_selected}
+                    onCheckedChange={(checked) =>
+                      setAssignForm((prev) => ({
+                        ...prev,
+                        integrity_selected: !!checked,
+                        integrity_frequency_days: !!checked ? prev.integrity_frequency_days : "",
+                      }))
+                    }
+                  />
                   Integrity Test Frequency (days)
                 </label>
                 <Input
                   type="number"
                   min={0}
+                  disabled={!assignForm.integrity_selected}
                   value={assignForm.integrity_frequency_days}
                   onChange={(e) =>
                     setAssignForm((prev) => ({

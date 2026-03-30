@@ -649,7 +649,16 @@ export default function LogbookBuilderPage() {
                 Select which roles can access this logbook
               </p>
               <div className="space-y-2 border rounded-lg p-3">
-                {['operator', 'supervisor', 'manager', 'client'].map(role => (
+                {(['operator', 'supervisor', 'admin', 'manager', 'super_admin'] as const).map((role) => {
+                  const label =
+                    role === 'super_admin'
+                      ? 'Super Admin'
+                      : role === 'admin'
+                        ? 'Admin'
+                        : role === 'manager'
+                          ? 'Manager'
+                          : role.charAt(0).toUpperCase() + role.slice(1);
+                  return (
                   <label key={role} className="flex items-center gap-2 cursor-pointer">
                     <input
                       type="checkbox"
@@ -663,9 +672,10 @@ export default function LogbookBuilderPage() {
                       }}
                       className="w-4 h-4"
                     />
-                    <span className="text-sm capitalize">{role.replace('_', ' ')}</span>
+                    <span className="text-sm">{label}</span>
                   </label>
-                ))}
+                  );
+                })}
               </div>
               {assignedRoles.length === 0 && (
                 <p className="text-xs text-destructive">

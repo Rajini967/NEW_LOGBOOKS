@@ -10,7 +10,7 @@ const FilterLogBookSettingsPage: React.FC = () => {
   const navigate = useNavigate();
 
   const isFilterAdmin =
-    user && (user.role === "manager" || user.role === "super_admin");
+    user && (user.role === "admin" || user.role === "super_admin");
 
   if (!isLoading && !isFilterAdmin) {
     return <Navigate to="/e-log-book/filter/entry" replace />;

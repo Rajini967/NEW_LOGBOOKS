@@ -27,7 +27,7 @@ export default function DashboardPage() {
   const { missedByLogType, loading: missedReadingsLoading } = useMissedReadingsByType();
 
   const isOperator = user?.role === 'operator';
-  const isCustomer = user?.role === 'customer' || user?.role === 'client';
+  const isManagerRole = user?.role === 'manager';
 
   const [overdueCounts, setOverdueCounts] = useState<{
     replacement?: number;
@@ -55,7 +55,7 @@ export default function DashboardPage() {
   }, [overdueCounts]);
 
   useEffect(() => {
-    if (isCustomer) return;
+    if (isManagerRole) return;
     let cancelled = false;
     (async () => {
       try {
@@ -69,10 +69,10 @@ export default function DashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [isCustomer]);
+  }, [isManagerRole]);
 
   useEffect(() => {
-    if (isCustomer) return;
+    if (isManagerRole) return;
     let cancelled = false;
     (async () => {
       try {
@@ -86,7 +86,7 @@ export default function DashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [isCustomer]);
+  }, [isManagerRole]);
 
   return (
     <div className="min-h-screen">
@@ -179,7 +179,7 @@ export default function DashboardPage() {
         <FiltersDashboardSection />
 
         {/* Scheduled readings status & Equipment Status */}
-        {!isCustomer && (
+        {!isManagerRole && (
           <div className="grid lg:grid-cols-1 gap-6">
             <ScheduledReadingsStatus missedByLogType={missedByLogType} loading={missedReadingsLoading} />
             <EquipmentStatus />

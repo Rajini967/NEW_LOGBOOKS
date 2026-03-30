@@ -2,6 +2,8 @@ from django.db import models
 from django.conf import settings
 import uuid
 
+from accounts.models import UserRole
+
 
 class LogbookSchema(models.Model):
     """Logbook schema/template definition."""
@@ -54,13 +56,7 @@ class LogbookRoleAssignment(models.Model):
     )
     role = models.CharField(
         max_length=20,
-        choices=[
-            ('operator', 'Operator'),
-            ('supervisor', 'Supervisor'),
-            ('manager', 'Admin'),
-            ('super_admin', 'Super Admin'),
-            ('client', 'Client'),
-        ]
+        choices=UserRole.choices,
     )
     assigned_at = models.DateTimeField(auto_now_add=True)
     assigned_by = models.ForeignKey(

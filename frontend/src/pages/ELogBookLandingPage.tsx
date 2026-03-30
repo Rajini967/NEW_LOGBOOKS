@@ -61,8 +61,8 @@ export default function ELogBookLandingPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
 
-  const isFilterAdmin = user && (user.role === 'manager' || user.role === 'super_admin');
-  const isChemicalAdmin = user && (user.role === 'manager' || user.role === 'super_admin');
+  const isFilterAdmin = user && (user.role === 'admin' || user.role === 'super_admin');
+  const isChemicalAdmin = user && (user.role === 'admin' || user.role === 'super_admin');
 
   return (
     <div className="min-h-screen">

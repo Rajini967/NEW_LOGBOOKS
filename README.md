@@ -14,13 +14,13 @@ Related docs:
 
 Backend permissions come from `LOG_BOOKS/backend/accounts/permissions.py`:
 
-- **CanLogEntries**: `super_admin`, `manager`, `supervisor`, `operator`
-- **CanApproveReports**: `super_admin`, `manager`, `supervisor`
-- **IsManagerOrSuperAdmin**: `super_admin`, `manager`
+- **CanLogEntries**: `super_admin`, `admin`, `supervisor`, `operator`
+- **CanApproveReports**: `super_admin`, `admin`, `supervisor`
+- **IsAdminOrSuperAdmin**: `super_admin`, `admin`
 
 ### Role-wise access summary (core modules)
 
-- **super_admin / manager**
+- **super_admin / admin**
   - Equipment Master: create/update/delete departments, categories, equipment
   - Settings: update session settings + set Chiller daily limits
   - Chiller: create/edit logs + approve/reject logs
@@ -41,7 +41,7 @@ Backend permissions come from `LOG_BOOKS/backend/accounts/permissions.py`:
   - Dashboard: all sections visible + Quick Actions
   - Reports: access depends on UI role rules (currently shown in sidebar for operator)
 
-- **client/customer**
+- **manager** (formerly client/customer; stored role value `manager`)
   - Dashboard: limited (no Scheduled Readings / no Equipment Status; summary APIs skipped)
   - Reports + Trends: view-only
 
@@ -84,10 +84,10 @@ This is the “store date with table names” concept: the Report row stores the
 
 ```mermaid
 flowchart TD
-  OperatorOrAbove[Operator/Supervisor/Manager/SuperAdmin] --> CreateLog[POST /api/chiller-logs/]
+  OperatorOrAbove[Operator/Supervisor/Admin/SuperAdmin] --> CreateLog[POST /api/chiller-logs/]
   CreateLog --> DBChiller[(Table: chiller_logs)]
   DBChiller --> SubmitPending[Status: draft/pending]
-  SupervisorOrAbove[Supervisor/Manager/SuperAdmin] --> ApproveReject[POST /api/chiller-logs/{id}/approve/]
+  SupervisorOrAbove[Supervisor/Admin/SuperAdmin] --> ApproveReject[POST /api/chiller-logs/{id}/approve/]
   ApproveReject -->|approve| Approved[Status: approved]
   ApproveReject -->|reject| Rejected[Status: rejected]
   Approved --> CreateReport[Insert into reports (source_table=chiller_logs, source_id=log.id)]
@@ -105,9 +105,9 @@ flowchart TD
    - Entry appears in list
    - Status is `draft` or `pending`
 
-### Step-by-step testing (Supervisor / Manager / Super Admin)
+### Step-by-step testing (Supervisor / Admin / Super Admin)
 
-1. Login as `supervisor` (or manager/super_admin).
+1. Login as `supervisor` (or admin/super_admin).
 2. Open a `pending` chiller entry.
 3. Click **Approve**.
 4. Verify:
@@ -158,8 +158,8 @@ Chiller log data is stored in DB table **`chiller_logs`** (model `ChillerLog`).
 - Equipment exists in Equipment Master (example `CH-001`) and is selectable as `equipment_id`.
 - Role access:
   - Operator: can create/update
-  - Supervisor/Manager/Super Admin: can approve/reject
-  - Manager/Super Admin: can set daily limits (Settings)
+  - Supervisor/Admin/Super Admin: can approve/reject
+  - Admin/Super Admin: can set daily limits (Settings)
 
 ### 3) Positive test: submit one “FULL fields” entry (Operator)
 
@@ -233,7 +233,7 @@ Backend enforces `MinValueValidator(0)` on numeric fields.
 
 This proves “daily limit is working”.
 
-1. As **Manager/Super Admin**, set small limit for `CH-001`, e.g.:
+1. As **Admin/Super Admin**, set small limit for `CH-001`, e.g.:
    - `daily_power_limit_kw = 50`
 2. As **Operator**, create 2 entries on same date:
    - Entry 1: `starter_energy_kwh = 40` (should save)
@@ -246,11 +246,11 @@ Repeat for water/chemical limits using:
 ### 7) Role tests (security)
 
 - Operator cannot access Settings / cannot approve
-- Supervisor/Manager/Super Admin can approve/reject
+- Supervisor/Admin/Super Admin can approve/reject
 
 ### 8) Approval → Report row → PDF contains all fields
 
-1. As Supervisor/Manager/Super Admin, approve a pending entry
+1. As Supervisor/Admin/Super Admin, approve a pending entry
 2. Verify in Reports:
    - Report appears
    - Internally, `reports.source_table = chiller_logs` and `reports.source_id = <log uuid>`
@@ -258,7 +258,7 @@ Repeat for water/chemical limits using:
    - First page keeps original summary format
    - Additional pages/sections contain remaining fields (raw details)
 
-## Equipment Master – step-by-step testing (Manager/Super Admin)
+## Equipment Master – step-by-step testing (Admin/Super Admin)
 
 Routes:
 - Departments: `/equipment/departments`
@@ -287,7 +287,7 @@ If equipment is referenced by protected relations (e.g., filter assignment), del
 
 ---
 
-## Settings – session settings + Chiller daily limits (Manager/Super Admin)
+## Settings – session settings + Chiller daily limits (Admin/Super Admin)
 
 Route:
 - `/settings`
@@ -369,7 +369,7 @@ Note: Chiller logs are also constrained by the “one entry per time slot per eq
 
 #### 1) Power limit
 
-1. As Manager/Super Admin, set `daily_power_limit_kw = 10` for `CH-01` and save.
+1. As Admin/Super Admin, set `daily_power_limit_kw = 10` for `CH-01` and save.
 2. As Operator, create a chiller log on date \(D\) with `starter_energy_kwh = 9` (save ok).
 3. Create another log for the same chiller on the same date \(D\) with `starter_energy_kwh = 5`.
 4. Expected: second save fails with “Daily power limit (10 kWh) exceeded…”.
@@ -445,7 +445,7 @@ Behavior (current implementation):
 
 ## Practical tester checklist (Chiller-focused)
 
-### Manager/Super Admin checklist
+### Admin/Super Admin checklist
 - Can create Department, Category, Equipment
 - Can set Chiller daily limits in Settings
 - Can approve/reject chiller logs

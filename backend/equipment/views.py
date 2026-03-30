@@ -8,7 +8,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.exceptions import ValidationError
 
-from accounts.permissions import IsManagerOrSuperAdmin
+from accounts.permissions import IsAdminOrSuperAdmin
 from reports.utils import log_audit_event, log_entity_update_changes
 
 from .models import Department, EquipmentCategory, Equipment
@@ -30,7 +30,7 @@ class DepartmentViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ["create", "update", "partial_update", "destroy"]:
-            return [IsAuthenticated(), IsManagerOrSuperAdmin()]
+            return [IsAuthenticated(), IsAdminOrSuperAdmin()]
         return [IsAuthenticated()]
 
     def perform_create(self, serializer):
@@ -66,7 +66,7 @@ class EquipmentCategoryViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ["create", "update", "partial_update", "destroy"]:
-            return [IsAuthenticated(), IsManagerOrSuperAdmin()]
+            return [IsAuthenticated(), IsAdminOrSuperAdmin()]
         return [IsAuthenticated()]
 
     def destroy(self, request, *args, **kwargs):
@@ -143,7 +143,7 @@ class EquipmentViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ["create", "update", "partial_update", "destroy", "approve", "correct"]:
-            return [IsAuthenticated(), IsManagerOrSuperAdmin()]
+            return [IsAuthenticated(), IsAdminOrSuperAdmin()]
         return [IsAuthenticated()]
 
     def destroy(self, request, *args, **kwargs):

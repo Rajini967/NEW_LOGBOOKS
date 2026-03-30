@@ -37,7 +37,7 @@ from .permissions import (
     CanCreateUsers,
     CanManageUsers,
 )
-from .audit_utils import log_user_audit_event
+from .audit_utils import log_user_activity_event
 
 User = get_user_model()
 
@@ -91,12 +91,11 @@ class CustomTokenObtainPairView(TokenObtainPairView):
                     user.locked_until = timezone.now() + timedelta(minutes=LOCKOUT_DURATION_MINUTES)
                     user.save(update_fields=["failed_login_attempts", "locked_until"])
                     try:
-                        log_user_audit_event(
+                        log_user_activity_event(
                             "user_locked",
                             user,
-                            actor=None,
-                            new_value="Locked due to failed login attempts",
-                            field_name="lock",
+                            ip_address=request.META.get("REMOTE_ADDR"),
+                            user_agent=request.META.get("HTTP_USER_AGENT", ""),
                         )
                     except Exception:
                         pass
@@ -345,11 +344,16 @@ class UserViewSet(viewsets.ModelViewSet):
         if user.role == UserRole.SUPER_ADMIN:
             return User.objects.filter(is_deleted=False)
         
-        # Manager can see Supervisor, Operator, Client (not Super Admin or Manager)
-        if user.role == UserRole.MANAGER:
+        # Admin can see Supervisors, Operators, Managers, and other Admins (not Super Admin)
+        if user.role == UserRole.ADMIN:
             return User.objects.filter(
                 is_deleted=False,
-                role__in=[UserRole.SUPERVISOR, UserRole.OPERATOR, UserRole.CLIENT]
+                role__in=[
+                    UserRole.ADMIN,
+                    UserRole.SUPERVISOR,
+                    UserRole.OPERATOR,
+                    UserRole.MANAGER,
+                ]
             )
         
         # Others cannot list users
@@ -393,12 +397,11 @@ class UserViewSet(viewsets.ModelViewSet):
             raise
 
         try:
-            log_user_audit_event(
+            log_user_activity_event(
                 "user_created",
                 user,
-                actor=request.user,
-                new_value=user.email,
-                field_name="user",
+                ip_address=request.META.get("REMOTE_ADDR"),
+                user_agent=request.META.get("HTTP_USER_AGENT", ""),
             )
         except Exception:
             pass
@@ -416,13 +419,11 @@ class UserViewSet(viewsets.ModelViewSet):
         user.locked_until = None
         user.save(update_fields=["failed_login_attempts", "locked_until"])
         try:
-            log_user_audit_event(
+            log_user_activity_event(
                 "user_unlocked",
                 user,
-                actor=request.user,
-                old_value="Locked",
-                new_value="Unlocked",
-                field_name="lock",
+                ip_address=request.META.get("REMOTE_ADDR"),
+                user_agent=request.META.get("HTTP_USER_AGENT", ""),
             )
         except Exception:
             pass
@@ -442,11 +443,6 @@ class UserViewSet(viewsets.ModelViewSet):
                     {'error': 'Cannot modify Super Admin user.'},
                     status=status.HTTP_403_FORBIDDEN
                 )
-            if instance.role == UserRole.MANAGER and request.user.role == UserRole.MANAGER:
-                return Response(
-                    {'error': 'Managers cannot modify other Manager users.'},
-                    status=status.HTTP_403_FORBIDDEN
-                )
         
         serializer = self.get_serializer(instance, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
@@ -458,6 +454,13 @@ class UserViewSet(viewsets.ModelViewSet):
     def destroy(self, request, *args, **kwargs):
         """Soft delete a user."""
         instance = self.get_object()
+
+        # Only Super Admin can delete users
+        if request.user.role != UserRole.SUPER_ADMIN:
+            return Response(
+                {'error': 'Only Super Admin can delete users.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
         
         # Prevent self-deletion
         if instance.id == request.user.id:
@@ -472,14 +475,6 @@ class UserViewSet(viewsets.ModelViewSet):
                 {'error': 'Cannot delete Super Admin user.'},
                 status=status.HTTP_403_FORBIDDEN
             )
-        
-        # Check permissions
-        if not request.user.role == UserRole.SUPER_ADMIN:
-            if instance.role == UserRole.MANAGER:
-                return Response(
-                    {'error': 'Managers cannot delete other Manager users.'},
-                    status=status.HTTP_403_FORBIDDEN
-                )
         
         # Soft delete
         instance.soft_delete()
@@ -523,26 +518,26 @@ class UserReportViewSet(viewsets.ReadOnlyModelViewSet):
         # Super Admin can see all active, non-deleted users
         if user.role == UserRole.SUPER_ADMIN:
             qs = User.all_objects.filter(is_deleted=False)
-        # Manager/Admin should see Admin, Supervisor, Operator, Client
-        elif user.role == UserRole.MANAGER:
+        # Admin should see Admin, Supervisor, Operator, Manager
+        elif user.role == UserRole.ADMIN:
             qs = User.all_objects.filter(
                 is_deleted=False,
                 role__in=[
-                    UserRole.MANAGER,
+                    UserRole.ADMIN,
                     UserRole.SUPERVISOR,
                     UserRole.OPERATOR,
-                    UserRole.CLIENT,
+                    UserRole.MANAGER,
                 ],
             )
-        # Supervisor can see Admin, Supervisor, Operator, Client for reporting
+        # Supervisor can see Admin, Supervisor, Operator, Manager for reporting
         elif user.role == UserRole.SUPERVISOR:
             qs = User.all_objects.filter(
                 is_deleted=False,
                 role__in=[
-                    UserRole.MANAGER,
+                    UserRole.ADMIN,
                     UserRole.SUPERVISOR,
                     UserRole.OPERATOR,
-                    UserRole.CLIENT,
+                    UserRole.MANAGER,
                 ],
             )
         else:
@@ -577,8 +572,8 @@ class UserActivityReportViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         user = self.request.user
 
-        # Supervisors, Managers(Admin), and Super Admin can see activity
-        if user.role not in [UserRole.SUPERVISOR, UserRole.MANAGER, UserRole.SUPER_ADMIN]:
+        # Supervisors, Admins, and Super Admin can see activity
+        if user.role not in [UserRole.SUPERVISOR, UserRole.ADMIN, UserRole.SUPER_ADMIN]:
             return UserActivityLog.objects.none()
 
         qs = UserActivityLog.objects.select_related("user")
@@ -609,7 +604,7 @@ class SessionSettingsView(APIView):
     API for retrieving and updating session/auto-logout configuration.
 
     - GET: any authenticated user can read current settings.
-    - PATCH: only Super Admin and Admin (Manager) can update.
+    - PATCH: only Super Admin and Admin can update.
     """
 
     permission_classes = [IsAuthenticated]
@@ -621,7 +616,7 @@ class SessionSettingsView(APIView):
 
     def patch(self, request):
         user = request.user
-        if user.role not in [UserRole.SUPER_ADMIN, UserRole.MANAGER]:
+        if user.role not in [UserRole.SUPER_ADMIN, UserRole.ADMIN]:
             return Response(
                 {"detail": "You do not have permission to update session settings."},
                 status=status.HTTP_403_FORBIDDEN,

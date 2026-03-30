@@ -50,7 +50,7 @@ function locationFromCategoryName(name: string): "water_system" | "cooling_tower
 const ChemicalStockPage: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const isAdmin = user?.role === "manager" || user?.role === "super_admin";
+  const isAdmin = user?.role === "admin" || user?.role === "super_admin";
 
   const [rows, setRows] = useState<ChemicalStockRow[]>([]);
   const [isLoading, setIsLoading] = useState(false);

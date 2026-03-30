@@ -19,7 +19,7 @@ from core.log_slot_utils import (
 )
 from .models import BoilerLog, BoilerEquipmentLimit, BoilerDashboardConfig
 from .serializers import BoilerLogSerializer, BoilerEquipmentLimitSerializer
-from accounts.permissions import CanLogEntries, CanApproveReports, IsSuperAdminOrManager
+from accounts.permissions import CanLogEntries, CanApproveReports, IsSuperAdminOrAdmin
 from reports.utils import log_limit_change, log_audit_event
 
 CREATOR_ONLY_REJECTED_EDIT_MESSAGE = "Only the original creator can edit/correct a rejected entry."
@@ -64,25 +64,21 @@ def _get_boiler_limit_for_date(equipment_id: str, for_date):
 
 def _get_boiler_limit_for_display(equipment_id: str, for_date):
     """
-    Return the BoilerEquipmentLimit that should be used for dashboard display.
+    Return the BoilerEquipmentLimit for dashboard display.
 
-    For day view, we only want to show non-zero limits when there is a "fresh"
-    daily limit configured for the selected date (effective_from == for_date) or
-    a default row with effective_from null. Older limits (with effective_from
-    before for_date) are ignored so that dashboards show 0 until new limits are set.
+    Dashboard should show the limit configured for the selected date only.
+    Fallback to null-effective_from default row when present.
     """
-    # First, try an explicit row effective on this date
     limit = BoilerEquipmentLimit.objects.filter(
         equipment_id=equipment_id,
         effective_from=for_date,
-    ).order_by('-effective_from').first()
+    ).order_by("-effective_from").first()
     if limit is not None:
         return limit
-    # Fallback to a default/null-effective_from row if present
     return BoilerEquipmentLimit.objects.filter(
         equipment_id=equipment_id,
         effective_from__isnull=True,
-    ).order_by('-effective_from').first()
+    ).order_by("-effective_from").first()
 
 
 def _actual_boiler_for_date(d, equipment_id=None):
@@ -710,25 +706,20 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
             if equipment_id:
                 manual_eids = {e for e in manual_eids if e == equipment_id}
             equipment_ids_in_logs = equipment_ids_in_logs | manual_eids
-        approved_boiler_ids = set(_get_approved_boiler_equipment_ids())
+        configured_boiler_ids = set(
+            BoilerEquipmentLimit.objects.values_list('equipment_id', flat=True).distinct()
+        )
         if equipment_id:
-            limit_equipment_ids = [equipment_id] if ((equipment_ids_in_logs or equipment_id) and equipment_id in approved_boiler_ids) else []
+            has_data = bool(
+                equipment_ids_in_logs
+                or equipment_id in configured_boiler_ids
+                or BoilerEquipmentLimit.objects.filter(equipment_id=equipment_id).exists()
+            )
+            limit_equipment_ids = [equipment_id] if has_data else []
         else:
-            limit_equipment_ids = list(BoilerEquipmentLimit.objects.values_list('equipment_id', flat=True).distinct())
+            limit_equipment_ids = list(configured_boiler_ids)
             if equipment_ids_in_logs:
                 limit_equipment_ids = list(set(limit_equipment_ids) | equipment_ids_in_logs)
-            limit_equipment_ids = [eid for eid in limit_equipment_ids if eid in approved_boiler_ids]
-
-        # For day view, only consider equipment that has a fresh limit for ref_date
-        # (effective_from == ref_date) or a null-effective_from default. This matches
-        # the requirement that dashboards show non-zero limits only after new
-        # daily limits are configured for the selected date.
-        if period_type == 'day' and limit_equipment_ids:
-            limit_equipment_ids = [
-                eid
-                for eid in limit_equipment_ids
-                if _get_boiler_limit_for_display(eid, ref_date) is not None
-            ]
 
         if period_type == 'day':
             for eid in limit_equipment_ids:
@@ -776,7 +767,7 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
 
         config = BoilerDashboardConfig.objects.first()
         projected_power_kwh = None
-        actual_cost_rs = None
+        actual_cost_rs = 0.0
         projected_cost_rs = None
         if config and config.projected_power_kwh_month is not None and limit_power_kwh > 0:
             if period_type == 'month':
@@ -792,7 +783,7 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
 
         first_eid = limit_equipment_ids[0] if limit_equipment_ids else None
         rate_limit = _get_boiler_limit_for_display(first_eid, limit_lookup_date) if first_eid else BoilerEquipmentLimit.objects.first()
-        if rate_limit and limit_power_kwh > 0:
+        if rate_limit:
             power_rate = getattr(rate_limit, 'electricity_rate_rs_per_kwh', None) or 0
             diesel_rate = getattr(rate_limit, 'diesel_rate_rs_per_liter', None) or 0
             fo_rate = getattr(rate_limit, 'furnace_oil_rate_rs_per_liter', None) or 0
@@ -804,30 +795,33 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
                 + actual_brigade * brigade_rate,
                 2,
             )
-        if projected_power_kwh is not None and rate_limit and limit_power_kwh > 0:
-            power_rate = getattr(rate_limit, 'electricity_rate_rs_per_kwh', None) or 0
-            diesel_rate = getattr(rate_limit, 'diesel_rate_rs_per_liter', None) or 0
-            fo_rate = getattr(rate_limit, 'furnace_oil_rate_rs_per_liter', None) or 0
-            brigade_rate = getattr(rate_limit, 'brigade_rate_rs_per_kg', None) or 0
-            if config and config.projected_oil_cost_rs_month is not None:
-                proj_power_cost = projected_power_kwh * power_rate
-                if period_type == 'month':
-                    proj_oil = config.projected_oil_cost_rs_month
-                elif period_type == 'day':
-                    _, month_days = calendar.monthrange(ref_date.year, ref_date.month)
-                    proj_oil = config.projected_oil_cost_rs_month / month_days
+        if projected_power_kwh is not None:
+            if rate_limit:
+                power_rate = getattr(rate_limit, 'electricity_rate_rs_per_kwh', None) or 0
+                diesel_rate = getattr(rate_limit, 'diesel_rate_rs_per_liter', None) or 0
+                fo_rate = getattr(rate_limit, 'furnace_oil_rate_rs_per_liter', None) or 0
+                brigade_rate = getattr(rate_limit, 'brigade_rate_rs_per_kg', None) or 0
+                if config and config.projected_oil_cost_rs_month is not None:
+                    proj_power_cost = projected_power_kwh * power_rate
+                    if period_type == 'month':
+                        proj_oil = config.projected_oil_cost_rs_month
+                    elif period_type == 'day':
+                        _, month_days = calendar.monthrange(ref_date.year, ref_date.month)
+                        proj_oil = config.projected_oil_cost_rs_month / month_days
+                    else:
+                        proj_oil = config.projected_oil_cost_rs_month * 12
+                    projected_cost_rs = round(proj_power_cost + proj_oil, 2)
                 else:
-                    proj_oil = config.projected_oil_cost_rs_month * 12
-                projected_cost_rs = round(proj_power_cost + proj_oil, 2)
+                    # Same formula as dashboard_series: limits × rates so card matches graph
+                    projected_cost_rs = round(
+                        projected_power_kwh * power_rate
+                        + limit_diesel * diesel_rate
+                        + limit_furnace_oil * fo_rate
+                        + limit_brigade * brigade_rate,
+                        2,
+                    )
             else:
-                # Same formula as dashboard_series: limits × rates so card matches graph
-                projected_cost_rs = round(
-                    projected_power_kwh * power_rate
-                    + limit_diesel * diesel_rate
-                    + limit_furnace_oil * fo_rate
-                    + limit_brigade * brigade_rate,
-                    2,
-                )
+                projected_cost_rs = 0.0
 
         payload = {
             'period_type': period_type,
@@ -852,8 +846,7 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
         }
         if projected_power_kwh is not None:
             payload['projected_power_kwh'] = projected_power_kwh
-        if actual_cost_rs is not None:
-            payload['actual_cost_rs'] = actual_cost_rs
+        payload['actual_cost_rs'] = actual_cost_rs
         if projected_cost_rs is not None:
             payload['projected_cost_rs'] = projected_cost_rs
         utilization_pct = (actual_power_kwh / limit_power_kwh * 100) if limit_power_kwh > 0 else None
@@ -884,11 +877,9 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
         series_days = max(1, min(31, series_days))
 
         config = BoilerDashboardConfig.objects.first()
-        approved_boiler_ids = set(_get_approved_boiler_equipment_ids())
-        limit_eids_raw = list(BoilerEquipmentLimit.objects.values_list('equipment_id', flat=True).distinct())
-        limit_eids = [e for e in limit_eids_raw if e in approved_boiler_ids]
+        limit_eids = list(BoilerEquipmentLimit.objects.values_list('equipment_id', flat=True).distinct())
         first_eid = None
-        if equipment_id and equipment_id in approved_boiler_ids:
+        if equipment_id:
             first_eid = equipment_id
         elif limit_eids:
             first_eid = limit_eids[0]
@@ -903,7 +894,7 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
         series = []
         try:
             if period_type == 'day':
-                eids_day = [equipment_id] if (equipment_id and equipment_id in approved_boiler_ids) else limit_eids
+                eids_day = [equipment_id] if equipment_id else limit_eids
                 for i in range(series_days - 1, -1, -1):
                     d = ref_date - timedelta(days=i)
                     label = d.strftime('%d %b')
@@ -963,7 +954,7 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
                 limit_fo = 0.0
                 limit_br = 0.0
                 limit_steam = 0.0
-                eids = [equipment_id] if (equipment_id and equipment_id in approved_boiler_ids) else limit_eids
+                eids = [equipment_id] if equipment_id else limit_eids
                 for eid in eids:
                     limit_row = _get_boiler_limit_for_display(eid, limit_lookup)
                     if limit_row:
@@ -1026,7 +1017,7 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
                 limit_fo = 0.0
                 limit_br = 0.0
                 limit_steam = 0.0
-                eids = [equipment_id] if (equipment_id and equipment_id in approved_boiler_ids) else limit_eids
+                eids = [equipment_id] if equipment_id else limit_eids
                 for eid in eids:
                     limit_row = _get_boiler_limit_for_display(eid, limit_lookup)
                     if limit_row:
@@ -1315,7 +1306,7 @@ class BoilerEquipmentLimitViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ('create', 'update', 'partial_update', 'destroy'):
-            return [IsAuthenticated(), IsSuperAdminOrManager()]
+            return [IsAuthenticated(), IsSuperAdminOrAdmin()]
         return [IsAuthenticated()]
 
     def get_queryset(self):

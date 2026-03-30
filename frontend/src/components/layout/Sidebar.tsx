@@ -36,18 +36,16 @@ interface SidebarProps {
 const roleLabels: Record<string, string> = {
   operator: 'Operator',
   supervisor: 'Supervisor',
-  customer: 'Client',
-  client: 'Client',
-  manager: 'Admin',
+  admin: 'Admin',
+  manager: 'Manager',
   super_admin: 'Super Admin',
 };
 
 const roleColors: Record<string, 'default' | 'accent' | 'warning' | 'success'> = {
   operator: 'default',
   supervisor: 'accent',
-  customer: 'warning',
-  client: 'warning',
-  manager: 'accent',
+  admin: 'accent',
+  manager: 'warning',
   super_admin: 'success',
 };
 
@@ -83,30 +81,30 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   }, [location.pathname]);
 
   const navItems = [
-    { path: '/dashboard', icon: LayoutDashboard, label: 'Dashboard', roles: ['operator', 'supervisor', 'customer', 'client', 'manager', 'super_admin'] },
-    { path: '/logbook-builder', icon: Hammer, label: 'Logbook Builder', roles: ['super_admin', 'manager'] },
-    { path: '/e-log-book', icon: ClipboardList, label: 'E Log Book', roles: ['operator', 'supervisor', 'super_admin', 'manager'] },
-    { path: '/instruments', icon: Wrench, label: 'Instruments', roles: ['supervisor', 'super_admin', 'manager'] },
-    { path: '/reports', icon: FileText, label: 'Reports', roles: ['supervisor', 'customer', 'client', 'super_admin', 'manager'] },
-    { path: '/trends', icon: TrendingUp, label: 'Trends', roles: ['operator', 'supervisor', 'customer', 'client', 'manager', 'super_admin'] },
-    { path: '/users', icon: Users, label: 'User Management', roles: ['super_admin', 'manager'] },
-    { path: '/settings', icon: Settings, label: 'Settings', roles: ['super_admin', 'manager'] },
+    { path: '/dashboard', icon: LayoutDashboard, label: 'Dashboard', roles: ['operator', 'supervisor', 'manager', 'admin', 'super_admin'] },
+    { path: '/logbook-builder', icon: Hammer, label: 'Logbook Builder', roles: ['super_admin', 'admin'] },
+    { path: '/e-log-book', icon: ClipboardList, label: 'E Log Book', roles: ['operator', 'supervisor', 'super_admin', 'admin'] },
+    { path: '/instruments', icon: Wrench, label: 'Instruments', roles: ['supervisor', 'super_admin', 'admin'] },
+    { path: '/reports', icon: FileText, label: 'Reports', roles: ['supervisor', 'manager', 'super_admin', 'admin'] },
+    { path: '/trends', icon: TrendingUp, label: 'Trends', roles: ['operator', 'supervisor', 'manager', 'admin', 'super_admin'] },
+    { path: '/users', icon: Users, label: 'User Management', roles: ['super_admin', 'admin'] },
+    { path: '/settings', icon: Settings, label: 'Settings', roles: ['super_admin', 'admin'] },
   ];
 
   const hvacTestItems = [
-    { path: '/hvac-validation/air-velocity-test', icon: Activity, label: 'Air Velocity Test', roles: ['operator', 'supervisor', 'super_admin', 'manager'] },
-    { path: '/hvac-validation/filter-integrity-test', icon: Filter, label: 'Filter Integrity Test', roles: ['operator', 'supervisor', 'super_admin', 'manager'] },
-    { path: '/hvac-validation/recovery-test', icon: Clock, label: 'Recovery Test', roles: ['operator', 'supervisor', 'super_admin', 'manager'] },
-    { path: '/hvac-validation/differential-pressure-test', icon: Gauge, label: 'Differential Pressure Test', roles: ['operator', 'supervisor', 'super_admin', 'manager'] },
-    { path: '/hvac-validation/nvpc-test', icon: Activity, label: 'NVPC Test', roles: ['operator', 'supervisor', 'super_admin', 'manager'] },
+    { path: '/hvac-validation/air-velocity-test', icon: Activity, label: 'Air Velocity Test', roles: ['operator', 'supervisor', 'super_admin', 'admin'] },
+    { path: '/hvac-validation/filter-integrity-test', icon: Filter, label: 'Filter Integrity Test', roles: ['operator', 'supervisor', 'super_admin', 'admin'] },
+    { path: '/hvac-validation/recovery-test', icon: Clock, label: 'Recovery Test', roles: ['operator', 'supervisor', 'super_admin', 'admin'] },
+    { path: '/hvac-validation/differential-pressure-test', icon: Gauge, label: 'Differential Pressure Test', roles: ['operator', 'supervisor', 'super_admin', 'admin'] },
+    { path: '/hvac-validation/nvpc-test', icon: Activity, label: 'NVPC Test', roles: ['operator', 'supervisor', 'super_admin', 'admin'] },
   ];
 
   const eLogBookItems = [
-    { id: 'chiller', path: '/e-log-book/chiller', icon: Thermometer, label: 'Chiller', roles: ['operator', 'supervisor', 'super_admin', 'manager'] },
-    { id: 'boiler', path: '/e-log-book/boiler', icon: Gauge, label: 'Boiler', roles: ['operator', 'supervisor', 'super_admin', 'manager'] },
-    { id: 'chemical', path: '/e-log-book/chemical', icon: Droplets, label: 'Chemical', roles: ['operator', 'supervisor', 'super_admin', 'manager'] },
-    { id: 'filter', path: '/e-log-book/filter', icon: Filter, label: 'Filter', roles: ['operator', 'supervisor', 'super_admin', 'manager'] },
-    { id: 'consumption', path: '/e-log-book/consumption', icon: BarChart3, label: 'Consumption', roles: ['operator', 'supervisor', 'super_admin', 'manager'] },
+    { id: 'chiller', path: '/e-log-book/chiller', icon: Thermometer, label: 'Chiller', roles: ['operator', 'supervisor', 'super_admin', 'admin'] },
+    { id: 'boiler', path: '/e-log-book/boiler', icon: Gauge, label: 'Boiler', roles: ['operator', 'supervisor', 'super_admin', 'admin'] },
+    { id: 'chemical', path: '/e-log-book/chemical', icon: Droplets, label: 'Chemical', roles: ['operator', 'supervisor', 'super_admin', 'admin'] },
+    { id: 'filter', path: '/e-log-book/filter', icon: Filter, label: 'Filter', roles: ['operator', 'supervisor', 'super_admin', 'admin'] },
+    { id: 'consumption', path: '/e-log-book/consumption', icon: BarChart3, label: 'Consumption', roles: ['operator', 'supervisor', 'super_admin', 'admin'] },
   ];
 
   const filteredItems = navItems.filter(
@@ -216,7 +214,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         })()}
 
         {/* Equipment Master Section (collapsible, like E Log Book) */}
-        {user && ['super_admin', 'manager'].includes(user.role) && (
+        {user && ['super_admin', 'admin'].includes(user.role) && (
           <div className="space-y-1">
             <div className="space-y-1">
               <div className="relative">
@@ -341,7 +339,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                   {filteredELogBookItems.map((item) => {
                     const isFilterItem = item.id === 'filter';
                     const isFilterAdmin =
-                      user && (user.role === 'manager' || user.role === 'super_admin');
+                      user && (user.role === 'admin' || user.role === 'super_admin');
 
                     const targetPath =
                       isFilterItem && user
@@ -379,7 +377,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         )}
 
         {/* HVAC Validation Section */}
-        {user && ['operator', 'supervisor', 'super_admin', 'manager'].includes(user.role) && (
+        {user && ['operator', 'supervisor', 'super_admin', 'admin'].includes(user.role) && (
           <div className="space-y-1">
             {/* HVAC Validation Parent */}
             <div className="space-y-1">

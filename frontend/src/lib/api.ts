@@ -199,6 +199,7 @@ export const authAPI = {
 
   updateSessionSettings: async (data: {
     auto_logout_minutes?: number;
+    password_expiry_days?: number | null;
     log_entry_interval?: 'hourly' | 'shift' | 'daily';
     shift_duration_hours?: number;
   }) => {

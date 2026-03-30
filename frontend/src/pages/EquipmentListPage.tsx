@@ -122,7 +122,7 @@ export default function EquipmentListPage() {
   const [actionCommentText, setActionCommentText] = useState("");
 
   const canApprove =
-    user?.role === "super_admin" || user?.role === "manager";
+    user?.role === "super_admin" || user?.role === "admin";
 
   useEffect(() => {
     const loadLookups = async () => {

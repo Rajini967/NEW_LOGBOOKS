@@ -18,7 +18,7 @@ class UserCreationAndLockAPITests(APITestCase):
         self.manager = User.objects.create_user(
             email="manager@example.com",
             password="ManagerPass123!",
-            role=UserRole.MANAGER,
+            role=UserRole.ADMIN,
             is_active=True,
         )
         self.operator_email = "operator@example.com"

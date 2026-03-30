@@ -8,7 +8,7 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from accounts.permissions import IsManagerOrSuperAdmin
+from accounts.permissions import IsAdminOrSuperAdmin
 from reports.utils import create_report_entry, log_audit_event, log_entity_update_changes
 
 from .models import FilterCategory, FilterMaster, FilterAssignment, FilterSchedule, FilterDashboardConfig
@@ -28,7 +28,7 @@ class FilterCategoryViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ["create", "update", "partial_update", "destroy"]:
-            return [IsAuthenticated(), IsManagerOrSuperAdmin()]
+            return [IsAuthenticated(), IsAdminOrSuperAdmin()]
         return [IsAuthenticated()]
 
     def perform_create(self, serializer):
@@ -62,7 +62,7 @@ class FilterMasterViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ["create", "update", "partial_update", "destroy", "approve", "reject"]:
-            return [IsAuthenticated(), IsManagerOrSuperAdmin()]
+            return [IsAuthenticated(), IsAdminOrSuperAdmin()]
         return [IsAuthenticated()]
 
     def create(self, request, *args, **kwargs):
@@ -231,7 +231,7 @@ class FilterAssignmentViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ["create", "update", "partial_update", "destroy"]:
-            return [IsAuthenticated(), IsManagerOrSuperAdmin()]
+            return [IsAuthenticated(), IsAdminOrSuperAdmin()]
         return [IsAuthenticated()]
 
     def get_queryset(self):
@@ -276,7 +276,7 @@ class FilterScheduleViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ["create", "update", "partial_update", "destroy", "approve", "reject"]:
-            return [IsAuthenticated(), IsManagerOrSuperAdmin()]
+            return [IsAuthenticated(), IsAdminOrSuperAdmin()]
         return [IsAuthenticated()]
 
     def get_queryset(self):

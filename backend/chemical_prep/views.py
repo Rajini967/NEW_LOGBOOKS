@@ -24,7 +24,7 @@ from .serializers import (
     ChemicalAssignmentSerializer,
     ChemicalPreparationSerializer,
 )
-from accounts.permissions import CanLogEntries, CanApproveReports, IsSuperAdminOrManager
+from accounts.permissions import CanLogEntries, CanApproveReports, IsSuperAdminOrAdmin
 from reports.utils import log_limit_change, log_audit_event
 from collections import defaultdict
 
@@ -216,9 +216,9 @@ class ChemicalStockViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ("update", "partial_update", "destroy"):
-            return [IsAuthenticated(), IsSuperAdminOrManager()]
+            return [IsAuthenticated(), IsSuperAdminOrAdmin()]
         if self.action == "create":
-            return [IsAuthenticated(), IsSuperAdminOrManager()]
+            return [IsAuthenticated(), IsSuperAdminOrAdmin()]
         return [IsAuthenticated()]
 
     def create(self, request, *args, **kwargs):
@@ -255,7 +255,7 @@ class ChemicalStockViewSet(viewsets.ModelViewSet):
             "price_per_unit": price_per_unit,
         })
 
-    @action(detail=False, methods=["post"], permission_classes=[IsAuthenticated, IsSuperAdminOrManager])
+    @action(detail=False, methods=["post"], permission_classes=[IsAuthenticated, IsSuperAdminOrAdmin])
     def create_entry(self, request):
         """
         Create a new chemical stock entry from manual fields.
@@ -328,9 +328,9 @@ class ChemicalAssignmentViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ("create", "update", "partial_update", "destroy"):
-            return [IsAuthenticated(), IsSuperAdminOrManager()]
+            return [IsAuthenticated(), IsSuperAdminOrAdmin()]
         if self.action == "approve":
-            return [IsAuthenticated(), IsSuperAdminOrManager()]
+            return [IsAuthenticated(), IsSuperAdminOrAdmin()]
         return [IsAuthenticated()]
 
     def perform_create(self, serializer):

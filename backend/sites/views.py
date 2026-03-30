@@ -3,7 +3,7 @@ from rest_framework.permissions import IsAuthenticated
 from reports.utils import log_audit_event, log_entity_update_changes
 from .models import Site
 from .serializers import SiteSerializer
-from accounts.permissions import IsManagerOrSuperAdmin
+from accounts.permissions import IsAdminOrSuperAdmin
 
 
 class SiteViewSet(viewsets.ModelViewSet):
@@ -15,7 +15,7 @@ class SiteViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         """Only managers and super admins can create/update/delete."""
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsAuthenticated(), IsManagerOrSuperAdmin()]
+            return [IsAuthenticated(), IsAdminOrSuperAdmin()]
         return [IsAuthenticated()]
 
     def perform_create(self, serializer):

@@ -684,12 +684,12 @@ export default function ReportsPage() {
   const briquetteSyncAttemptedRef = useRef(false);
 
   const isSupervisor = user?.role === 'supervisor' || user?.role === 'super_admin';
-  const isManager = user?.role === 'manager';
-  const isCustomer = user?.role === 'customer';
-  const canSeeUserReports = !isCustomer && (isSupervisor || isManager || user?.role === 'super_admin');
-  const canSeeActivity = !isCustomer && (isSupervisor || isManager || user?.role === 'super_admin');
-  const canSeeAudit = !isCustomer && (isSupervisor || isManager || user?.role === 'super_admin');
-  const canSyncBriquetteReports = !isCustomer && (user?.role === 'super_admin' || isManager);
+  const isAdmin = user?.role === 'admin';
+  const isManagerRole = user?.role === 'manager';
+  const canSeeUserReports = !isManagerRole && (isSupervisor || isAdmin);
+  const canSeeActivity = !isManagerRole && (isSupervisor || isAdmin);
+  const canSeeAudit = !isManagerRole && (isSupervisor || isAdmin);
+  const canSyncBriquetteReports = !isManagerRole && (user?.role === 'super_admin' || isAdmin);
 
   const reportCreatedByOptions = useMemo(() => {
     const unique = Array.from(new Set(reports.map((r) => r.createdBy).filter(Boolean))) as string[];
@@ -2923,10 +2923,10 @@ export default function ReportsPage() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All</SelectItem>
-                    <SelectItem value="manager">Admin</SelectItem>
+                    <SelectItem value="admin">Admin</SelectItem>
                     <SelectItem value="supervisor">Supervisor</SelectItem>
                     <SelectItem value="operator">Operator</SelectItem>
-                    <SelectItem value="client">Client</SelectItem>
+                    <SelectItem value="manager">Manager</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -3187,6 +3187,10 @@ export default function ReportsPage() {
                     <SelectItem value="manual_login">Manual Login</SelectItem>
                     <SelectItem value="manual_logout">Manual Logout</SelectItem>
                     <SelectItem value="auto_logout">Auto Logout</SelectItem>
+                    <SelectItem value="user_created">User created</SelectItem>
+                    <SelectItem value="password_changed">Password changed</SelectItem>
+                    <SelectItem value="user_locked">User locked</SelectItem>
+                    <SelectItem value="user_unlocked">User unlocked</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -3398,10 +3402,6 @@ export default function ReportsPage() {
                     <SelectItem value="entity_approved">Entity Approved</SelectItem>
                     <SelectItem value="entity_rejected">Entity Rejected</SelectItem>
                     <SelectItem value="consumption_updated">Consumption Updated</SelectItem>
-                    <SelectItem value="user_created">User created</SelectItem>
-                    <SelectItem value="password_changed">Password changed</SelectItem>
-                    <SelectItem value="user_locked">User locked</SelectItem>
-                    <SelectItem value="user_unlocked">User unlocked</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

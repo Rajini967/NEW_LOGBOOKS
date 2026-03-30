@@ -273,13 +273,19 @@ export default function ConsumptionPage() {
     if (!selectedChiller) return;
     setChillerSaving(true);
     try {
-      await dashboardSummaryAPI.saveDailyConsumption({
+      const res = (await dashboardSummaryAPI.saveDailyConsumption({
         type: 'chiller',
         date: chillerDate,
         equipment_id: selectedChiller,
         ...chillerForm,
-      });
-      toast.success('Chiller consumption saved');
+      })) as { warnings?: string[] };
+      const warnings = res?.warnings;
+      if (Array.isArray(warnings) && warnings.length > 0) {
+        const warningMessage = warnings.join(' ');
+        toast.warning(`Chiller consumption saved with limit warnings: ${warningMessage}`);
+      } else {
+        toast.success('Chiller consumption saved');
+      }
     } catch (e: unknown) {
       const err = e as { response?: { data?: { error?: string } }; message?: string };
       toast.error(err?.response?.data?.error ?? err?.message ?? 'Failed to save');
@@ -292,18 +298,23 @@ export default function ConsumptionPage() {
     if (!selectedBoiler) return;
     setBoilerSaving(true);
     try {
-      await dashboardSummaryAPI.saveDailyConsumption({
+      const res = (await dashboardSummaryAPI.saveDailyConsumption({
         type: 'boiler',
         date: boilerDate,
         equipment_id: selectedBoiler,
         ...boilerForm,
-      });
-      toast.success('Boiler consumption saved');
+      })) as { warnings?: string[] };
+      const warnings = res?.warnings;
+      if (Array.isArray(warnings) && warnings.length > 0) {
+        const warningMessage = warnings.join(' ');
+        toast.warning(`Boiler consumption saved with limit warnings: ${warningMessage}`);
+      } else {
+        toast.success('Boiler consumption saved');
+      }
     } catch (e: unknown) {
       const err = e as { response?: { status?: number; data?: { error?: string } }; message?: string };
       const msg = err?.response?.data?.error ?? err?.message ?? 'Failed to save';
-      const isExceed = err?.response?.status === 400 && msg.toLowerCase().includes('exceed');
-      toast.error(isExceed ? `Exceeds limit. Not saved. ${msg}` : msg);
+      toast.error(msg);
     } finally {
       setBoilerSaving(false);
     }

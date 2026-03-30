@@ -359,7 +359,7 @@ export function BoilerDashboardSection() {
       {!loading && !error && summary && summary.has_boiler_equipment === false && (
         <div className="rounded-lg border border-border bg-muted/30 p-6 text-center text-muted-foreground text-sm">
           <p>
-            No approved boiler equipment found. Add equipment with category Boiler in Equipment Master and approve it to see the boiler dashboard.
+            No boiler limit or consumption data found for the selected filters/date.
           </p>
         </div>
       )}

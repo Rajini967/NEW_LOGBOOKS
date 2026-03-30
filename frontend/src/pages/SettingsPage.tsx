@@ -36,11 +36,13 @@ export default function SettingsPage() {
   const navigate = useNavigate();
   const { refreshSessionSettings } = useAuth();
   const [sessionTimeoutMinutes, setSessionTimeoutMinutes] = useState<number | ''>('');
+  const [passwordExpiryDays, setPasswordExpiryDays] = useState<number | ''>('');
   const [logEntryInterval, setLogEntryInterval] = useState<LogEntryIntervalType>('hourly');
   const [shiftDurationHours, setShiftDurationHours] = useState<number>(8);
   const [isSessionLoading, setIsSessionLoading] = useState(false);
   const [chillerEquipment, setChillerEquipment] = useState<{ id: string; equipment_number: string; name: string }[]>([]);
-  const [chillerLimits, setChillerLimits] = useState<Record<string, {
+  type ChillerLimitRow = {
+    equipment_id?: string;
     effective_from?: string | null;
     daily_power_limit_kw?: number | null;
     electricity_rate_rs_per_kwh?: number | null;
@@ -50,7 +52,9 @@ export default function SettingsPage() {
     daily_chemical_ct1_kg?: number | null;
     daily_chemical_ct2_kg?: number | null;
     daily_chemical_ct3_kg?: number | null;
-  }>>({});
+  };
+
+  const [chillerLimits, setChillerLimits] = useState<Record<string, ChillerLimitRow>>({});
   const [chillerLimitsLoading, setChillerLimitsLoading] = useState(false);
   const [chillerLimitSaving, setChillerLimitSaving] = useState<string | null>(null);
   const [selectedChillerForLimits, setSelectedChillerForLimits] = useState<string>('');
@@ -73,6 +77,156 @@ export default function SettingsPage() {
   const [boilerLimitSaving, setBoilerLimitSaving] = useState<string | null>(null);
   const [selectedBoilerForLimits, setSelectedBoilerForLimits] = useState<string>('');
 
+  const emptyChillerLimit = (): ChillerLimitRow => ({
+    equipment_id: undefined,
+    effective_from: null,
+    daily_power_limit_kw: null,
+    electricity_rate_rs_per_kwh: null,
+    daily_water_ct1_liters: null,
+    daily_water_ct2_liters: null,
+    daily_water_ct3_liters: null,
+    daily_chemical_ct1_kg: null,
+    daily_chemical_ct2_kg: null,
+    daily_chemical_ct3_kg: null,
+  });
+
+  const toChillerLimitState = (limit: ChillerLimitRow): ChillerLimitRow => ({
+    equipment_id: limit.equipment_id,
+    effective_from: limit.effective_from ?? null,
+    daily_power_limit_kw: limit.daily_power_limit_kw ?? null,
+    electricity_rate_rs_per_kwh: limit.electricity_rate_rs_per_kwh ?? null,
+    daily_water_ct1_liters: limit.daily_water_ct1_liters ?? null,
+    daily_water_ct2_liters: limit.daily_water_ct2_liters ?? null,
+    daily_water_ct3_liters: limit.daily_water_ct3_liters ?? null,
+    daily_chemical_ct1_kg: limit.daily_chemical_ct1_kg ?? null,
+    daily_chemical_ct2_kg: limit.daily_chemical_ct2_kg ?? null,
+    daily_chemical_ct3_kg: limit.daily_chemical_ct3_kg ?? null,
+  });
+
+  const getChillerEffectiveDate = (limit: ChillerLimitRow): string | null => {
+    const raw = limit.effective_from;
+    if (!raw) return null;
+    return String(raw).slice(0, 10);
+  };
+
+  const pickChillerLimitForDate = (rows: ChillerLimitRow[], selectedDate?: string | null): ChillerLimitRow | null => {
+    if (!rows.length) return null;
+    const date = (selectedDate ?? '').slice(0, 10);
+    if (date) {
+      const exact = rows.find((r) => getChillerEffectiveDate(r) === date);
+      if (exact) return exact;
+    }
+    const nullDefault = rows.find((r) => !getChillerEffectiveDate(r));
+    if (nullDefault) return nullDefault;
+    return null;
+  };
+
+  const loadChillerLimitForDate = async (
+    equipmentNumber: string,
+    equipmentUuid?: string,
+    selectedDate?: string | null
+  ) => {
+    try {
+      const rowsAll = (await chillerLimitsAPI.list()) as ChillerLimitRow[];
+      const rows = rowsAll.filter(
+        (r) => r.equipment_id === equipmentNumber || (!!equipmentUuid && r.equipment_id === equipmentUuid)
+      );
+      const picked = pickChillerLimitForDate(rows, selectedDate);
+      setChillerLimits((prev) => ({
+        ...prev,
+        [equipmentNumber]: picked
+          ? toChillerLimitState(picked)
+          : { ...emptyChillerLimit(), equipment_id: equipmentNumber, effective_from: selectedDate ?? null },
+      }));
+    } catch {
+      setChillerLimits((prev) => ({
+        ...prev,
+        [equipmentNumber]: { ...emptyChillerLimit(), equipment_id: equipmentNumber, effective_from: selectedDate ?? null },
+      }));
+    }
+  };
+
+  type BoilerLimitRow = {
+    effective_from?: string | null;
+    daily_power_limit_kw?: number | null;
+    daily_water_limit_liters?: number | null;
+    daily_chemical_limit_kg?: number | null;
+    daily_diesel_limit_liters?: number | null;
+    daily_furnace_oil_limit_liters?: number | null;
+    daily_brigade_limit_kg?: number | null;
+    daily_steam_limit_kg_hr?: number | null;
+    electricity_rate_rs_per_kwh?: number | null;
+    diesel_rate_rs_per_liter?: number | null;
+    furnace_oil_rate_rs_per_liter?: number | null;
+    brigade_rate_rs_per_kg?: number | null;
+  };
+
+  const emptyBoilerLimit = (): BoilerLimitRow => ({
+    effective_from: null,
+    daily_power_limit_kw: null,
+    daily_water_limit_liters: null,
+    daily_chemical_limit_kg: null,
+    daily_diesel_limit_liters: null,
+    daily_furnace_oil_limit_liters: null,
+    daily_brigade_limit_kg: null,
+    daily_steam_limit_kg_hr: null,
+    electricity_rate_rs_per_kwh: null,
+    diesel_rate_rs_per_liter: null,
+    furnace_oil_rate_rs_per_liter: null,
+    brigade_rate_rs_per_kg: null,
+  });
+
+  const toBoilerLimitState = (limit: BoilerLimitRow): BoilerLimitRow => ({
+    effective_from: limit.effective_from ?? null,
+    daily_power_limit_kw: limit.daily_power_limit_kw ?? null,
+    daily_water_limit_liters: limit.daily_water_limit_liters ?? null,
+    daily_chemical_limit_kg: limit.daily_chemical_limit_kg ?? null,
+    daily_diesel_limit_liters: limit.daily_diesel_limit_liters ?? null,
+    daily_furnace_oil_limit_liters: limit.daily_furnace_oil_limit_liters ?? null,
+    daily_brigade_limit_kg: limit.daily_brigade_limit_kg ?? null,
+    daily_steam_limit_kg_hr: limit.daily_steam_limit_kg_hr ?? null,
+    electricity_rate_rs_per_kwh: limit.electricity_rate_rs_per_kwh ?? null,
+    diesel_rate_rs_per_liter: limit.diesel_rate_rs_per_liter ?? null,
+    furnace_oil_rate_rs_per_liter: limit.furnace_oil_rate_rs_per_liter ?? null,
+    brigade_rate_rs_per_kg: limit.brigade_rate_rs_per_kg ?? null,
+  });
+
+  const getEffectiveDate = (limit: BoilerLimitRow): string | null => {
+    const raw = limit.effective_from;
+    if (!raw) return null;
+    return String(raw).slice(0, 10);
+  };
+
+  const pickBoilerLimitForDate = (rows: BoilerLimitRow[], selectedDate?: string | null): BoilerLimitRow | null => {
+    if (!rows.length) return null;
+    const date = (selectedDate ?? '').slice(0, 10);
+    if (date) {
+      const exact = rows.find((r) => getEffectiveDate(r) === date);
+      if (exact) return exact;
+    }
+    const nullDefault = rows.find((r) => !getEffectiveDate(r));
+    if (nullDefault) return nullDefault;
+    return null;
+  };
+
+  const loadBoilerLimitForDate = async (equipmentNumber: string, selectedDate?: string | null) => {
+    try {
+      const rows = (await boilerLimitsAPI.list({ equipment_id: equipmentNumber })) as BoilerLimitRow[];
+      const picked = pickBoilerLimitForDate(rows, selectedDate);
+      setBoilerLimits((prev) => ({
+        ...prev,
+        [equipmentNumber]: picked
+          ? toBoilerLimitState(picked)
+          : { ...emptyBoilerLimit(), effective_from: selectedDate ?? null },
+      }));
+    } catch {
+      setBoilerLimits((prev) => ({
+        ...prev,
+        [equipmentNumber]: { ...emptyBoilerLimit(), effective_from: selectedDate ?? null },
+      }));
+    }
+  };
+
   useEffect(() => {
     const loadSessionSettings = async () => {
       setIsSessionLoading(true);
@@ -80,6 +234,11 @@ export default function SettingsPage() {
         const data = await authAPI.getSessionSettings();
         if (typeof data.auto_logout_minutes === 'number') {
           setSessionTimeoutMinutes(data.auto_logout_minutes);
+        }
+        if (typeof data.password_expiry_days === 'number') {
+          setPasswordExpiryDays(data.password_expiry_days);
+        } else {
+          setPasswordExpiryDays('');
         }
         if (data.log_entry_interval === 'hourly' || data.log_entry_interval === 'shift' || data.log_entry_interval === 'daily') {
           setLogEntryInterval(data.log_entry_interval);
@@ -121,33 +280,19 @@ export default function SettingsPage() {
           .filter((e: any) => e?.is_active !== false && e?.status === 'approved')
           .map((e: any) => ({ id: e.id, equipment_number: e.equipment_number || '', name: e.name || '' }));
         setChillerEquipment(chillers);
-        const limitsByEq: Record<string, any> = {};
+        const limitsByEq: Record<string, ChillerLimitRow> = {};
         for (const eq of chillers) {
           try {
-            const limit = await chillerLimitsAPI.get(eq.equipment_number);
-            limitsByEq[eq.equipment_number] = {
-              effective_from: limit.effective_from ?? null,
-              daily_power_limit_kw: limit.daily_power_limit_kw ?? null,
-              electricity_rate_rs_per_kwh: limit.electricity_rate_rs_per_kwh ?? null,
-              daily_water_ct1_liters: limit.daily_water_ct1_liters ?? null,
-              daily_water_ct2_liters: limit.daily_water_ct2_liters ?? null,
-              daily_water_ct3_liters: limit.daily_water_ct3_liters ?? null,
-              daily_chemical_ct1_kg: limit.daily_chemical_ct1_kg ?? null,
-              daily_chemical_ct2_kg: limit.daily_chemical_ct2_kg ?? null,
-              daily_chemical_ct3_kg: limit.daily_chemical_ct3_kg ?? null,
-            };
+            const rowsAll = (await chillerLimitsAPI.list()) as ChillerLimitRow[];
+            const rows = rowsAll.filter(
+              (r) => r.equipment_id === eq.equipment_number || r.equipment_id === eq.id
+            );
+            const picked = pickChillerLimitForDate(rows, null);
+            limitsByEq[eq.equipment_number] = picked
+              ? toChillerLimitState(picked)
+              : { ...emptyChillerLimit(), equipment_id: eq.equipment_number };
           } catch {
-            limitsByEq[eq.equipment_number] = {
-              effective_from: null,
-              daily_power_limit_kw: null,
-              electricity_rate_rs_per_kwh: null,
-              daily_water_ct1_liters: null,
-              daily_water_ct2_liters: null,
-              daily_water_ct3_liters: null,
-              daily_chemical_ct1_kg: null,
-              daily_chemical_ct2_kg: null,
-              daily_chemical_ct3_kg: null,
-            };
+            limitsByEq[eq.equipment_number] = { ...emptyChillerLimit(), equipment_id: eq.equipment_number };
           }
         }
         setChillerLimits(limitsByEq);
@@ -167,6 +312,14 @@ export default function SettingsPage() {
       setSelectedChillerForLimits(chillerEquipment[0].equipment_number);
     }
   }, [chillerEquipment]);
+
+  useEffect(() => {
+    if (!selectedChillerForLimits) return;
+    const selectedDate = chillerLimits[selectedChillerForLimits]?.effective_from ?? null;
+    const eq = chillerEquipment.find((e) => e.equipment_number === selectedChillerForLimits);
+    void loadChillerLimitForDate(selectedChillerForLimits, eq?.id, selectedDate);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedChillerForLimits, chillerEquipment]);
 
   useEffect(() => {
     const loadBoilerData = async () => {
@@ -191,52 +344,14 @@ export default function SettingsPage() {
           .filter((e: any) => e?.is_active !== false && e?.status === 'approved')
           .map((e: any) => ({ id: e.id, equipment_number: e.equipment_number || '', name: e.name || '' }));
         setBoilerEquipment(boilers);
-        const limitsByEq: Record<string, {
-          effective_from?: string | null;
-          daily_power_limit_kw?: number | null;
-          daily_water_limit_liters?: number | null;
-          daily_chemical_limit_kg?: number | null;
-          daily_diesel_limit_liters?: number | null;
-          daily_furnace_oil_limit_liters?: number | null;
-          daily_brigade_limit_kg?: number | null;
-          daily_steam_limit_kg_hr?: number | null;
-          electricity_rate_rs_per_kwh?: number | null;
-          diesel_rate_rs_per_liter?: number | null;
-          furnace_oil_rate_rs_per_liter?: number | null;
-          brigade_rate_rs_per_kg?: number | null;
-        }> = {};
+        const limitsByEq: Record<string, BoilerLimitRow> = {};
         for (const eq of boilers) {
           try {
-            const limit = await boilerLimitsAPI.get(eq.equipment_number);
-            limitsByEq[eq.equipment_number] = {
-              effective_from: limit.effective_from ?? null,
-              daily_power_limit_kw: limit.daily_power_limit_kw ?? null,
-              daily_water_limit_liters: limit.daily_water_limit_liters ?? null,
-              daily_chemical_limit_kg: limit.daily_chemical_limit_kg ?? null,
-              daily_diesel_limit_liters: limit.daily_diesel_limit_liters ?? null,
-              daily_furnace_oil_limit_liters: limit.daily_furnace_oil_limit_liters ?? null,
-              daily_brigade_limit_kg: limit.daily_brigade_limit_kg ?? null,
-              daily_steam_limit_kg_hr: limit.daily_steam_limit_kg_hr ?? null,
-              electricity_rate_rs_per_kwh: limit.electricity_rate_rs_per_kwh ?? null,
-              diesel_rate_rs_per_liter: limit.diesel_rate_rs_per_liter ?? null,
-              furnace_oil_rate_rs_per_liter: limit.furnace_oil_rate_rs_per_liter ?? null,
-              brigade_rate_rs_per_kg: limit.brigade_rate_rs_per_kg ?? null,
-            };
+            const rows = (await boilerLimitsAPI.list({ equipment_id: eq.equipment_number })) as BoilerLimitRow[];
+            const picked = pickBoilerLimitForDate(rows, null);
+            limitsByEq[eq.equipment_number] = picked ? toBoilerLimitState(picked) : emptyBoilerLimit();
           } catch {
-            limitsByEq[eq.equipment_number] = {
-              effective_from: null,
-              daily_power_limit_kw: null,
-              daily_water_limit_liters: null,
-              daily_chemical_limit_kg: null,
-              daily_diesel_limit_liters: null,
-              daily_furnace_oil_limit_liters: null,
-              daily_brigade_limit_kg: null,
-              daily_steam_limit_kg_hr: null,
-              electricity_rate_rs_per_kwh: null,
-              diesel_rate_rs_per_liter: null,
-              furnace_oil_rate_rs_per_liter: null,
-              brigade_rate_rs_per_kg: null,
-            };
+            limitsByEq[eq.equipment_number] = emptyBoilerLimit();
           }
         }
         setBoilerLimits(limitsByEq);
@@ -256,10 +371,18 @@ export default function SettingsPage() {
     }
   }, [boilerEquipment]);
 
+  useEffect(() => {
+    if (!selectedBoilerForLimits) return;
+    const selectedDate = boilerLimits[selectedBoilerForLimits]?.effective_from ?? null;
+    loadBoilerLimitForDate(selectedBoilerForLimits, selectedDate);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedBoilerForLimits]);
+
   const handleSaveChillerLimits = async (equipmentNumber: string) => {
     setChillerLimitSaving(equipmentNumber);
     try {
       const data = chillerLimits[equipmentNumber] ?? {};
+      const lookupEquipmentId = data.equipment_id || equipmentNumber;
       const payload = {
         effective_from: data.effective_from ?? null,
         daily_power_limit_kw: data.daily_power_limit_kw ?? null,
@@ -272,7 +395,7 @@ export default function SettingsPage() {
         daily_chemical_ct3_kg: data.daily_chemical_ct3_kg ?? null,
       };
       try {
-        await chillerLimitsAPI.update(equipmentNumber, payload);
+        await chillerLimitsAPI.update(lookupEquipmentId, payload);
       } catch (err: any) {
         // API client throws enhanced error with .status (not .response.status); 404 = no limit yet, create one
         if (err?.status === 404 || err?.response?.status === 404) {
@@ -328,6 +451,7 @@ export default function SettingsPage() {
     try {
       const payload: {
         auto_logout_minutes?: number;
+        password_expiry_days?: number | null;
         log_entry_interval?: LogEntryIntervalType;
         shift_duration_hours?: number;
       } = {};
@@ -339,6 +463,17 @@ export default function SettingsPage() {
           return;
         }
         payload.auto_logout_minutes = minutes;
+      }
+
+      if (passwordExpiryDays === '') {
+        payload.password_expiry_days = null;
+      } else {
+        const days = Number(passwordExpiryDays);
+        if (!Number.isFinite(days) || days < 1) {
+          toast.error('Please enter a valid password expiry period (days) or leave it blank.');
+          return;
+        }
+        payload.password_expiry_days = Math.floor(days);
       }
 
       payload.log_entry_interval = logEntryInterval;
@@ -496,6 +631,36 @@ export default function SettingsPage() {
             <Separator />
             <div className="flex items-center justify-between">
               <div>
+                <p className="font-medium text-foreground">Password Expiry</p>
+                <p className="text-sm text-muted-foreground">
+                  Force password change after N days. Leave blank for no expiry.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Input
+                  type="number"
+                  min={1}
+                  className="w-24"
+                  value={passwordExpiryDays}
+                  disabled={isSessionLoading}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    if (value === '') {
+                      setPasswordExpiryDays('');
+                    } else {
+                      const num = Number(value);
+                      if (!Number.isNaN(num)) {
+                        setPasswordExpiryDays(num);
+                      }
+                    }
+                  }}
+                />
+                <span className="text-sm text-muted-foreground">days</span>
+              </div>
+            </div>
+            <Separator />
+            <div className="flex items-center justify-between">
+              <div>
                 <p className="font-medium text-foreground">Change password</p>
                 <p className="text-sm text-muted-foreground">Update your account password</p>
               </div>
@@ -611,6 +776,7 @@ export default function SettingsPage() {
                             ...prev,
                             [eq.equipment_number]: { ...(prev[eq.equipment_number] ?? {}), effective_from: v ?? undefined },
                           }));
+                          void loadChillerLimitForDate(eq.equipment_number, eq.id, v);
                         }}
                       />
                       <p className="text-xs text-muted-foreground">Leave blank to apply to all dates.</p>
@@ -822,6 +988,7 @@ export default function SettingsPage() {
                             ...prev,
                             [eq.equipment_number]: { ...(prev[eq.equipment_number] ?? {}), effective_from: v ?? undefined },
                           }));
+                          void loadBoilerLimitForDate(eq.equipment_number, v);
                         }}
                       />
                       <p className="text-xs text-muted-foreground">Leave blank to apply to all dates.</p>

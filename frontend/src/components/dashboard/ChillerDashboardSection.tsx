@@ -22,7 +22,7 @@ type PeriodType = 'day' | 'month' | 'year';
 
 /** Chiller section chrome + actual bars (~#26A69A) */
 const POWER_ACCENT_HSL = '174, 42%, 46%';
-/** Limit / projected line — deep navy (~#1A237E) */
+/** Projected line — deep navy (~#1A237E) */
 const POWER_LIMIT_BAR_HSL = '239, 48%, 32%';
 /** Cost row actual bar + donut (Bold BI expenses warm) */
 const COST_ACCENT_HSL = '34, 90%, 46%';
@@ -137,8 +137,7 @@ export function ChillerDashboardSection() {
       series.map((p) => ({
         name: p.label,
         actual: p.actual_power_kwh,
-        target:
-          p.limit_power_kwh > 0 ? p.limit_power_kwh : (p.projected_power_kwh ?? 0),
+        target: p.projected_power_kwh ?? 0,
       })),
     [series]
   );
@@ -148,11 +147,11 @@ export function ChillerDashboardSection() {
       series.map((p) => ({
         period: p.label,
         actual: p.actual_power_kwh.toFixed(1),
-        target: p.limit_power_kwh > 0 ? p.limit_power_kwh.toFixed(1) : '—',
+        target: '—',
         forecast: p.projected_power_kwh != null ? Number(p.projected_power_kwh).toFixed(1) : '—',
         status: rowStatus(
           p.actual_power_kwh,
-          p.limit_power_kwh,
+          0,
           p.projected_power_kwh ?? 0
         ),
       })),
@@ -272,40 +271,53 @@ export function ChillerDashboardSection() {
           )}
 
           <DashboardInsightRow
-            subtitle="Power consumption (kWh) — actual vs limit / projected"
+            subtitle="Power consumption (kWh) — actual vs projected"
             accentHsl={POWER_ACCENT_HSL}
-            donutCenterTitle="% of daily limit"
+            donutCenterTitle="% of projected"
             donutCenterValue={
-              utilizationDonutPct(summary.utilization_pct, summary.limit_power_kwh > 0) != null
-                ? `${Math.round(utilizationDonutPct(summary.utilization_pct, summary.limit_power_kwh > 0)!)}%`
+              utilizationDonutPct(
+                hasProjected && summary.projected_power_kwh! > 0
+                  ? (summary.actual_power_kwh / summary.projected_power_kwh!) * 100
+                  : null,
+                hasProjected && summary.projected_power_kwh! > 0
+              ) != null
+                ? `${Math.round(
+                    utilizationDonutPct(
+                      hasProjected && summary.projected_power_kwh! > 0
+                        ? (summary.actual_power_kwh / summary.projected_power_kwh!) * 100
+                        : null,
+                      hasProjected && summary.projected_power_kwh! > 0
+                    )!
+                  )}%`
                 : '—'
             }
-            donutFillPct={utilizationDonutPct(summary.utilization_pct, summary.limit_power_kwh > 0)}
+            donutFillPct={utilizationDonutPct(
+              hasProjected && summary.projected_power_kwh! > 0
+                ? (summary.actual_power_kwh / summary.projected_power_kwh!) * 100
+                : null,
+              hasProjected && summary.projected_power_kwh! > 0
+            )}
             metrics={[
               { label: 'Actual (kWh)', value: summary.actual_power_kwh.toFixed(1) },
               {
-                label: 'Limit (kWh)',
-                value: summary.limit_power_kwh > 0 ? summary.limit_power_kwh.toFixed(1) : '—',
-              },
-              {
-                label: 'Δ vs limit',
+                label: 'Projected (kWh)',
                 value:
-                  summary.limit_power_kwh > 0
-                    ? formatDiffPct(summary.actual_power_kwh, summary.limit_power_kwh)
+                  hasProjected
+                    ? summary.projected_power_kwh!.toFixed(1)
                     : '—',
               },
               ...(hasProjected
                 ? [
                     {
-                      label: 'Projected (kWh)',
-                      value: summary.projected_power_kwh!.toFixed(1),
+                      label: 'Δ vs projected',
+                      value: formatDiffPct(summary.actual_power_kwh, summary.projected_power_kwh!),
                     } as const,
                   ]
                 : []),
             ]}
             chartData={energyChartData}
             barLabel="Actual (kWh)"
-            lineLabel={series.some((p) => p.limit_power_kwh > 0) ? 'Limit / target (kWh)' : 'Projected (kWh)'}
+            lineLabel="Projected (kWh)"
             formatTooltip={(value, name) => [`${Number(value).toFixed(1)} kWh`, name]}
             tableRows={energyTableRows}
             emptyMessage="No data for this period."

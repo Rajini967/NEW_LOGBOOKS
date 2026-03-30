@@ -10,7 +10,7 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from .models import User, UserRole, PasswordResetToken, hash_reset_token, UserActivityLog, SessionSetting
 from .password_utils import check_password_history, append_password_history
-from .audit_utils import log_user_audit_event
+from .audit_utils import log_user_activity_event
 from reports.utils import log_limit_change
 
 
@@ -132,10 +132,6 @@ class UserCreateSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     "Only Super Admin can create Super Admin users."
                 )
-            if value == UserRole.MANAGER and request.user.role == UserRole.MANAGER:
-                raise serializers.ValidationError(
-                    "Managers cannot create other Manager users."
-                )
         return value
     
     def validate(self, attrs):
@@ -203,12 +199,6 @@ class UserUpdateSerializer(serializers.ModelSerializer):
                     "Only Super Admin can assign Super Admin role."
                 )
             
-            # Managers cannot assign Manager role
-            if value == UserRole.MANAGER and request.user.role == UserRole.MANAGER:
-                raise serializers.ValidationError(
-                    "Managers cannot assign Manager role to other users."
-                )
-            
             # Prevent downgrading Super Admin
             if user.role == UserRole.SUPER_ADMIN and value != UserRole.SUPER_ADMIN:
                 raise serializers.ValidationError(
@@ -239,13 +229,11 @@ class UserUpdateSerializer(serializers.ModelSerializer):
         if password:
             request = self.context.get('request')
             try:
-                log_user_audit_event(
+                log_user_activity_event(
                     "password_changed",
                     instance,
-                    actor=request.user if request else None,
-                    old_value="[Redacted]",
-                    new_value="[Redacted]",
-                    field_name="password",
+                    ip_address=request.META.get("REMOTE_ADDR") if request else None,
+                    user_agent=request.META.get("HTTP_USER_AGENT", "") if request else None,
                 )
             except Exception:
                 pass
@@ -348,14 +336,7 @@ class ResetPasswordSerializer(_BaseTokenSerializer):
         token_obj.mark_used()
 
         try:
-            log_user_audit_event(
-                "password_changed",
-                user,
-                actor=None,
-                old_value="[Redacted]",
-                new_value="[Redacted]",
-                field_name="password",
-            )
+            log_user_activity_event("password_changed", user)
         except Exception:
             pass
 
@@ -392,13 +373,12 @@ class ChangePasswordSerializer(serializers.Serializer):
         user.save(update_fields=["password", "must_change_password", "password_changed_at"])
         append_password_history(user, new_password)
         try:
-            log_user_audit_event(
+            request = self.context.get("request")
+            log_user_activity_event(
                 "password_changed",
                 user,
-                actor=self.context.get("request").user if self.context.get("request") else None,
-                old_value="[Redacted]",
-                new_value="[Redacted]",
-                field_name="password",
+                ip_address=request.META.get("REMOTE_ADDR") if request else None,
+                user_agent=request.META.get("HTTP_USER_AGENT", "") if request else None,
             )
         except Exception:
             pass

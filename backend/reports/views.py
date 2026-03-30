@@ -6,6 +6,13 @@ from rest_framework.response import Response
 from .models import Report, AuditEvent
 from .serializers import ReportSerializer, AuditEventSerializer
 
+USER_LIFECYCLE_EVENT_TYPES = [
+    "user_created",
+    "password_changed",
+    "user_locked",
+    "user_unlocked",
+]
+
 
 def _exclude_super_admin_operated_reports(queryset, user):
     """
@@ -54,7 +61,7 @@ class ReportViewSet(viewsets.ReadOnlyModelViewSet):
         
         # All roles see only approved reports (Report rows are created on approval only)
         # Customers additionally restricted to certain report types
-        if self.request.user.role == 'customer':
+        if self.request.user.role == 'manager':
             queryset = queryset.filter(
                 report_type__in=[
                     'utility',
@@ -87,10 +94,12 @@ class AuditReportViewSet(viewsets.ReadOnlyModelViewSet):
         user = self.request.user
 
         # Only privileged roles can see audit trail
-        if user.role not in ["super_admin", "manager", "supervisor"]:
+        if user.role not in ["super_admin", "admin", "supervisor"]:
             return AuditEvent.objects.none()
 
-        qs = AuditEvent.objects.select_related("user").all()
+        qs = AuditEvent.objects.select_related("user").exclude(
+            event_type__in=USER_LIFECYCLE_EVENT_TYPES
+        )
 
         # Non-super-admin users should not see super-admin details.
         if user.role != "super_admin":

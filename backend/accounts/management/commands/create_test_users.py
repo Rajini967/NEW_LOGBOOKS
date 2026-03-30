@@ -19,9 +19,9 @@ class Command(BaseCommand):
                 'is_superuser': True,
             },
             {
-                'email': 'manager@test.com',
+                'email': 'admin@test.com',
                 'password': 'testpass123',
-                'role': UserRole.MANAGER,
+                'role': UserRole.ADMIN,
                 'is_staff': True,
             },
             {
@@ -35,9 +35,9 @@ class Command(BaseCommand):
                 'role': UserRole.OPERATOR,
             },
             {
-                'email': 'client@test.com',
+                'email': 'manager@test.com',
                 'password': 'testpass123',
-                'role': UserRole.CLIENT,
+                'role': UserRole.MANAGER,
             },
         ]
 

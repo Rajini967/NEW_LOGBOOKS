@@ -42,12 +42,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (token) {
         try {
           const userData = await authAPI.getCurrentUser();
-          // Map backend role 'client' to frontend 'customer' for compatibility
-          const mappedUser: User = {
-            ...userData,
-            role: userData.role === 'client' ? 'customer' : (userData.role as UserRole),
-          };
-          setUser(mappedUser);
+          setUser({ ...userData, role: userData.role as UserRole });
           await loadSessionSettings();
         } catch (error) {
           // Token invalid, clear it
@@ -67,14 +62,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       
       // Fetch user details after successful login
       const userData = await authAPI.getCurrentUser();
-      
-      // Map backend role 'client' to frontend 'customer' for compatibility
-      const mappedUser: User = {
-        ...userData,
-        role: userData.role === 'client' ? 'customer' : (userData.role as UserRole),
-      };
-      
-      setUser(mappedUser);
+      setUser({ ...userData, role: userData.role as UserRole });
       await loadSessionSettings();
       return true;
     } catch (error: any) {
@@ -96,11 +84,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const refreshUser = useCallback(async () => {
     try {
       const userData = await authAPI.getCurrentUser();
-      const mappedUser: User = {
-        ...userData,
-        role: userData.role === 'client' ? 'customer' : (userData.role as UserRole),
-      };
-      setUser(mappedUser);
+      setUser({ ...userData, role: userData.role as UserRole });
     } catch (error) {
       console.error('Failed to refresh user:', error);
     }

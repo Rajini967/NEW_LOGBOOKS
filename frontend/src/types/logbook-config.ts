@@ -1,4 +1,4 @@
-export type UserRole = 'operator' | 'supervisor' | 'customer' | 'super_admin';
+export type UserRole = 'operator' | 'supervisor' | 'admin' | 'manager' | 'super_admin';
 
 // Field Types
 export type FieldType = 

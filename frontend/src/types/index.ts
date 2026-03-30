@@ -1,4 +1,4 @@
-export type UserRole = 'operator' | 'supervisor' | 'client' | 'customer' | 'super_admin' | 'manager';
+export type UserRole = 'operator' | 'supervisor' | 'admin' | 'manager' | 'super_admin';
 
 export interface User {
   id: string;
@@ -112,6 +112,7 @@ export interface SessionSettings {
 
 export interface SessionSettingsUpdate {
   auto_logout_minutes?: number;
+  password_expiry_days?: number | null;
   log_entry_interval?: LogEntryIntervalType;
   shift_duration_hours?: number;
 }

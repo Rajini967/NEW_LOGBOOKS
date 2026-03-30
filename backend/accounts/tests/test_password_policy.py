@@ -20,7 +20,7 @@ class PasswordPolicyAPITests(APITestCase):
         self.manager = User.objects.create_user(
             email="manager@example.com",
             password=self.valid_password,
-            role=UserRole.MANAGER,
+            role=UserRole.ADMIN,
             is_active=True,
             must_change_password=False,
             password_changed_at=timezone.now(),

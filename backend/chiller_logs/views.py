@@ -14,10 +14,9 @@ from core.log_slot_utils import (
 )
 from .models import ChillerLog, ChillerEquipmentStatusAudit, ChillerEquipmentLimit, ChillerDashboardConfig
 from .serializers import ChillerLogSerializer, ChillerEquipmentLimitSerializer
-from accounts.permissions import CanLogEntries, CanApproveReports, IsSuperAdminOrManager
+from accounts.permissions import CanLogEntries, CanApproveReports, IsSuperAdminOrAdmin
 from reports.utils import log_limit_change, log_audit_event
 from django.db.models import Sum
-from django.db.models.functions import TruncDate
 from datetime import datetime, date, timedelta
 from collections import defaultdict
 import calendar
@@ -49,10 +48,8 @@ def _get_limit_for_display(equipment_id: str, for_date):
     """
     Return the ChillerEquipmentLimit that is actually in effect on for_date.
 
-    Unlike the previous implementation, this helper no longer falls back to the
-    "latest configured" limit when there is no row effective on the requested
-    date. This ensures dashboard cards and charts show 0 limits until a fresh
-    daily limit is configured for the selected period.
+    Dashboard display must match the same date-effective rule used by save and
+    validation paths.
     """
     limit = _get_limit_for_date(equipment_id, for_date)
     return limit
@@ -93,64 +90,34 @@ def _get_chiller_dashboard_rate(for_date, equipment_id=None):
 
 def _actual_power_for_date(d, eid_filter=None):
     """
-    Actual power (kWh) for one day: ManualChillerConsumption if present, else sum of approved ChillerLog.
-    Same source as Consumption module and dashboard_series.
+    Actual power (kWh) for one day from ManualChillerConsumption only.
     """
+    if ManualChillerConsumption is None:
+        return 0.0
     if eid_filter:
-        if ManualChillerConsumption is not None:
-            m = ManualChillerConsumption.objects.filter(equipment_id=eid_filter, date=d).first()
-            if m is not None:
-                return round(float(m.power_kwh or 0), 2)
-        agg = ChillerLog.objects.filter(
-            status='approved', timestamp__date=d, equipment_id=eid_filter
-        ).aggregate(s=Sum('starter_energy_kwh'))
-        return round(float(agg['s'] or 0), 2)
-    total = 0.0
-    log_rows = list(
-        ChillerLog.objects.filter(status='approved', timestamp__date=d)
-        .values('equipment_id')
-        .annotate(power_kwh=Sum('starter_energy_kwh'))
-    )
-    by_equipment = {(r['equipment_id']): float(r['power_kwh'] or 0) for r in log_rows}
-    if ManualChillerConsumption is not None:
-        for m in ManualChillerConsumption.objects.filter(date=d):
-            by_equipment[m.equipment_id] = float(m.power_kwh or 0)
-    for v in by_equipment.values():
-        total += v
-    return round(total, 2)
+        m = ManualChillerConsumption.objects.filter(equipment_id=eid_filter, date=d).first()
+        return round(float(m.power_kwh or 0), 2) if m is not None else 0.0
+    agg = ManualChillerConsumption.objects.filter(date=d).aggregate(s=Sum('power_kwh'))
+    return round(float(agg['s'] or 0), 2)
 
 
 def _actual_power_for_date_range(start_d, end_d, eid_filter=None):
     """
-    Actual power (kWh) for a date range: per (date, equipment) use ManualChillerConsumption
-    if present else ChillerLog sum. Returns (total_kwh, by_equipment_dict) in 2–3 queries
-    instead of O(days) queries. Use for month/year dashboard to avoid slow day-by-day loops.
+    Actual power (kWh) for a date range from ManualChillerConsumption only.
+    Returns (total_kwh, by_equipment_dict).
     """
-    log_qs = ChillerLog.objects.filter(
-        status='approved',
-        timestamp__date__gte=start_d,
-        timestamp__date__lte=end_d,
+    if ManualChillerConsumption is None:
+        return 0.0, {}
+    manual_qs = ManualChillerConsumption.objects.filter(
+        date__gte=start_d,
+        date__lte=end_d,
     )
     if eid_filter:
-        log_qs = log_qs.filter(equipment_id=eid_filter)
-    log_rows = list(
-        log_qs.annotate(d=TruncDate('timestamp'))
-        .values('d', 'equipment_id')
-        .annotate(power_kwh=Sum('starter_energy_kwh'))
-    )
-    by_day_equipment = {}
-    for r in log_rows:
-        d = r['d'] if isinstance(r['d'], date) else r['d'].date() if hasattr(r['d'], 'date') else r['d']
-        by_day_equipment[(d, r['equipment_id'])] = float(r['power_kwh'] or 0)
-    if ManualChillerConsumption is not None:
-        manual_qs = ManualChillerConsumption.objects.filter(
-            date__gte=start_d,
-            date__lte=end_d,
-        )
-        if eid_filter:
-            manual_qs = manual_qs.filter(equipment_id=eid_filter)
-        for r in manual_qs.values('date', 'equipment_id', 'power_kwh'):
-            by_day_equipment[(r['date'], r['equipment_id'])] = float(r['power_kwh'] or 0)
+        manual_qs = manual_qs.filter(equipment_id=eid_filter)
+    by_day_equipment = {
+        (r['date'], r['equipment_id']): float(r['power_kwh'] or 0)
+        for r in manual_qs.values('date', 'equipment_id', 'power_kwh')
+    }
     by_equipment = defaultdict(float)
     for (_d, eid), kwh in by_day_equipment.items():
         by_equipment[eid] += kwh
@@ -805,23 +772,6 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
             if equipment_ids_in_period:
                 limit_equipment_ids = list(set(limit_equipment_ids) | equipment_ids_in_period)
 
-        # For day view, only consider limits that are explicitly effective on ref_date.
-        # If there is no ChillerEquipmentLimit row with effective_from == ref_date (or null),
-        # treat limits as 0 so projected values stay hidden until fresh daily limits are set.
-        if period_type == 'day' and limit_equipment_ids:
-            limit_equipment_ids = [
-                eid
-                for eid in limit_equipment_ids
-                if ChillerEquipmentLimit.objects.filter(
-                    equipment_id=eid,
-                    effective_from=ref_date,
-                ).exists()
-                or ChillerEquipmentLimit.objects.filter(
-                    equipment_id=eid,
-                    effective_from__isnull=True,
-                ).exists()
-            ]
-
         limit_power_kwh = 0.0
         by_equipment = []
         # Use end-of-period for limit lookup so limits with effective_from mid-period apply (matches series; fixes month/year cards)
@@ -853,7 +803,7 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
 
         config = _get_chiller_dashboard_config()
         projected_power_kwh = None
-        actual_cost_rs = None
+        actual_cost_rs = 0.0
         projected_cost_rs = None
         rate = _get_chiller_dashboard_rate(limit_lookup_date, equipment_id=equipment_id)
         if config and config.projected_power_kwh_month is not None and limit_power_kwh > 0:
@@ -868,10 +818,10 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
         # Only fall back to limits when there is a non‑zero limit configured.
         if projected_power_kwh is None and limit_power_kwh > 0:
             projected_power_kwh = limit_power_kwh
-        if rate is not None and limit_power_kwh > 0:
+        if rate is not None:
             actual_cost_rs = round(actual_power_kwh * rate, 2)
-            if projected_power_kwh is not None:
-                projected_cost_rs = round(projected_power_kwh * rate, 2)
+        if projected_power_kwh is not None:
+            projected_cost_rs = round(projected_power_kwh * rate, 2) if rate is not None else 0.0
 
         payload = {
             'period_type': period_type,
@@ -886,8 +836,7 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
         }
         if projected_power_kwh is not None:
             payload['projected_power_kwh'] = projected_power_kwh
-        if actual_cost_rs is not None:
-            payload['actual_cost_rs'] = actual_cost_rs
+        payload['actual_cost_rs'] = actual_cost_rs
         if projected_cost_rs is not None:
             payload['projected_cost_rs'] = projected_cost_rs
         return Response(payload)
@@ -966,26 +915,13 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
         def limit_power_for_date(d, eid_filter=None):
             """Limit for one day: sum of daily_power_limit_kw (in kWh for 1 day) for equipments in scope (date-wise)."""
             if eid_filter:
-                # Only use limits that are explicitly effective on this date (or have no effective_from).
-                limit_row = ChillerEquipmentLimit.objects.filter(
-                    equipment_id=eid_filter,
-                    effective_from=d,
-                ).order_by('-effective_from').first() or ChillerEquipmentLimit.objects.filter(
-                    equipment_id=eid_filter,
-                    effective_from__isnull=True,
-                ).order_by('-effective_from').first()
+                limit_row = _get_limit_for_display(eid_filter, d)
                 daily_kw = (limit_row.daily_power_limit_kw or 0) if limit_row else 0
                 return round(daily_kw * 1, 2)
             limit_ids = list(ChillerEquipmentLimit.objects.values_list('equipment_id', flat=True).distinct())
             total = 0.0
             for eid in limit_ids:
-                limit_row = ChillerEquipmentLimit.objects.filter(
-                    equipment_id=eid,
-                    effective_from=d,
-                ).order_by('-effective_from').first() or ChillerEquipmentLimit.objects.filter(
-                    equipment_id=eid,
-                    effective_from__isnull=True,
-                ).order_by('-effective_from').first()
+                limit_row = _get_limit_for_display(eid, d)
                 daily_kw = (limit_row.daily_power_limit_kw or 0) if limit_row else 0
                 total += daily_kw * 1
             return round(total, 2)
@@ -1002,12 +938,12 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
                     # When no non‑zero limit exists for this day, keep projected values at 0.
                     if limit == 0:
                         proj_kwh = 0.0
-                        actual_cost = 0.0 if rate_rs is not None else None
-                        proj_cost = 0.0 if rate_rs is not None else None
+                        actual_cost = 0.0
+                        proj_cost = 0.0
                     else:
                         proj_kwh = round(projected_kwh_month / month_days, 2) if projected_kwh_month is not None else limit
-                        actual_cost = round(actual * rate_rs, 2) if rate_rs is not None else None
-                        proj_cost = round(proj_kwh * rate_rs, 2) if (rate_rs is not None and proj_kwh is not None) else None
+                        actual_cost = round(actual * rate_rs, 2) if rate_rs is not None else 0.0
+                        proj_cost = round(proj_kwh * rate_rs, 2) if (rate_rs is not None and proj_kwh is not None) else 0.0
                     point = {
                         'date': d.isoformat(),
                         'label': label,
@@ -1038,12 +974,12 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
                     limit_m = round(limit_m, 2)
                 if limit_m == 0:
                     proj_kwh_m = 0.0
-                    actual_cost_m = 0.0 if rate_rs is not None else None
-                    proj_cost_m = 0.0 if rate_rs is not None else None
+                    actual_cost_m = 0.0
+                    proj_cost_m = 0.0
                 else:
                     proj_kwh_m = round(projected_kwh_month, 2) if projected_kwh_month is not None else limit_m
-                    actual_cost_m = round(actual_m * rate_rs, 2) if rate_rs is not None else None
-                    proj_cost_m = round(proj_kwh_m * rate_rs, 2) if (rate_rs is not None and proj_kwh_m is not None) else None
+                    actual_cost_m = round(actual_m * rate_rs, 2) if rate_rs is not None else 0.0
+                    proj_cost_m = round(proj_kwh_m * rate_rs, 2) if (rate_rs is not None and proj_kwh_m is not None) else 0.0
                 series.append({
                     'date': start_d_m.isoformat(),
                     'label': start_d_m.strftime('%b %Y'),
@@ -1100,17 +1036,17 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
                 limit_power_kwh_y = round(limit_power_kwh_y, 2)
                 if limit_power_kwh_y == 0:
                     projected_power_kwh_y = 0.0
-                    actual_cost_y = 0.0 if rate_rs is not None else None
-                    projected_cost_y = 0.0 if rate_rs is not None else None
+                    actual_cost_y = 0.0
+                    projected_cost_y = 0.0
                 else:
                     projected_power_kwh_y = (
                         round(projected_kwh_month * 12, 2) if projected_kwh_month is not None else limit_power_kwh_y
                     )
-                    actual_cost_y = round(actual_power_kwh * rate_rs, 2) if rate_rs is not None else None
+                    actual_cost_y = round(actual_power_kwh * rate_rs, 2) if rate_rs is not None else 0.0
                     projected_cost_y = (
                         round(projected_power_kwh_y * rate_rs, 2)
                         if (rate_rs is not None and projected_power_kwh_y is not None)
-                        else None
+                        else 0.0
                     )
                 series.append({
                     'date': period_start_d.isoformat(),
@@ -1356,7 +1292,7 @@ class ChillerEquipmentLimitViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ('create', 'update', 'partial_update', 'destroy'):
-            return [IsAuthenticated(), IsSuperAdminOrManager()]
+            return [IsAuthenticated(), IsSuperAdminOrAdmin()]
         return [IsAuthenticated()]
 
     def get_queryset(self):

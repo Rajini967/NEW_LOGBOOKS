@@ -103,6 +103,9 @@ interface FilterLog {
   /** From API / assignment; list view shows stored value or resolves from assignments. */
   areaCategory?: string | null;
   installedDate: string;
+  replacementApplicable?: boolean;
+  cleaningApplicable?: boolean;
+  integrityApplicable?: boolean;
   integrityDoneDate?: string | null;
   integrityDueDate: string;
   cleaningDoneDate?: string | null;
@@ -158,34 +161,14 @@ function dueDatesForInstalled(installedDate: string, freq: ScheduleFreqState): {
     copy.setDate(copy.getDate() + days);
     return copy;
   };
-  const addMonths = (d: Date, months: number) => {
-    const copy = new Date(d.getTime());
-    const day = copy.getDate();
-    copy.setMonth(copy.getMonth() + months);
-    if (copy.getDate() !== day) {
-      copy.setDate(0);
-    }
-    return copy;
-  };
-  const addYears = (d: Date, years: number) => {
-    const copy = new Date(d.getTime());
-    const day = copy.getDate();
-    copy.setFullYear(copy.getFullYear() + years);
-    if (copy.getDate() !== day) {
-      copy.setDate(0);
-    }
-    return copy;
-  };
   const fmt = (d: Date) => format(d, "yyyy-MM-dd");
-  const legacyInt = fmt(addDays(addMonths(base, 6), 15));
-  const legacyRepl = fmt(addDays(addYears(base, 1), 30));
   const fromFreq = (days: number | null) =>
     days != null && !Number.isNaN(days) && days >= 0 ? fmt(addDays(base, days)) : null;
 
   return {
-    integrityDueDate: fromFreq(freq.integrity) ?? legacyInt,
-    cleaningDueDate: fromFreq(freq.cleaning) ?? legacyInt,
-    replacementDueDate: fromFreq(freq.replacement) ?? legacyRepl,
+    integrityDueDate: fromFreq(freq.integrity) ?? "",
+    cleaningDueDate: fromFreq(freq.cleaning) ?? "",
+    replacementDueDate: fromFreq(freq.replacement) ?? "",
   };
 }
 
@@ -314,8 +297,8 @@ function equipmentUuidForFilterLogRow(
   return meta?.equipment_id ?? null;
 }
 
-/** Assignment must have all three schedule types approved before it appears in the filter log equipment list. */
-function assignmentIdsWithFullyApprovedSchedules(
+/** Assignment is eligible when at least one schedule type is approved. */
+function assignmentIdsWithAnyApprovedSchedules(
   schedules: { assignment: string; schedule_type: string }[],
 ): Set<string> {
   const byAssignment = new Map<string, Set<string>>();
@@ -325,14 +308,8 @@ function assignmentIdsWithFullyApprovedSchedules(
     byAssignment.get(s.assignment)!.add(s.schedule_type);
   }
   const out = new Set<string>();
-  for (const [aid, types] of byAssignment) {
-    if (
-      types.has("replacement") &&
-      types.has("cleaning") &&
-      types.has("integrity")
-    ) {
-      out.add(aid);
-    }
+  for (const [aid] of byAssignment) {
+    out.add(aid);
   }
   return out;
 }
@@ -387,6 +364,14 @@ const FilterLogBookPage: React.FC = () => {
   const [selectedAssignmentId, setSelectedAssignmentId] = useState<string>("");
   const [scheduleFrequencies, setScheduleFrequencies] = useState<ScheduleFreqState>(emptyScheduleFreq());
   const scheduleFreqRef = useRef<ScheduleFreqState>(emptyScheduleFreq());
+  const scheduleApplicability = useMemo(
+    () => ({
+      replacement: scheduleFrequencies.replacement != null && scheduleFrequencies.replacement > 0,
+      cleaning: scheduleFrequencies.cleaning != null && scheduleFrequencies.cleaning > 0,
+      integrity: scheduleFrequencies.integrity != null && scheduleFrequencies.integrity > 0,
+    }),
+    [scheduleFrequencies],
+  );
   const [selectedEquipmentUuid, setSelectedEquipmentUuid] = useState<string>("");
 
   useEffect(() => {
@@ -572,7 +557,7 @@ const FilterLogBookPage: React.FC = () => {
       } catch {
         approvedSchedules = [];
       }
-      const eligibleAssignmentIds = assignmentIdsWithFullyApprovedSchedules(approvedSchedules);
+      const eligibleAssignmentIds = assignmentIdsWithAnyApprovedSchedules(approvedSchedules);
       const activeAssignments = (assignments || []).filter(
         (a) => a?.is_active !== false && a?.id && eligibleAssignmentIds.has(a.id),
       );
@@ -677,6 +662,8 @@ const FilterLogBookPage: React.FC = () => {
       return {
         ...prev,
         installedDate: installed,
+        integrityDoneDate: nextFreq.integrity ? prev.integrityDoneDate : "",
+        cleaningDoneDate: nextFreq.cleaning ? prev.cleaningDoneDate : "",
         integrityDueDate: due.integrityDueDate,
         cleaningDueDate: due.cleaningDueDate,
         replacementDueDate: due.replacementDueDate,
@@ -793,6 +780,12 @@ const FilterLogBookPage: React.FC = () => {
           tagInfo: log.tag_info || "",
           areaCategory: log.area_category ?? null,
           installedDate: log.installed_date,
+          replacementApplicable:
+            typeof log.replacement_applicable === "boolean" ? log.replacement_applicable : true,
+          cleaningApplicable:
+            typeof log.cleaning_applicable === "boolean" ? log.cleaning_applicable : true,
+          integrityApplicable:
+            typeof log.integrity_applicable === "boolean" ? log.integrity_applicable : true,
           integrityDoneDate: log.integrity_done_date,
           integrityDueDate: log.integrity_due_date,
           cleaningDoneDate: log.cleaning_done_date,
@@ -939,6 +932,12 @@ const FilterLogBookPage: React.FC = () => {
             filterMicron: log.filter_micron || "",
             filterSize: log.filter_size || "",
             tagInfo: log.tag_info || "",
+            replacementApplicable:
+              typeof log.replacement_applicable === "boolean" ? log.replacement_applicable : true,
+            cleaningApplicable:
+              typeof log.cleaning_applicable === "boolean" ? log.cleaning_applicable : true,
+            integrityApplicable:
+              typeof log.integrity_applicable === "boolean" ? log.integrity_applicable : true,
             installedDate: log.installed_date,
             integrityDoneDate: log.integrity_done_date,
             integrityDueDate: log.integrity_due_date,
@@ -1393,15 +1392,26 @@ const FilterLogBookPage: React.FC = () => {
         { key: "filterMicron", label: "Filter Micron" },
         { key: "filterSize", label: "Filter Size" },
         { key: "installedDate", label: "Filter Installed Date" },
-        { key: "integrityDoneDate", label: "Integrity Done Date" },
-        { key: "cleaningDoneDate", label: "Cleaning Done Date" },
-        { key: "integrityDueDate", label: "Integrity Due Date" },
-        { key: "cleaningDueDate", label: "Cleaning Due Date" },
-        { key: "replacementDueDate", label: "Replacement Due Date" },
         { key: "remarks", label: "Remarks" },
       ] as const;
+      const requiredWithApplicability: { key: string; label: string }[] = [...required];
+      if (scheduleApplicability.integrity) {
+        requiredWithApplicability.push(
+          { key: "integrityDoneDate", label: "Integrity Done Date" },
+          { key: "integrityDueDate", label: "Integrity Due Date" },
+        );
+      }
+      if (scheduleApplicability.cleaning) {
+        requiredWithApplicability.push(
+          { key: "cleaningDoneDate", label: "Cleaning Done Date" },
+          { key: "cleaningDueDate", label: "Cleaning Due Date" },
+        );
+      }
+      if (scheduleApplicability.replacement) {
+        requiredWithApplicability.push({ key: "replacementDueDate", label: "Replacement Due Date" });
+      }
 
-      const err = firstRequiredFieldError(formData, required as any);
+      const err = firstRequiredFieldError(formData, requiredWithApplicability as any);
       if (err) {
         toast.error(err);
         return;
@@ -1437,11 +1447,14 @@ const FilterLogBookPage: React.FC = () => {
         filter_size: formData.filterSize || null,
         tag_info: formData.tagInfo || null,
         installed_date: formData.installedDate,
-        integrity_done_date: formData.integrityDoneDate || null,
-        cleaning_done_date: formData.cleaningDoneDate || null,
-        integrity_due_date: formData.integrityDueDate || null,
-        cleaning_due_date: formData.cleaningDueDate || null,
-        replacement_due_date: formData.replacementDueDate || null,
+        integrity_done_date: scheduleApplicability.integrity ? (formData.integrityDoneDate || null) : null,
+        cleaning_done_date: scheduleApplicability.cleaning ? (formData.cleaningDoneDate || null) : null,
+        integrity_due_date: scheduleApplicability.integrity ? (formData.integrityDueDate || null) : null,
+        cleaning_due_date: scheduleApplicability.cleaning ? (formData.cleaningDueDate || null) : null,
+        replacement_due_date: scheduleApplicability.replacement ? (formData.replacementDueDate || null) : null,
+        replacement_applicable: scheduleApplicability.replacement,
+        cleaning_applicable: scheduleApplicability.cleaning,
+        integrity_applicable: scheduleApplicability.integrity,
         remarks: formData.remarks || "",
         timestamp: timestampStr.toISOString(),
       };
@@ -1662,7 +1675,7 @@ const FilterLogBookPage: React.FC = () => {
   const rejectedLogs = filteredLogs.filter((log) => log.status === "rejected");
 
   const isFilterAdmin =
-    user && (user.role === "manager" || user.role === "super_admin");
+    user && (user.role === "admin" || user.role === "super_admin");
 
   return (
     <>
@@ -2111,10 +2124,13 @@ const FilterLogBookPage: React.FC = () => {
                       />
                     </div>
                     <div className="space-y-2">
-                      <Label>Integrity Done Date</Label>
+                      <Label>
+                        Integrity Done Date {!scheduleApplicability.integrity ? "(N/A)" : ""}
+                      </Label>
                       <Input
                         type="date"
                         value={formData.integrityDoneDate}
+                        disabled={!scheduleApplicability.integrity}
                         onChange={(e) =>
                           setFormData({
                             ...formData,
@@ -2124,10 +2140,13 @@ const FilterLogBookPage: React.FC = () => {
                       />
                     </div>
                     <div className="space-y-2">
-                      <Label>Cleaning Done Date</Label>
+                      <Label>
+                        Cleaning Done Date {!scheduleApplicability.cleaning ? "(N/A)" : ""}
+                      </Label>
                       <Input
                         type="date"
                         value={formData.cleaningDoneDate}
+                        disabled={!scheduleApplicability.cleaning}
                         onChange={(e) =>
                           setFormData({
                             ...formData,
@@ -2140,10 +2159,13 @@ const FilterLogBookPage: React.FC = () => {
 
                   <div className="grid grid-cols-3 gap-4">
                     <div className="space-y-2">
-                      <Label>Replacement Due Date</Label>
+                      <Label>
+                        Replacement Due Date {!scheduleApplicability.replacement ? "(N/A)" : ""}
+                      </Label>
                       <Input
                         type="date"
                         value={formData.replacementDueDate}
+                        disabled={!scheduleApplicability.replacement}
                         onChange={(e) =>
                           setFormData({
                             ...formData,
@@ -2156,10 +2178,13 @@ const FilterLogBookPage: React.FC = () => {
                       </p>
                     </div>
                     <div className="space-y-2">
-                      <Label>Integrity Due Date</Label>
+                      <Label>
+                        Integrity Due Date {!scheduleApplicability.integrity ? "(N/A)" : ""}
+                      </Label>
                       <Input
                         type="date"
                         value={formData.integrityDueDate}
+                        disabled={!scheduleApplicability.integrity}
                         onChange={(e) =>
                           setFormData({
                             ...formData,
@@ -2172,10 +2197,13 @@ const FilterLogBookPage: React.FC = () => {
                       </p>
                     </div>
                     <div className="space-y-2">
-                      <Label>Cleaning Due Date</Label>
+                      <Label>
+                        Cleaning Due Date {!scheduleApplicability.cleaning ? "(N/A)" : ""}
+                      </Label>
                       <Input
                         type="date"
                         value={formData.cleaningDueDate}
+                        disabled={!scheduleApplicability.cleaning}
                         onChange={(e) =>
                           setFormData({
                             ...formData,
@@ -2790,14 +2818,40 @@ const FilterLogBookPage: React.FC = () => {
                       </td>
                       <td className="px-3 py-2 align-top">{log.installedDate}</td>
                       <td className="px-3 py-2 align-top">
-                        {log.integrityDoneDate || <span className="text-xs text-muted-foreground">-</span>}
+                        {log.integrityApplicable === false ? (
+                          <span className="text-xs text-muted-foreground">N/A</span>
+                        ) : (
+                          log.integrityDoneDate || <span className="text-xs text-muted-foreground">-</span>
+                        )}
                       </td>
-                      <td className="px-3 py-2 align-top">{log.integrityDueDate}</td>
                       <td className="px-3 py-2 align-top">
-                        {log.cleaningDoneDate || <span className="text-xs text-muted-foreground">-</span>}
+                        {log.integrityApplicable === false ? (
+                          <span className="text-xs text-muted-foreground">N/A</span>
+                        ) : (
+                          log.integrityDueDate || <span className="text-xs text-muted-foreground">-</span>
+                        )}
                       </td>
-                      <td className="px-3 py-2 align-top">{log.cleaningDueDate}</td>
-                      <td className="px-3 py-2 align-top">{log.replacementDueDate}</td>
+                      <td className="px-3 py-2 align-top">
+                        {log.cleaningApplicable === false ? (
+                          <span className="text-xs text-muted-foreground">N/A</span>
+                        ) : (
+                          log.cleaningDoneDate || <span className="text-xs text-muted-foreground">-</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 align-top">
+                        {log.cleaningApplicable === false ? (
+                          <span className="text-xs text-muted-foreground">N/A</span>
+                        ) : (
+                          log.cleaningDueDate || <span className="text-xs text-muted-foreground">-</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 align-top">
+                        {log.replacementApplicable === false ? (
+                          <span className="text-xs text-muted-foreground">N/A</span>
+                        ) : (
+                          log.replacementDueDate || <span className="text-xs text-muted-foreground">-</span>
+                        )}
+                      </td>
                       <td className="px-3 py-2 align-top max-w-xs">
                         <div className="whitespace-pre-wrap break-words text-xs">
                           {log.remarks || "-"}

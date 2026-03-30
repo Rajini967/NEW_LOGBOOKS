@@ -273,37 +273,36 @@ def daily_consumption(request):
             equipment_id = (data.get("equipment_id") or "").strip()
             if not equipment_id:
                 return Response({"error": "equipment_id is required for chiller"}, status=status.HTTP_400_BAD_REQUEST)
-            power_kwh = float(data.get("power_kwh") or 0)
-            water_ct1_l = float(data.get("water_ct1_l") or 0)
-            water_ct2_l = float(data.get("water_ct2_l") or 0)
-            water_ct3_l = float(data.get("water_ct3_l") or 0)
-            chemical_ct1_kg = float(data.get("chemical_ct1_kg") or 0)
-            chemical_ct2_kg = float(data.get("chemical_ct2_kg") or 0)
-            chemical_ct3_kg = float(data.get("chemical_ct3_kg") or 0)
+            try:
+                power_kwh = float(data.get("power_kwh") or 0)
+                water_ct1_l = float(data.get("water_ct1_l") or 0)
+                water_ct2_l = float(data.get("water_ct2_l") or 0)
+                water_ct3_l = float(data.get("water_ct3_l") or 0)
+                chemical_ct1_kg = float(data.get("chemical_ct1_kg") or 0)
+                chemical_ct2_kg = float(data.get("chemical_ct2_kg") or 0)
+                chemical_ct3_kg = float(data.get("chemical_ct3_kg") or 0)
+            except (TypeError, ValueError):
+                return Response(
+                    {"error": "Consumption values must be numeric"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             limit = _get_limit_for_date(equipment_id, entry_date)
-            errors = []
+            warnings = []
             if limit is not None:
                 if limit.daily_power_limit_kw is not None and power_kwh > limit.daily_power_limit_kw:
-                    errors.append(f"Daily power consumption exceeds limit ({limit.daily_power_limit_kw} kWh).")
+                    warnings.append(f"Daily power consumption exceeds limit ({limit.daily_power_limit_kw} kWh).")
                 if limit.daily_water_ct1_liters is not None and water_ct1_l > limit.daily_water_ct1_liters:
-                    errors.append(f"Cooling Tower 1 – Water exceeds limit ({limit.daily_water_ct1_liters} L).")
+                    warnings.append(f"Cooling Tower 1 – Water exceeds limit ({limit.daily_water_ct1_liters} L).")
                 if limit.daily_water_ct2_liters is not None and water_ct2_l > limit.daily_water_ct2_liters:
-                    errors.append(f"Cooling Tower 2 – Water exceeds limit ({limit.daily_water_ct2_liters} L).")
+                    warnings.append(f"Cooling Tower 2 – Water exceeds limit ({limit.daily_water_ct2_liters} L).")
                 if limit.daily_water_ct3_liters is not None and water_ct3_l > limit.daily_water_ct3_liters:
-                    errors.append(f"Cooling Tower 3 – Water exceeds limit ({limit.daily_water_ct3_liters} L).")
+                    warnings.append(f"Cooling Tower 3 – Water exceeds limit ({limit.daily_water_ct3_liters} L).")
                 if limit.daily_chemical_ct1_kg is not None and chemical_ct1_kg > limit.daily_chemical_ct1_kg:
-                    errors.append(f"Cooling Tower 1 – Chemical exceeds limit ({limit.daily_chemical_ct1_kg} kg).")
+                    warnings.append(f"Cooling Tower 1 – Chemical exceeds limit ({limit.daily_chemical_ct1_kg} kg).")
                 if limit.daily_chemical_ct2_kg is not None and chemical_ct2_kg > limit.daily_chemical_ct2_kg:
-                    errors.append(f"Cooling Tower 2 – Chemical exceeds limit ({limit.daily_chemical_ct2_kg} kg).")
+                    warnings.append(f"Cooling Tower 2 – Chemical exceeds limit ({limit.daily_chemical_ct2_kg} kg).")
                 if limit.daily_chemical_ct3_kg is not None and chemical_ct3_kg > limit.daily_chemical_ct3_kg:
-                    errors.append(f"Cooling Tower 3 – Chemical exceeds limit ({limit.daily_chemical_ct3_kg} kg).")
-            if errors:
-                # Remove existing manual consumption for this day so dashboard does not show exceeded value
-                ManualChillerConsumption.objects.filter(
-                    equipment_id=equipment_id,
-                    date=entry_date,
-                ).delete()
-                return Response({"error": "; ".join(errors)}, status=status.HTTP_400_BAD_REQUEST)
+                    warnings.append(f"Cooling Tower 3 – Chemical exceeds limit ({limit.daily_chemical_ct3_kg} kg).")
             obj, created = ManualChillerConsumption.objects.update_or_create(
                 equipment_id=equipment_id,
                 date=entry_date,
@@ -324,7 +323,8 @@ def daily_consumption(request):
                 object_id=f"{obj.equipment_id}_{obj.date.isoformat()}",
                 field_name="updated" if not created else "created",
             )
-            return Response({
+            payload = {
+                "message": "Chiller consumption saved",
                 "date": obj.date.isoformat(),
                 "equipment_id": obj.equipment_id,
                 "power_kwh": obj.power_kwh,
@@ -334,42 +334,44 @@ def daily_consumption(request):
                 "chemical_ct1_kg": obj.chemical_ct1_kg,
                 "chemical_ct2_kg": obj.chemical_ct2_kg,
                 "chemical_ct3_kg": obj.chemical_ct3_kg,
-            })
+            }
+            if warnings:
+                payload["warnings"] = warnings
+            return Response(payload)
         if type_param == "boiler":
             equipment_id = (data.get("equipment_id") or "").strip()
             if not equipment_id:
                 return Response({"error": "equipment_id is required for boiler"}, status=status.HTTP_400_BAD_REQUEST)
-            power_kwh = float(data.get("power_kwh") or 0)
-            water_l = float(data.get("water_l") or 0)
-            chemical_kg = float(data.get("chemical_kg") or 0)
-            diesel_l = float(data.get("diesel_l") or 0)
-            furnace_oil_l = float(data.get("furnace_oil_l") or 0)
-            brigade_kg = float(data.get("brigade_kg") or 0)
-            steam_kg_hr = float(data.get("steam_kg_hr") or 0)
+            try:
+                power_kwh = float(data.get("power_kwh") or 0)
+                water_l = float(data.get("water_l") or 0)
+                chemical_kg = float(data.get("chemical_kg") or 0)
+                diesel_l = float(data.get("diesel_l") or 0)
+                furnace_oil_l = float(data.get("furnace_oil_l") or 0)
+                brigade_kg = float(data.get("brigade_kg") or 0)
+                steam_kg_hr = float(data.get("steam_kg_hr") or 0)
+            except (TypeError, ValueError):
+                return Response(
+                    {"error": "Consumption values must be numeric"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             limit = _get_boiler_limit_for_date(equipment_id, entry_date)
-            errors = []
+            warnings = []
             if limit is not None:
                 if limit.daily_power_limit_kw is not None and power_kwh > limit.daily_power_limit_kw:
-                    errors.append(f"Daily power consumption exceeds limit ({limit.daily_power_limit_kw} kWh).")
+                    warnings.append(f"Daily power consumption exceeds limit ({limit.daily_power_limit_kw} kWh).")
                 if limit.daily_water_limit_liters is not None and water_l > limit.daily_water_limit_liters:
-                    errors.append(f"Water exceeds limit ({limit.daily_water_limit_liters} L).")
+                    warnings.append(f"Water exceeds limit ({limit.daily_water_limit_liters} L).")
                 if limit.daily_chemical_limit_kg is not None and chemical_kg > limit.daily_chemical_limit_kg:
-                    errors.append(f"Chemical exceeds limit ({limit.daily_chemical_limit_kg} kg).")
+                    warnings.append(f"Chemical exceeds limit ({limit.daily_chemical_limit_kg} kg).")
                 if limit.daily_diesel_limit_liters is not None and diesel_l > limit.daily_diesel_limit_liters:
-                    errors.append(f"Diesel exceeds limit ({limit.daily_diesel_limit_liters} L).")
+                    warnings.append(f"Diesel exceeds limit ({limit.daily_diesel_limit_liters} L).")
                 if limit.daily_furnace_oil_limit_liters is not None and furnace_oil_l > limit.daily_furnace_oil_limit_liters:
-                    errors.append(f"Furnace oil exceeds limit ({limit.daily_furnace_oil_limit_liters} L).")
+                    warnings.append(f"Furnace oil exceeds limit ({limit.daily_furnace_oil_limit_liters} L).")
                 if limit.daily_brigade_limit_kg is not None and brigade_kg > limit.daily_brigade_limit_kg:
-                    errors.append(f"Brigade exceeds limit ({limit.daily_brigade_limit_kg} kg).")
+                    warnings.append(f"Brigade exceeds limit ({limit.daily_brigade_limit_kg} kg).")
                 if limit.daily_steam_limit_kg_hr is not None and steam_kg_hr > limit.daily_steam_limit_kg_hr:
-                    errors.append(f"Steam exceeds limit ({limit.daily_steam_limit_kg_hr} kg/hr).")
-            if errors:
-                # Remove existing manual consumption for this day so dashboard does not show exceeded value
-                ManualBoilerConsumption.objects.filter(
-                    equipment_id=equipment_id,
-                    date=entry_date,
-                ).delete()
-                return Response({"error": "; ".join(errors)}, status=status.HTTP_400_BAD_REQUEST)
+                    warnings.append(f"Steam exceeds limit ({limit.daily_steam_limit_kg_hr} kg/hr).")
             obj, created = ManualBoilerConsumption.objects.update_or_create(
                 equipment_id=equipment_id,
                 date=entry_date,
@@ -390,7 +392,8 @@ def daily_consumption(request):
                 object_id=f"{obj.equipment_id}_{obj.date.isoformat()}",
                 field_name="updated" if not created else "created",
             )
-            return Response({
+            payload = {
+                "message": "Boiler consumption saved",
                 "date": obj.date.isoformat(),
                 "equipment_id": obj.equipment_id,
                 "power_kwh": obj.power_kwh,
@@ -400,7 +403,10 @@ def daily_consumption(request):
                 "furnace_oil_l": obj.furnace_oil_l,
                 "brigade_kg": obj.brigade_kg,
                 "steam_kg_hr": obj.steam_kg_hr,
-            })
+            }
+            if warnings:
+                payload["warnings"] = warnings
+            return Response(payload)
         if type_param == "chemical":
             obj, created = ManualChemicalConsumption.objects.update_or_create(
                 date=entry_date,

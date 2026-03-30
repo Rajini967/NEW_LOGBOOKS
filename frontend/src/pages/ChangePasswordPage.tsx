@@ -46,16 +46,23 @@ export default function ChangePasswordPage() {
       await refreshUser();
       navigate('/dashboard');
     } catch (err: any) {
-      const msg =
-        err?.response?.data?.current_password?.[0] ||
-        err?.response?.data?.new_password?.[0] ||
-        err?.response?.data?.new_password_confirm?.[0] ||
-        err?.response?.data?.detail ||
-        err?.data?.current_password?.[0] ||
-        err?.data?.new_password?.[0] ||
+      const responseData = err?.response?.data ?? err?.data;
+      let msg =
+        responseData?.current_password?.[0] ||
+        responseData?.new_password?.[0] ||
+        responseData?.new_password_confirm?.[0] ||
+        responseData?.non_field_errors?.[0] ||
+        responseData?.detail ||
         err?.message ||
         'Failed to change password.';
-      setError(Array.isArray(msg) ? msg[0] : msg);
+
+      if (typeof msg !== 'string' && Array.isArray(msg)) {
+        msg = msg[0];
+      }
+      if (typeof msg !== 'string') {
+        msg = 'Failed to change password.';
+      }
+      setError(msg);
     } finally {
       setIsLoading(false);
     }

@@ -58,7 +58,7 @@ const FilterScheduleApprovalsPage: React.FC = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
 
-  const isAdmin = user?.role === "manager" || user?.role === "super_admin";
+  const isAdmin = user?.role === "admin" || user?.role === "super_admin";
   const [rows, setRows] = useState<FilterScheduleRow[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [workingId, setWorkingId] = useState<string | null>(null);

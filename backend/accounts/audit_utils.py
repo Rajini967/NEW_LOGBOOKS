@@ -7,6 +7,39 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def log_user_activity_event(
+    event_type,
+    target_user,
+    ip_address=None,
+    user_agent=None,
+    created_at=None,
+):
+    """
+    Record a user lifecycle event in user activity logs.
+
+    Args:
+        event_type: One of user_created, password_changed, user_locked, user_unlocked.
+        target_user: The affected user.
+        ip_address: Optional client IP from request.
+        user_agent: Optional user-agent from request.
+        created_at: Optional timestamp override for backfill.
+    """
+    try:
+        from .models import UserActivityLog
+
+        payload = {
+            "user": target_user,
+            "event_type": event_type,
+            "ip_address": ip_address,
+            "user_agent": user_agent,
+        }
+        if created_at is not None:
+            payload["created_at"] = created_at
+        UserActivityLog.objects.create(**payload)
+    except Exception as e:
+        logger.exception("Failed to write user activity event: %s", e)
+
+
 def log_user_audit_event(
     event_type,
     target_user,

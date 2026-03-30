@@ -10,7 +10,7 @@ from .serializers import (
     LogbookRoleAssignmentSerializer,
     LogbookEntrySerializer
 )
-from accounts.permissions import IsManagerOrSuperAdmin
+from accounts.permissions import IsAdminOrSuperAdmin
 from accounts.models import UserRole
 
 
@@ -30,8 +30,8 @@ class LogbookSchemaViewSet(viewsets.ModelViewSet):
         """Filter logbooks based on user's role."""
         user = self.request.user
         
-        # Managers and Super Admins can see all logbooks
-        if user.role in ['manager', 'super_admin']:
+        # Admins and Super Admins can see all logbooks
+        if user.role in ['admin', 'super_admin']:
             return LogbookSchema.objects.all()
         
         # Other users see only logbooks assigned to their role
@@ -44,14 +44,14 @@ class LogbookSchemaViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         """Only managers and super admins can create/update/delete."""
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsAuthenticated(), IsManagerOrSuperAdmin()]
+            return [IsAuthenticated(), IsAdminOrSuperAdmin()]
         return [IsAuthenticated()]
     
     def perform_create(self, serializer):
         """Set created_by when creating a schema."""
         serializer.save(created_by=self.request.user)
     
-    @action(detail=True, methods=['post', 'get'], permission_classes=[IsManagerOrSuperAdmin])
+    @action(detail=True, methods=['post', 'get'], permission_classes=[IsAdminOrSuperAdmin])
     def assign_roles(self, request, pk=None):
         """Assign roles to a logbook."""
         schema = self.get_object()
@@ -101,8 +101,8 @@ class LogbookEntryViewSet(viewsets.ModelViewSet):
         user = self.request.user
         queryset = LogbookEntry.objects.all()
         
-        # Managers and Super Admins can see all entries
-        if user.role in ['manager', 'super_admin']:
+        # Admins and Super Admins can see all entries
+        if user.role in ['admin', 'super_admin']:
             return queryset
         
         # Other users see only entries from logbooks assigned to their role

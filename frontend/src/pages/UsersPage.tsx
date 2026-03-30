@@ -33,18 +33,16 @@ interface UserData extends UserType {
 const roleLabels: Record<string, string> = {
   operator: 'Operator',
   supervisor: 'Supervisor',
-  client: 'Client',
-  customer: 'Client',
-  manager: 'Admin',
+  admin: 'Admin',
+  manager: 'Manager',
   super_admin: 'Super Admin',
 };
 
 const roleVariants: Record<string, 'default' | 'accent' | 'warning' | 'success'> = {
   operator: 'default',
   supervisor: 'accent',
-  client: 'warning',
-  customer: 'warning',
-  manager: 'accent',
+  admin: 'accent',
+  manager: 'warning',
   super_admin: 'success',
 };
 
@@ -259,8 +257,8 @@ export default function UsersPage() {
             <p className="reading-display text-2xl">{users.filter(u => u.role === 'supervisor').length}</p>
           </div>
           <div className="metric-card">
-            <p className="data-label">Clients</p>
-            <p className="reading-display text-2xl">{users.filter(u => u.role === 'client' || u.role === 'customer').length}</p>
+            <p className="data-label">Managers</p>
+            <p className="reading-display text-2xl">{users.filter(u => u.role === 'manager').length}</p>
           </div>
         </div>
 
@@ -401,29 +399,30 @@ export default function UsersPage() {
                       <SelectValue placeholder="Select role" />
                     </SelectTrigger>
                     <SelectContent>
-                      {/* Super Admin can create Admin, Supervisor, Operator, Client (not Super Admin) */}
+                      {/* Super Admin can create Admin, Supervisor, Operator, Manager (not Super Admin) */}
                       {currentUser?.role === 'super_admin' && (
                         <>
-                          <SelectItem value="manager">Admin</SelectItem>
+                          <SelectItem value="admin">Admin</SelectItem>
                           <SelectItem value="supervisor">Supervisor</SelectItem>
                           <SelectItem value="operator">Operator</SelectItem>
-                          <SelectItem value="client">Client</SelectItem>
+                          <SelectItem value="manager">Manager</SelectItem>
                         </>
                       )}
-                      {/* Admin (manager) can only create Supervisor, Operator, Client */}
-                      {currentUser?.role === 'manager' && (
+                      {/* Admin can create Admin, Supervisor, Operator, Manager (not Super Admin) */}
+                      {currentUser?.role === 'admin' && (
                         <>
+                          <SelectItem value="admin">Admin</SelectItem>
                           <SelectItem value="supervisor">Supervisor</SelectItem>
                       <SelectItem value="operator">Operator</SelectItem>
-                          <SelectItem value="client">Client</SelectItem>
+                          <SelectItem value="manager">Manager</SelectItem>
                         </>
                       )}
                       {/* Fallback: Show limited roles if user role is not set or unknown */}
-                      {currentUser?.role !== 'super_admin' && currentUser?.role !== 'manager' && (
+                      {currentUser?.role !== 'super_admin' && currentUser?.role !== 'admin' && (
                         <>
                       <SelectItem value="supervisor">Supervisor</SelectItem>
                           <SelectItem value="operator">Operator</SelectItem>
-                          <SelectItem value="client">Client</SelectItem>
+                          <SelectItem value="manager">Manager</SelectItem>
                         </>
                       )}
                     </SelectContent>

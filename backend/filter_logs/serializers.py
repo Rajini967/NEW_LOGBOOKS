@@ -30,6 +30,9 @@ class FilterLogSerializer(serializers.ModelSerializer):
             'tag_info',
             'area_category',
             'installed_date',
+            'replacement_applicable',
+            'cleaning_applicable',
+            'integrity_applicable',
             'integrity_done_date',
             'integrity_due_date',
             'cleaning_done_date',
@@ -104,6 +107,26 @@ class FilterLogSerializer(serializers.ModelSerializer):
             return "none"
 
     def validate(self, attrs):
+        replacement_applicable = attrs.get(
+            "replacement_applicable",
+            getattr(self.instance, "replacement_applicable", True),
+        )
+        cleaning_applicable = attrs.get(
+            "cleaning_applicable",
+            getattr(self.instance, "cleaning_applicable", True),
+        )
+        integrity_applicable = attrs.get(
+            "integrity_applicable",
+            getattr(self.instance, "integrity_applicable", True),
+        )
+        if not replacement_applicable:
+            attrs["replacement_due_date"] = None
+        if not cleaning_applicable:
+            attrs["cleaning_done_date"] = None
+            attrs["cleaning_due_date"] = None
+        if not integrity_applicable:
+            attrs["integrity_done_date"] = None
+            attrs["integrity_due_date"] = None
         remarks = (attrs.get("remarks") if "remarks" in attrs else getattr(self.instance, "remarks", None)) or ""
         if not str(remarks).strip():
             raise serializers.ValidationError({"remarks": ["Remarks are required."]})

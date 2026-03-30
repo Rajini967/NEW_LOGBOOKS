@@ -46,11 +46,14 @@ class FilterLog(models.Model):
     activity_to_time = models.TimeField(blank=True, null=True)
 
     installed_date = models.DateField()
+    replacement_applicable = models.BooleanField(default=True)
+    cleaning_applicable = models.BooleanField(default=True)
+    integrity_applicable = models.BooleanField(default=True)
     integrity_done_date = models.DateField(blank=True, null=True)
-    integrity_due_date = models.DateField()
+    integrity_due_date = models.DateField(blank=True, null=True)
     cleaning_done_date = models.DateField(blank=True, null=True)
-    cleaning_due_date = models.DateField()
-    replacement_due_date = models.DateField()
+    cleaning_due_date = models.DateField(blank=True, null=True)
+    replacement_due_date = models.DateField(blank=True, null=True)
 
     remarks = models.TextField(blank=True, null=True)
     comment = models.TextField(blank=True, null=True)
@@ -121,12 +124,20 @@ class FilterLog(models.Model):
     def save(self, *args, **kwargs):
         # Auto-calculate due dates when missing
         if self.installed_date:
-            if not self.integrity_due_date:
+            if self.integrity_applicable and not self.integrity_due_date:
                 self.integrity_due_date = self._compute_default_integrity_due()
-            if not self.cleaning_due_date:
+            if self.cleaning_applicable and not self.cleaning_due_date:
                 self.cleaning_due_date = self._compute_default_cleaning_due()
-            if not self.replacement_due_date:
+            if self.replacement_applicable and not self.replacement_due_date:
                 self.replacement_due_date = self._compute_default_replacement_due()
+        if not self.integrity_applicable:
+            self.integrity_done_date = None
+            self.integrity_due_date = None
+        if not self.cleaning_applicable:
+            self.cleaning_done_date = None
+            self.cleaning_due_date = None
+        if not self.replacement_applicable:
+            self.replacement_due_date = None
 
         super().save(*args, **kwargs)
 
