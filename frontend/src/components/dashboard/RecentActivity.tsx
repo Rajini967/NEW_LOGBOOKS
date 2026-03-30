@@ -63,8 +63,7 @@ export function RecentActivity() {
   }, []);
 
   return (
-    <div className="bg-card rounded-lg border border-border p-6">
-      <h3 className="text-lg font-semibold text-foreground mb-4">Recent Activity</h3>
+    <div className="space-y-4">
       {loading ? (
         <div className="flex items-center justify-center py-8 text-muted-foreground">
           <Loader2 className="w-6 h-6 animate-spin mr-2" />
@@ -115,3 +114,4 @@ export function RecentActivity() {
     </div>
   );
 }
+

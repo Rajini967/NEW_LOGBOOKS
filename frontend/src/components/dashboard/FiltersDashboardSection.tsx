@@ -1,14 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { format } from 'date-fns';
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-} from 'recharts';
 import { filtersDashboardAPI, filterScheduleAPI, type FiltersDashboardSummary } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -20,9 +11,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Loader2, Filter, TrendingUp, IndianRupee, BarChart3 } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
+import { DashboardSectionShell } from './DashboardSectionShell';
+import { DashboardInsightRow } from './DashboardInsightRow';
+import { formatDiffPct, rowStatus } from './dashboard-status';
 
 type PeriodType = 'week' | 'month';
+
+const ACCENT = '262,60%,45%';
+
+const MAINTENANCE_TYPES = [
+  { key: 'replacement_count' as const, label: 'Replacement', projKey: 'projected_replacement_count' as const },
+  { key: 'cleaning_count' as const, label: 'Cleaning', projKey: 'projected_cleaning_count' as const },
+  { key: 'integrity_count' as const, label: 'Integrity', projKey: 'projected_integrity_count' as const },
+];
 
 function getDefaultDate(): string {
   return format(new Date(), 'yyyy-MM-dd');
@@ -37,13 +39,10 @@ function periodLabel(summary: FiltersDashboardSummary): string {
   return format(new Date(start), 'MMM yyyy');
 }
 
-const MAINTENANCE_TYPES = [
-  { key: 'replacement_count' as const, label: 'Replacement' },
-  { key: 'cleaning_count' as const, label: 'Cleaning' },
-  { key: 'integrity_count' as const, label: 'Integrity' },
-];
-
-const CHART_COLOR = 'hsl(262,60%,45%)';
+function costDonutPct(actual: number, projected: number): number | null {
+  if (projected <= 0) return null;
+  return Math.min(100, Math.max(0, (actual / projected) * 100));
+}
 
 export function FiltersDashboardSection() {
   const [periodType, setPeriodType] = useState<PeriodType>('month');
@@ -59,7 +58,7 @@ export function FiltersDashboardSection() {
     (async () => {
       try {
         const schedules = await filterScheduleAPI.list({ approval: 'approved' });
-        const list = Array.isArray(schedules) ? schedules : (schedules as any)?.results ?? [];
+        const list = Array.isArray(schedules) ? schedules : (schedules as { results?: unknown })?.results ?? [];
         type Item = { assignment_info?: { equipment_id?: string; equipment_number?: string; equipment_name?: string } };
         const seen = new Set<string>();
         const opts = (list as Item[])
@@ -79,31 +78,36 @@ export function FiltersDashboardSection() {
         if (!cancelled) setEquipmentOptions([]);
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  const fetchSummary = useCallback(async (background = false) => {
-    if (!background) {
-      setLoading(true);
-      setError(null);
-    }
-    try {
-      const data = await filtersDashboardAPI.getSummary({
-        periodType,
-        date,
-        equipmentId: selectedEquipmentId || undefined,
-      });
-      setSummary(data);
-    } catch (e: unknown) {
+  const fetchSummary = useCallback(
+    async (background = false) => {
       if (!background) {
-        const message = e instanceof Error ? e.message : 'Failed to load filters dashboard';
-        setError(message);
-        setSummary(null);
+        setLoading(true);
+        setError(null);
       }
-    } finally {
-      if (!background) setLoading(false);
-    }
-  }, [periodType, date, selectedEquipmentId]);
+      try {
+        const data = await filtersDashboardAPI.getSummary({
+          periodType,
+          date,
+          equipmentId: selectedEquipmentId || undefined,
+        });
+        setSummary(data);
+      } catch (e: unknown) {
+        if (!background) {
+          const message = e instanceof Error ? e.message : 'Failed to load filters dashboard';
+          setError(message);
+          setSummary(null);
+        }
+      } finally {
+        if (!background) setLoading(false);
+      }
+    },
+    [periodType, date, selectedEquipmentId]
+  );
 
   useEffect(() => {
     fetchSummary();
@@ -117,56 +121,117 @@ export function FiltersDashboardSection() {
   const hasProjectedConsumption = summary?.projected_consumption != null;
   const hasProjectedCost = summary?.projected_cost_rs != null;
 
-  return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-4 pl-1 border-l-4 border-[hsl(262,60%,45%)]">
-        <h3 className="text-lg font-semibold text-foreground">Filters dashboard</h3>
-        <div className="flex items-center gap-2">
-          <Label htmlFor="filters-period-date" className="text-sm text-muted-foreground whitespace-nowrap">
-            Date
-          </Label>
-          <Input
-            id="filters-period-date"
-            type="date"
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-            className="w-[160px]"
-          />
-        </div>
-        <div className="flex rounded-lg border border-border p-0.5 bg-muted/30">
-          {(['week', 'month'] as const).map((p) => (
-            <Button
-              key={p}
-              variant={periodType === p ? 'secondary' : 'ghost'}
-              size="sm"
-              className="rounded-md"
-              onClick={() => setPeriodType(p)}
-            >
-              {p === 'week' ? 'W' : 'M'}
-            </Button>
-          ))}
-        </div>
-        <div className="flex items-center gap-2">
-          <Label className="text-sm text-muted-foreground whitespace-nowrap">Equipment</Label>
-          <Select
-            value={selectedEquipmentId || 'all'}
-            onValueChange={(v) => setSelectedEquipmentId(v === 'all' ? '' : v)}
-          >
-            <SelectTrigger className="w-[200px]">
-              <SelectValue placeholder="All" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All</SelectItem>
-              {equipmentOptions.map((opt) => (
-                <SelectItem key={opt.value} value={opt.value}>
-                  {opt.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      </div>
+  const activityChartData = useMemo(() => {
+    if (!summary) return [];
+    return MAINTENANCE_TYPES.map(({ key, label, projKey }) => ({
+      name: label,
+      actual: summary[key],
+      target: (summary[projKey] as number | undefined) ?? 0,
+    }));
+  }, [summary]);
 
+  const activityTableRows = useMemo(() => {
+    if (!summary) return [];
+    return MAINTENANCE_TYPES.map(({ key, label, projKey }) => {
+      const actual = summary[key];
+      const projected = (summary[projKey] as number | undefined) ?? 0;
+      return {
+        period: label,
+        actual: String(actual),
+        target: projected > 0 ? String(projected) : '—',
+        forecast: projected > 0 ? String(projected) : '—',
+        status: rowStatus(actual, projected, projected),
+      };
+    });
+  }, [summary]);
+
+  const costChartData = useMemo(() => {
+    if (!summary) return [];
+    return [
+      {
+        name: 'Period total',
+        actual: summary.total_cost_rs,
+        target: summary.projected_cost_rs ?? 0,
+      },
+    ];
+  }, [summary]);
+
+  const costTableRows = useMemo(() => {
+    if (!summary) return [];
+    return [
+      {
+        period: periodLabel(summary),
+        actual: `₹${summary.total_cost_rs.toLocaleString('en-IN')}`,
+        target:
+          summary.projected_cost_rs != null
+            ? `₹${summary.projected_cost_rs.toLocaleString('en-IN')}`
+            : '—',
+        forecast:
+          summary.projected_cost_rs != null
+            ? `₹${summary.projected_cost_rs.toLocaleString('en-IN')}`
+            : '—',
+        status: rowStatus(summary.total_cost_rs, 0, summary.projected_cost_rs ?? 0),
+      },
+    ];
+  }, [summary]);
+
+  const toolbar = (
+    <>
+      <div className="flex items-center gap-2">
+        <Label htmlFor="filters-period-date" className="text-xs text-muted-foreground whitespace-nowrap sm:text-sm">
+          Date
+        </Label>
+        <Input
+          id="filters-period-date"
+          type="date"
+          value={date}
+          onChange={(e) => setDate(e.target.value)}
+          className="h-9 w-[150px] sm:w-[160px]"
+        />
+      </div>
+      <div className="flex rounded-lg border border-border p-0.5 bg-muted/30">
+        {(['week', 'month'] as const).map((p) => (
+          <Button
+            key={p}
+            variant={periodType === p ? 'secondary' : 'ghost'}
+            size="sm"
+            className="h-8 rounded-md px-2.5 text-xs"
+            onClick={() => setPeriodType(p)}
+          >
+            {p === 'week' ? 'W' : 'M'}
+          </Button>
+        ))}
+      </div>
+      <div className="flex items-center gap-2">
+        <Label className="text-xs text-muted-foreground whitespace-nowrap sm:text-sm">Equipment</Label>
+        <Select
+          value={selectedEquipmentId || 'all'}
+          onValueChange={(v) => setSelectedEquipmentId(v === 'all' ? '' : v)}
+        >
+          <SelectTrigger className="h-9 w-[180px] sm:w-[200px]">
+            <SelectValue placeholder="All" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All</SelectItem>
+            {equipmentOptions.map((opt) => (
+              <SelectItem key={opt.value} value={opt.value}>
+                {opt.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+    </>
+  );
+
+  return (
+    <DashboardSectionShell
+      title="Filters dashboard"
+      accentHsl={ACCENT}
+      variant="framed"
+      accentEdge="strong"
+      toolbar={toolbar}
+    >
       {loading && (
         <div className="flex items-center justify-center py-12 text-muted-foreground">
           <Loader2 className="w-8 h-8 animate-spin mr-2" />
@@ -174,144 +239,94 @@ export function FiltersDashboardSection() {
         </div>
       )}
 
-      {error && (
-        <div className="bg-destructive/10 border border-destructive/30 rounded-lg p-4 text-destructive">
-          {error}
-        </div>
+      {error && !loading && (
+        <div className="bg-destructive/10 border border-destructive/30 rounded-lg p-4 text-destructive text-sm">{error}</div>
       )}
 
       {!loading && !error && summary && (
         <>
-          {/* Maintenance by type – bar chart */}
-          <div className="bg-card rounded-lg border border-border p-6 relative overflow-hidden">
-            <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-[hsl(220,60%,35%)] to-[hsl(262,60%,45%)]" />
-            <h4 className="text-base font-medium text-foreground mb-4 flex items-center gap-2">
-              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[hsl(262,60%,45%)/15] text-[hsl(262,60%,35%)]">
-                <BarChart3 className="h-4 w-4" />
-              </span>
-              Maintenance by type ({periodLabel(summary)})
-            </h4>
-            <div className="h-[240px] w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart
-                  data={MAINTENANCE_TYPES.map(({ key, label }) => ({
-                    name: label,
-                    count: summary[key],
-                  }))}
-                  margin={{ top: 8, right: 16, left: 8, bottom: 24 }}
-                >
-                  <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                  <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-                  <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
-                  <Tooltip formatter={(value: number) => [value, 'Count']} />
-                  <Bar dataKey="count" fill={CHART_COLOR} radius={[4, 4, 0, 0]} name="Count" />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
+          <p className="text-xs text-muted-foreground -mb-2">Period: {periodLabel(summary)}</p>
 
-          {/* Filter maintenance done table */}
-          <div className="bg-card rounded-lg border border-border p-6 relative overflow-hidden">
-            <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-[hsl(220,60%,35%)] to-[hsl(262,60%,45%)]" />
-            <h4 className="text-base font-medium text-foreground mb-4 flex items-center gap-2">
-              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[hsl(262,60%,45%)/15] text-[hsl(262,60%,35%)]">
-                <Filter className="h-4 w-4" />
-              </span>
-              Filter maintenance done ({periodLabel(summary)})
-            </h4>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm border-collapse">
-                <thead>
-                  <tr className="border-b border-border">
-                    <th className="text-left py-2 px-3 font-medium text-foreground">Type</th>
-                    <th className="text-right py-2 px-3 font-medium text-foreground">Count</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {MAINTENANCE_TYPES.map(({ key, label }) => (
-                    <tr key={key} className="border-b border-border/60">
-                      <td className="py-2 px-3 text-foreground">{label}</td>
-                      <td className="py-2 px-3 text-right text-foreground">{summary[key]}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <p className="text-sm font-medium text-foreground mt-4 pt-2 border-t border-border">
-              Total activities: {summary.total_consumption}
-            </p>
-          </div>
+          <DashboardInsightRow
+            subtitle="Maintenance activity (counts) — actual vs projected"
+            accentHsl={ACCENT}
+            donutCenterTitle="% of projected acts"
+            donutCenterValue={
+              hasProjectedConsumption && summary.projected_consumption! > 0
+                ? `${Math.round(costDonutPct(summary.total_consumption, summary.projected_consumption!)!)}%`
+                : '—'
+            }
+            donutFillPct={
+              hasProjectedConsumption ? costDonutPct(summary.total_consumption, summary.projected_consumption!) : null
+            }
+            metrics={[
+              { label: 'Actual (activities)', value: String(summary.total_consumption) },
+              ...(hasProjectedConsumption
+                ? [
+                    { label: 'Projected', value: String(summary.projected_consumption) },
+                    {
+                      label: 'Δ vs projected',
+                      value:
+                        summary.projected_consumption! !== 0
+                          ? formatDiffPct(summary.total_consumption, summary.projected_consumption!)
+                          : '—',
+                    },
+                  ]
+                : [{ label: 'Projected', value: 'Set in config' }]),
+            ]}
+            chartData={activityChartData}
+            barLabel="Actual count"
+            lineLabel="Projected count"
+            formatTooltip={(value) => [String(value), '']}
+            tableRows={activityTableRows}
+            emptyMessage="No activity data."
+            chartType="line-dual"
+            rowVariant="standard"
+            comparisonHsl="262, 38%, 38%"
+          />
 
-          {/* Metric cards: Consumption and Cost */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="bg-card rounded-lg border border-border p-4 relative overflow-hidden">
-              <div className="absolute left-0 top-0 bottom-0 w-1 bg-[hsl(262,60%,45%)]" />
-              <h4 className="text-sm font-medium text-foreground flex items-center gap-2 mb-2">
-                <TrendingUp className="h-4 w-4 text-[hsl(262,60%,45%)]" />
-                Consumption
-              </h4>
-              {hasProjectedConsumption ? (
-                <div className="space-y-1">
-                  <p className="text-foreground">
-                    Actual: {summary.total_consumption} activities
-                  </p>
-                  <p className="text-muted-foreground">
-                    Projected: {summary.projected_consumption} activities
-                  </p>
-                  {summary.projected_consumption! !== 0 && (
-                    <p className="text-xs text-muted-foreground">
-                      Variance:{' '}
-                      {(
-                        ((summary.total_consumption - summary.projected_consumption!) /
-                          summary.projected_consumption!) *
-                        100
-                      ).toFixed(1)}
-                      %
-                    </p>
-                  )}
-                </div>
-              ) : (
-                <p className="text-xs text-muted-foreground">
-                  Set projected counts in config to compare.
-                </p>
-              )}
-            </div>
-
-            <div className="bg-card rounded-lg border border-border p-4 relative overflow-hidden">
-              <div className="absolute left-0 top-0 bottom-0 w-1 bg-[hsl(38,92%,50%)]" />
-              <h4 className="text-sm font-medium text-foreground flex items-center gap-2 mb-2">
-                <IndianRupee className="h-4 w-4 text-[hsl(38,92%,50%)]" />
-                Cost
-              </h4>
-              {hasProjectedCost ? (
-                <div className="space-y-1">
-                  <p className="text-foreground">
-                    Actual: ₹{summary.total_cost_rs.toLocaleString('en-IN')}
-                  </p>
-                  <p className="text-muted-foreground">
-                    Projected opex: ₹{summary.projected_cost_rs!.toLocaleString('en-IN')}
-                  </p>
-                  {summary.projected_cost_rs! !== 0 && (
-                    <p className="text-xs text-muted-foreground">
-                      Variance:{' '}
-                      {(
-                        ((summary.total_cost_rs - summary.projected_cost_rs!) /
-                          summary.projected_cost_rs!) *
-                        100
-                      ).toFixed(1)}
-                      %
-                    </p>
-                  )}
-                </div>
-              ) : (
-                <p className="text-xs text-muted-foreground">
-                  Set projected cost in config to compare.
-                </p>
-              )}
-            </div>
-          </div>
+          <DashboardInsightRow
+            subtitle="Maintenance cost (₹) — actual vs projected"
+            accentHsl={ACCENT}
+            donutCenterTitle="% of projected cost"
+            donutCenterValue={
+              hasProjectedCost && summary.projected_cost_rs! > 0
+                ? `${Math.round(costDonutPct(summary.total_cost_rs, summary.projected_cost_rs!)!)}%`
+                : '—'
+            }
+            donutFillPct={
+              hasProjectedCost ? costDonutPct(summary.total_cost_rs, summary.projected_cost_rs!) : null
+            }
+            metrics={[
+              { label: 'Actual (₹)', value: `₹${summary.total_cost_rs.toLocaleString('en-IN')}` },
+              ...(hasProjectedCost
+                ? [
+                    { label: 'Projected (₹)', value: `₹${summary.projected_cost_rs!.toLocaleString('en-IN')}` },
+                    {
+                      label: 'Δ vs projected',
+                      value:
+                        summary.projected_cost_rs! !== 0
+                          ? formatDiffPct(summary.total_cost_rs, summary.projected_cost_rs!)
+                          : '—',
+                    },
+                  ]
+                : [{ label: 'Projected (₹)', value: 'Set in config' }]),
+            ]}
+            chartData={costChartData}
+            barLabel="Actual cost (₹)"
+            lineLabel="Projected (₹)"
+            formatTooltip={(value) => [
+              `₹${Number(value).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`,
+              '',
+            ]}
+            tableRows={costTableRows}
+            emptyMessage="No cost data."
+            chartType="line-dual"
+            rowVariant="soft"
+            comparisonHsl="38, 58%, 42%"
+          />
         </>
       )}
-    </div>
+    </DashboardSectionShell>
   );
 }

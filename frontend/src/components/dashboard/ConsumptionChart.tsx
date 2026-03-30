@@ -1,17 +1,22 @@
 import React, { useState, useEffect } from 'react';
 import {
-  AreaChart,
-  Area,
+  BarChart,
+  Bar,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
+  Legend,
   ResponsiveContainer,
 } from 'recharts';
 import { dashboardSummaryAPI } from '@/lib/api';
 import { Loader2 } from 'lucide-react';
 
 type ChartPoint = { day: string; chemical: number; steam: number; fuel: number };
+
+const CHEMICAL = 'hsl(185, 70%, 40%)';
+const STEAM = 'hsl(220, 60%, 32%)';
+const FUEL = 'hsl(38, 88%, 48%)';
 
 export function ConsumptionChart() {
   const [data, setData] = useState<ChartPoint[]>([]);
@@ -48,9 +53,13 @@ export function ConsumptionChart() {
     };
   }, []);
 
+  const tooltipFmt = (value: number, name: string) => {
+    if (name === 'Fuel (L)') return [`${Number(value).toFixed(1)} L`, name];
+    return [`${Number(value).toFixed(1)} kg`, name];
+  };
+
   return (
-    <div className="bg-card rounded-lg border border-border p-6">
-      <h3 className="text-lg font-semibold text-foreground mb-4">Weekly Consumption</h3>
+    <div className="space-y-4">
       {loading && (
         <div className="h-[300px] flex items-center justify-center text-muted-foreground">
           <Loader2 className="w-8 h-8 animate-spin" />
@@ -70,83 +79,70 @@ export function ConsumptionChart() {
         <>
           <div className="h-[300px]">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={data} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="colorChemical" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="hsl(185, 70%, 40%)" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="hsl(185, 70%, 40%)" stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="colorSteam" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="hsl(220, 60%, 25%)" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="hsl(220, 60%, 25%)" stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="colorFuel" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="hsl(38, 92%, 50%)" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="hsl(38, 92%, 50%)" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(220, 15%, 88%)" vertical={false} />
+              <BarChart
+                data={data}
+                margin={{ top: 16, right: 12, left: 4, bottom: 8 }}
+                barCategoryGap="14%"
+                barGap={2}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
                 <XAxis
                   dataKey="day"
                   axisLine={false}
                   tickLine={false}
-                  tick={{ fontSize: 12, fill: 'hsl(220, 10%, 45%)' }}
+                  tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
                 />
                 <YAxis
                   axisLine={false}
                   tickLine={false}
-                  tick={{ fontSize: 12, fill: 'hsl(220, 10%, 45%)' }}
+                  tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
+                  width={44}
                 />
                 <Tooltip
                   contentStyle={{
-                    backgroundColor: 'hsl(0, 0%, 100%)',
-                    border: '1px solid hsl(220, 15%, 88%)',
+                    backgroundColor: 'hsl(var(--card))',
+                    border: '1px solid hsl(var(--border))',
                     borderRadius: '8px',
-                    boxShadow: '0 4px 6px -1px hsl(220, 30%, 10%, 0.1)',
                   }}
+                  formatter={tooltipFmt}
                 />
-                <Area
-                  type="monotone"
+                <Legend wrapperStyle={{ fontSize: 12 }} />
+                <Bar
                   dataKey="chemical"
-                  stroke="hsl(185, 70%, 40%)"
-                  fillOpacity={1}
-                  fill="url(#colorChemical)"
-                  strokeWidth={2}
                   name="Chemical (kg)"
+                  fill={CHEMICAL}
+                  radius={[4, 4, 0, 0]}
+                  maxBarSize={28}
                 />
-                <Area
-                  type="monotone"
+                <Bar
                   dataKey="steam"
-                  stroke="hsl(220, 60%, 25%)"
-                  fillOpacity={1}
-                  fill="url(#colorSteam)"
-                  strokeWidth={2}
                   name="Steam (kg)"
+                  fill={STEAM}
+                  radius={[4, 4, 0, 0]}
+                  maxBarSize={28}
                 />
-                <Area
-                  type="monotone"
+                <Bar
                   dataKey="fuel"
-                  stroke="hsl(38, 92%, 50%)"
-                  fillOpacity={1}
-                  fill="url(#colorFuel)"
-                  strokeWidth={2}
                   name="Fuel (L)"
+                  fill={FUEL}
+                  radius={[4, 4, 0, 0]}
+                  maxBarSize={28}
                 />
-              </AreaChart>
+              </BarChart>
             </ResponsiveContainer>
           </div>
-          <div className="flex justify-center gap-6 mt-4">
+          <div className="flex flex-wrap justify-center gap-6 mt-2">
             <div className="flex items-center gap-2">
-              <div className="w-3 h-3 rounded-full bg-accent" />
-              <span className="text-xs text-muted-foreground">Chemical</span>
+              <div className="w-3 h-3 rounded-sm shrink-0" style={{ backgroundColor: CHEMICAL }} />
+              <span className="text-xs text-muted-foreground">Chemical (kg)</span>
             </div>
             <div className="flex items-center gap-2">
-              <div className="w-3 h-3 rounded-full bg-primary" />
-              <span className="text-xs text-muted-foreground">Steam</span>
+              <div className="w-3 h-3 rounded-sm shrink-0" style={{ backgroundColor: STEAM }} />
+              <span className="text-xs text-muted-foreground">Steam (kg)</span>
             </div>
             <div className="flex items-center gap-2">
-              <div className="w-3 h-3 rounded-full bg-warning" />
-              <span className="text-xs text-muted-foreground">Fuel</span>
+              <div className="w-3 h-3 rounded-sm shrink-0" style={{ backgroundColor: FUEL }} />
+              <span className="text-xs text-muted-foreground">Fuel (L)</span>
             </div>
           </div>
         </>

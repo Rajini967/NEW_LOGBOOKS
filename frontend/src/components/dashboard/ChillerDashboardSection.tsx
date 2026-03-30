@@ -1,15 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { format } from 'date-fns';
-import {
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-  ResponsiveContainer,
-} from 'recharts';
 import { chillerDashboardAPI, equipmentAPI, equipmentCategoryAPI, type ChillerDashboardSummary } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -21,12 +11,31 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Loader2, Zap, TrendingUp, IndianRupee, BarChart3 } from 'lucide-react';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { ChevronDown, Loader2 } from 'lucide-react';
+import { DashboardSectionShell } from './DashboardSectionShell';
+import { DashboardInsightRow } from './DashboardInsightRow';
+import { formatDiffPct, rowStatus, utilizationDonutPct } from './dashboard-status';
+import { cn } from '@/lib/utils';
 
 type PeriodType = 'day' | 'month' | 'year';
 
+/** Chiller section chrome + actual bars (~#26A69A) */
+const POWER_ACCENT_HSL = '174, 42%, 46%';
+/** Limit / projected line — deep navy (~#1A237E) */
+const POWER_LIMIT_BAR_HSL = '239, 48%, 32%';
+/** Cost row actual bar + donut (Bold BI expenses warm) */
+const COST_ACCENT_HSL = '34, 90%, 46%';
+/** Projected opex line */
+const COST_PROJECTED_LINE_HSL = '16, 78%, 44%';
+
 function getDefaultDate(): string {
   return format(new Date(), 'yyyy-MM-dd');
+}
+
+function costDonutPct(actual: number, projected: number): number | null {
+  if (projected <= 0) return null;
+  return Math.min(100, Math.max(0, (actual / projected) * 100));
 }
 
 export function ChillerDashboardSection() {
@@ -35,7 +44,9 @@ export function ChillerDashboardSection() {
   const [selectedEquipmentId, setSelectedEquipmentId] = useState<string>('');
   const [equipmentOptions, setEquipmentOptions] = useState<{ value: string; label: string }[]>([]);
   const [summary, setSummary] = useState<ChillerDashboardSummary | null>(null);
-  const [series, setSeries] = useState<{ date: string; label: string; limit_power_kwh: number; actual_power_kwh: number }[]>([]);
+  const [series, setSeries] = useState<
+    { date: string; label: string; limit_power_kwh: number; actual_power_kwh: number; projected_power_kwh?: number | null; actual_cost_rs?: number | null; projected_cost_rs?: number | null }[]
+  >([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -49,8 +60,8 @@ export function ChillerDashboardSection() {
           ? await equipmentAPI.list({ category: chillerCat.id, status: 'approved' })
           : [];
         const opts = (Array.isArray(list) ? list : [])
-          .filter((e: any) => e?.is_active !== false && e?.status === 'approved')
-          .map((e: any) => ({
+          .filter((e: { is_active?: boolean; status?: string }) => e?.is_active !== false && e?.status === 'approved')
+          .map((e: { equipment_number: string; name?: string }) => ({
             value: e.equipment_number,
             label: `${e.equipment_number}${e.name ? ` – ${e.name}` : ''}`,
           }));
@@ -59,31 +70,36 @@ export function ChillerDashboardSection() {
         if (!cancelled) setEquipmentOptions([]);
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  const fetchSummary = useCallback(async (background = false) => {
-    if (!background) {
-      setLoading(true);
-      setError(null);
-    }
-    try {
-      const data = await chillerDashboardAPI.getSummary({
-        periodType,
-        date,
-        equipmentId: selectedEquipmentId || undefined,
-      });
-      setSummary(data);
-    } catch (e: unknown) {
+  const fetchSummary = useCallback(
+    async (background = false) => {
       if (!background) {
-        const message = e instanceof Error ? e.message : 'Failed to load chiller dashboard';
-        setError(message);
-        setSummary(null);
+        setLoading(true);
+        setError(null);
       }
-    } finally {
-      if (!background) setLoading(false);
-    }
-  }, [periodType, date, selectedEquipmentId]);
+      try {
+        const data = await chillerDashboardAPI.getSummary({
+          periodType,
+          date,
+          equipmentId: selectedEquipmentId || undefined,
+        });
+        setSummary(data);
+      } catch (e: unknown) {
+        if (!background) {
+          const message = e instanceof Error ? e.message : 'Failed to load chiller dashboard';
+          setError(message);
+          setSummary(null);
+        }
+      } finally {
+        if (!background) setLoading(false);
+      }
+    },
+    [periodType, date, selectedEquipmentId]
+  );
 
   const fetchSeries = useCallback(async () => {
     try {
@@ -96,7 +112,6 @@ export function ChillerDashboardSection() {
       setSeries(data.series || []);
     } catch {
       setSeries([]);
-      setError('Failed to load chart data.');
     }
   }, [periodType, date, selectedEquipmentId]);
 
@@ -117,75 +132,126 @@ export function ChillerDashboardSection() {
     return () => clearInterval(interval);
   }, [fetchSummary, fetchSeries]);
 
-  const consumptionChartData = series.map((p) => ({
-    name: p.label,
-    Actual: p.actual_power_kwh,
-    Projected: p.projected_power_kwh ?? 0,
-  }));
+  const energyChartData = useMemo(
+    () =>
+      series.map((p) => ({
+        name: p.label,
+        actual: p.actual_power_kwh,
+        target:
+          p.limit_power_kwh > 0 ? p.limit_power_kwh : (p.projected_power_kwh ?? 0),
+      })),
+    [series]
+  );
 
-  const costChartData = series.map((p) => ({
-    name: p.label,
-    'Actual cost': p.actual_cost_rs ?? 0,
-    'Projected opex': p.projected_cost_rs ?? 0,
-  }));
+  const energyTableRows = useMemo(
+    () =>
+      series.map((p) => ({
+        period: p.label,
+        actual: p.actual_power_kwh.toFixed(1),
+        target: p.limit_power_kwh > 0 ? p.limit_power_kwh.toFixed(1) : '—',
+        forecast: p.projected_power_kwh != null ? Number(p.projected_power_kwh).toFixed(1) : '—',
+        status: rowStatus(
+          p.actual_power_kwh,
+          p.limit_power_kwh,
+          p.projected_power_kwh ?? 0
+        ),
+      })),
+    [series]
+  );
 
-  const consumptionYMax = consumptionChartData.length
-    ? Math.max(1, ...consumptionChartData.flatMap((d) => [d.Actual, d.Projected]))
-    : 1;
-  const costYMax = costChartData.length
-    ? Math.max(1, ...costChartData.flatMap((d) => [d['Actual cost'], d['Projected opex']]))
-    : 1;
+  const costChartData = useMemo(
+    () =>
+      series.map((p) => ({
+        name: p.label,
+        actual: p.actual_cost_rs ?? 0,
+        target: p.projected_cost_rs ?? 0,
+      })),
+    [series]
+  );
+
+  const costTableRows = useMemo(
+    () =>
+      series.map((p) => ({
+        period: p.label,
+        actual:
+          p.actual_cost_rs != null
+            ? `₹${Number(p.actual_cost_rs).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
+            : '—',
+        target: '—',
+        forecast:
+          p.projected_cost_rs != null
+            ? `₹${Number(p.projected_cost_rs).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
+            : '—',
+        status: rowStatus(
+          p.actual_cost_rs ?? 0,
+          0,
+          p.projected_cost_rs ?? 0
+        ),
+      })),
+    [series]
+  );
 
   const hasProjected = summary?.projected_power_kwh != null;
-  const hasCost = summary?.actual_cost_rs != null || summary?.projected_cost_rs != null;
+  const hasCost =
+    summary?.actual_cost_rs != null ||
+    summary?.projected_cost_rs != null ||
+    series.some((p) => p.actual_cost_rs != null || p.projected_cost_rs != null);
+
+  const toolbar = (
+    <>
+      <div className="flex items-center gap-2">
+        <Label htmlFor="chiller-period-date" className="text-xs text-muted-foreground whitespace-nowrap sm:text-sm">
+          Date
+        </Label>
+        <Input
+          id="chiller-period-date"
+          type="date"
+          value={date}
+          onChange={(e) => setDate(e.target.value)}
+          className="h-9 w-[150px] sm:w-[160px]"
+        />
+      </div>
+      <div className="flex rounded-lg border border-border p-0.5 bg-muted/30">
+        {(['day', 'month', 'year'] as const).map((p) => (
+          <Button
+            key={p}
+            variant={periodType === p ? 'secondary' : 'ghost'}
+            size="sm"
+            className="h-8 rounded-md px-2.5 text-xs"
+            onClick={() => setPeriodType(p)}
+          >
+            {p === 'day' ? 'D' : p === 'month' ? 'M' : 'Y'}
+          </Button>
+        ))}
+      </div>
+      <div className="flex items-center gap-2">
+        <Label className="text-xs text-muted-foreground whitespace-nowrap sm:text-sm">Equipment</Label>
+        <Select value={selectedEquipmentId || 'all'} onValueChange={(v) => setSelectedEquipmentId(v === 'all' ? '' : v)}>
+          <SelectTrigger className="h-9 w-[180px] sm:w-[200px]">
+            <SelectValue placeholder="All" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All</SelectItem>
+            {equipmentOptions.map((opt) => (
+              <SelectItem key={opt.value} value={opt.value}>
+                {opt.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+    </>
+  );
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-4 pl-1 border-l-4 border-[hsl(185,70%,40%)]">
-        <h3 className="text-lg font-semibold text-foreground">Chiller dashboard</h3>
-        <div className="flex items-center gap-2">
-          <Label htmlFor="chiller-period-date" className="text-sm text-muted-foreground whitespace-nowrap">
-            Date
-          </Label>
-          <Input
-            id="chiller-period-date"
-            type="date"
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-            className="w-[160px]"
-          />
-        </div>
-        <div className="flex rounded-lg border border-border p-0.5 bg-muted/30">
-          {(['day', 'month', 'year'] as const).map((p) => (
-            <Button
-              key={p}
-              variant={periodType === p ? 'secondary' : 'ghost'}
-              size="sm"
-              className="rounded-md"
-              onClick={() => setPeriodType(p)}
-            >
-              {p === 'day' ? 'D' : p === 'month' ? 'M' : 'Y'}
-            </Button>
-          ))}
-        </div>
-        <div className="flex items-center gap-2">
-          <Label className="text-sm text-muted-foreground whitespace-nowrap">Equipment</Label>
-          <Select value={selectedEquipmentId || 'all'} onValueChange={(v) => setSelectedEquipmentId(v === 'all' ? '' : v)}>
-            <SelectTrigger className="w-[200px]">
-              <SelectValue placeholder="All" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All</SelectItem>
-              {equipmentOptions.map((opt) => (
-                <SelectItem key={opt.value} value={opt.value}>
-                  {opt.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      </div>
-
+    <DashboardSectionShell
+      title="Chiller dashboard"
+      accentHsl={POWER_ACCENT_HSL}
+      variant="gradient"
+      accentEdge="subtle"
+      className="bg-muted/35"
+      toolbar={toolbar}
+    >
       {loading && (
         <div className="flex items-center justify-center py-12 text-muted-foreground">
           <Loader2 className="w-8 h-8 animate-spin mr-2" />
@@ -193,233 +259,164 @@ export function ChillerDashboardSection() {
         </div>
       )}
 
-      {error && (
-        <div className="bg-destructive/10 border border-destructive/30 rounded-lg p-4 text-destructive">
-          {error}
-        </div>
+      {error && !loading && (
+        <div className="bg-destructive/10 border border-destructive/30 rounded-lg p-4 text-destructive text-sm">{error}</div>
       )}
 
       {!loading && !error && summary && (
         <>
-          {/* Efficiency, Consumption, Cost cards – above charts so they are visible without scrolling */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {/* Chiller efficiency – teal accent */}
-            <div className="bg-card rounded-lg border border-border p-4 relative overflow-hidden">
-              <div className="absolute top-0 left-0 right-0 h-1 bg-[hsl(185,70%,40%)]" />
-              <div className="absolute top-0 left-0 w-1 h-full bg-[hsl(185,70%,40%)]" />
-              <h4 className="text-sm font-medium text-foreground mb-2 flex items-center gap-2">
-                <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[hsl(185,70%,40%)/15] text-[hsl(185,70%,38%)]">
-                  <Zap className="h-4 w-4" />
-                </span>
-                Efficiency
-              </h4>
-              {summary.limit_power_kwh > 0 && summary.utilization_pct != null ? (
-                <p className="text-2xl font-semibold text-[hsl(185,55%,28%)]">
-                  {summary.utilization_pct.toFixed(1)}% utilization
-                </p>
-              ) : (
-                <p className="text-2xl font-semibold text-foreground">—</p>
-              )}
-              <p className="text-xs text-muted-foreground mt-1">
-                {summary.kwh_per_day.toFixed(1)} kWh/day
-              </p>
-            </div>
+          {(periodType === 'month' || periodType === 'year') && (
+            <p className="text-xs text-muted-foreground -mb-2">
+              {periodType === 'month' ? 'Month total (aligned with summary cards)' : 'Year total (aligned with summary cards)'}
+            </p>
+          )}
 
-            {/* Actual vs projected consumption – blue accent */}
-            <div className="bg-card rounded-lg border border-border p-4 relative overflow-hidden">
-              <div className="absolute top-0 left-0 right-0 h-1 bg-[hsl(220,55%,45%)]" />
-              <div className="absolute top-0 left-0 w-1 h-full bg-[hsl(220,55%,45%)]" />
-              <h4 className="text-sm font-medium text-foreground mb-2 flex items-center gap-2">
-                <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[hsl(220,55%,45%)/15] text-[hsl(220,55%,38%)]">
-                  <TrendingUp className="h-4 w-4" />
-                </span>
-                Consumption
-              </h4>
-              <p className="text-lg font-medium text-[hsl(220,40%,28%)]">
-                Actual: {summary.actual_power_kwh.toFixed(1)} kWh
-              </p>
-              {hasProjected ? (
-                <>
-                  <p className="text-lg text-muted-foreground">
-                    Projected: {summary.projected_power_kwh!.toFixed(1)} kWh
-                  </p>
-                  {summary.projected_power_kwh! !== 0 && (
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Variance:{' '}
-                      {(
-                        ((summary.actual_power_kwh - summary.projected_power_kwh!) /
-                          summary.projected_power_kwh!) *
-                        100
-                      ).toFixed(1)}
-                      %
-                    </p>
-                  )}
-                </>
-              ) : (
-                <p className="text-xs text-muted-foreground mt-1">Set projected power in config to compare.</p>
-              )}
-            </div>
+          <DashboardInsightRow
+            subtitle="Power consumption (kWh) — actual vs limit / projected"
+            accentHsl={POWER_ACCENT_HSL}
+            donutCenterTitle="% of daily limit"
+            donutCenterValue={
+              utilizationDonutPct(summary.utilization_pct, summary.limit_power_kwh > 0) != null
+                ? `${Math.round(utilizationDonutPct(summary.utilization_pct, summary.limit_power_kwh > 0)!)}%`
+                : '—'
+            }
+            donutFillPct={utilizationDonutPct(summary.utilization_pct, summary.limit_power_kwh > 0)}
+            metrics={[
+              { label: 'Actual (kWh)', value: summary.actual_power_kwh.toFixed(1) },
+              {
+                label: 'Limit (kWh)',
+                value: summary.limit_power_kwh > 0 ? summary.limit_power_kwh.toFixed(1) : '—',
+              },
+              {
+                label: 'Δ vs limit',
+                value:
+                  summary.limit_power_kwh > 0
+                    ? formatDiffPct(summary.actual_power_kwh, summary.limit_power_kwh)
+                    : '—',
+              },
+              ...(hasProjected
+                ? [
+                    {
+                      label: 'Projected (kWh)',
+                      value: summary.projected_power_kwh!.toFixed(1),
+                    } as const,
+                  ]
+                : []),
+            ]}
+            chartData={energyChartData}
+            barLabel="Actual (kWh)"
+            lineLabel={series.some((p) => p.limit_power_kwh > 0) ? 'Limit / target (kWh)' : 'Projected (kWh)'}
+            formatTooltip={(value, name) => [`${Number(value).toFixed(1)} kWh`, name]}
+            tableRows={energyTableRows}
+            emptyMessage="No data for this period."
+            chartType="bar-line"
+            rowVariant="card"
+            comparisonHsl={POWER_LIMIT_BAR_HSL}
+            tableZebra
+            tableHeaderTone="neutral"
+            statusDisplay="pill"
+            leftKpiLayout="stat-box"
+          />
 
-            {/* Actual vs projected cost – amber accent */}
-            <div className="bg-card rounded-lg border border-border p-4 relative overflow-hidden">
-              <div className="absolute top-0 left-0 right-0 h-1 bg-[hsl(38,92%,45%)]" />
-              <div className="absolute top-0 left-0 w-1 h-full bg-[hsl(38,92%,45%)]" />
-              <h4 className="text-sm font-medium text-foreground mb-2 flex items-center gap-2">
-                <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[hsl(38,92%,45%)/18] text-[hsl(38,92%,38%)]">
-                  <IndianRupee className="h-4 w-4" />
-                </span>
-                Cost
-              </h4>
-              {hasCost ? (
-                <>
-                  <p className="text-lg font-medium text-[hsl(38,60%,28%)]">
-                    Actual: ₹{summary.actual_cost_rs?.toLocaleString('en-IN') ?? '—'}
-                  </p>
-                  <p className="text-lg text-muted-foreground">
-                    Projected: ₹{summary.projected_cost_rs?.toLocaleString('en-IN') ?? '—'}
-                  </p>
-                </>
-              ) : (
-                <p className="text-sm text-muted-foreground">Set electricity rate to see cost.</p>
-              )}
-            </div>
-          </div>
-
-          {/* Two charts: Actual consumption vs Projected | Actual cost vs Projected opex */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Chart 1: Actual consumption vs Projected consumption */}
-            <div className="bg-card rounded-lg border border-border p-6 relative overflow-hidden">
-              <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-[hsl(220,60%,35%)] to-[hsl(185,70%,40%)]" />
-              <h4 className="text-base font-medium text-foreground mb-4 flex items-center gap-2">
-                <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[hsl(185,70%,40%)/15] text-[hsl(185,70%,35%)]">
-                  <BarChart3 className="h-4 w-4" />
-                </span>
-                Actual consumption vs Projected consumption
-              </h4>
-              {(periodType === 'month' || periodType === 'year') && (
-                <p className="text-xs text-muted-foreground -mt-2 mb-2">
-                  {periodType === 'month' ? 'Month total (same as cards)' : 'Year total (same as cards)'}
-                </p>
-              )}
-              {consumptionChartData.length === 0 ? (
-                <p className="text-sm text-muted-foreground py-6">No data for this period.</p>
-              ) : (
-                <div className="h-[280px] rounded-lg p-2 bg-gradient-to-r from-[hsl(220,40%,94%)] via-[hsl(185,35%,94%)] to-[hsl(38,40%,96%)]">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={consumptionChartData} margin={{ top: 10, right: 10, left: -10, bottom: consumptionChartData.length > 1 ? 40 : 0 }}>
-                      <defs>
-                        <linearGradient id="chillerActualFill" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="hsl(185, 70%, 45%)" stopOpacity={0.6} />
-                          <stop offset="100%" stopColor="hsl(185, 70%, 40%)" stopOpacity={0.2} />
-                        </linearGradient>
-                        <linearGradient id="chillerProjectedFill" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="hsl(220, 60%, 35%)" stopOpacity={0.5} />
-                          <stop offset="100%" stopColor="hsl(220, 60%, 25%)" stopOpacity={0.15} />
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid strokeDasharray="3 3" stroke="hsl(220, 15%, 88%)" vertical={false} />
-                      <XAxis dataKey="name" interval={0} axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: 'hsl(220, 10%, 45%)' }} angle={consumptionChartData.length > 1 ? -35 : 0} textAnchor={consumptionChartData.length > 1 ? 'end' : 'middle'} />
-                      <YAxis domain={[0, consumptionYMax]} axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: 'hsl(220, 10%, 45%)' }} />
-                      <Tooltip
-                        contentStyle={{ backgroundColor: 'hsl(0, 0%, 100%)', border: '1px solid hsl(220, 15%, 88%)', borderRadius: '8px', boxShadow: '0 4px 6px -1px hsl(220, 30%, 10%, 0.1)' }}
-                        formatter={(value: number) => [`${Number(value).toFixed(1)} kWh`, '']}
-                        labelFormatter={(label) => label}
-                      />
-                      <Legend />
-                      <Area type="monotone" dataKey="Actual" stroke="hsl(185, 70%, 40%)" fill="url(#chillerActualFill)" name="Actual (kWh)" strokeWidth={2} />
-                      <Area type="monotone" dataKey="Projected" stroke="hsl(220, 60%, 25%)" fill="url(#chillerProjectedFill)" name="Projected (kWh)" strokeWidth={2} />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                </div>
-              )}
-            </div>
-
-            {/* Chart 2: Actual cost vs Projected opex cost */}
-            <div className="bg-card rounded-lg border border-border p-6 relative overflow-hidden">
-              <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-[hsl(38,70%,45%)] to-[hsl(185,70%,40%)]" />
-              <h4 className="text-base font-medium text-foreground mb-4 flex items-center gap-2">
-                <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[hsl(38,70%,45%)/15] text-[hsl(38,70%,38%)]">
-                  <IndianRupee className="h-4 w-4" />
-                </span>
-                Actual cost vs Projected opex cost
-              </h4>
-              {(periodType === 'month' || periodType === 'year') && (
-                <p className="text-xs text-muted-foreground -mt-2 mb-2">
-                  {periodType === 'month' ? 'Month total (same as cards)' : 'Year total (same as cards)'}
-                </p>
-              )}
-              {costChartData.length === 0 ? (
-                <p className="text-sm text-muted-foreground py-6">No data for this period.</p>
-              ) : (
-                <div className="h-[280px] rounded-lg p-2 bg-gradient-to-r from-[hsl(38,40%,96%)] via-[hsl(185,35%,94%)] to-[hsl(220,40%,94%)]">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={costChartData} margin={{ top: 10, right: 10, left: -10, bottom: costChartData.length > 1 ? 40 : 0 }}>
-                      <defs>
-                        <linearGradient id="actualCostFill" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="hsl(185, 70%, 45%)" stopOpacity={0.6} />
-                          <stop offset="100%" stopColor="hsl(185, 70%, 40%)" stopOpacity={0.2} />
-                        </linearGradient>
-                        <linearGradient id="projectedCostFill" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="hsl(38, 70%, 45%)" stopOpacity={0.5} />
-                          <stop offset="100%" stopColor="hsl(38, 70%, 35%)" stopOpacity={0.15} />
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid strokeDasharray="3 3" stroke="hsl(220, 15%, 88%)" vertical={false} />
-                      <XAxis dataKey="name" interval={0} axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: 'hsl(220, 10%, 45%)' }} angle={costChartData.length > 1 ? -35 : 0} textAnchor={costChartData.length > 1 ? 'end' : 'middle'} />
-                      <YAxis domain={[0, costYMax]} axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: 'hsl(220, 10%, 45%)' }} />
-                      <Tooltip
-                        contentStyle={{ backgroundColor: 'hsl(0, 0%, 100%)', border: '1px solid hsl(220, 15%, 88%)', borderRadius: '8px', boxShadow: '0 4px 6px -1px hsl(220, 30%, 10%, 0.1)' }}
-                        formatter={(value: number) => [`₹ ${Number(value).toFixed(2)}`, '']}
-                        labelFormatter={(label) => label}
-                      />
-                      <Legend />
-                      <Area type="monotone" dataKey="Actual cost" stroke="hsl(185, 70%, 40%)" fill="url(#actualCostFill)" name="Actual cost (₹)" strokeWidth={2} />
-                      <Area type="monotone" dataKey="Projected opex" stroke="hsl(38, 70%, 35%)" fill="url(#projectedCostFill)" name="Projected opex (₹)" strokeWidth={2} />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                </div>
-              )}
-            </div>
-          </div>
+          {hasCost && (
+            <DashboardInsightRow
+              subtitle="Operating cost (₹) — actual vs projected"
+              accentHsl={COST_ACCENT_HSL}
+              donutCenterTitle="% of projected opex"
+              donutCenterValue={
+                costDonutPct(summary.actual_cost_rs ?? 0, summary.projected_cost_rs ?? 0) != null
+                  ? `${Math.round(costDonutPct(summary.actual_cost_rs ?? 0, summary.projected_cost_rs ?? 0)!)}%`
+                  : '—'
+              }
+              donutFillPct={costDonutPct(summary.actual_cost_rs ?? 0, summary.projected_cost_rs ?? 0)}
+              metrics={[
+                {
+                  label: 'Actual (₹)',
+                  value:
+                    summary.actual_cost_rs != null
+                      ? `₹${summary.actual_cost_rs.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
+                      : '—',
+                },
+                {
+                  label: 'Projected (₹)',
+                  value:
+                    summary.projected_cost_rs != null
+                      ? `₹${summary.projected_cost_rs.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
+                      : '—',
+                },
+                {
+                  label: 'Δ vs projected',
+                  value:
+                    summary.projected_cost_rs != null && summary.projected_cost_rs !== 0
+                      ? formatDiffPct(summary.actual_cost_rs ?? 0, summary.projected_cost_rs)
+                      : '—',
+                },
+              ]}
+              chartData={costChartData}
+              barLabel="Actual cost (₹)"
+              lineLabel="Projected opex (₹)"
+              formatTooltip={(value) => [
+                `₹${Number(value).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`,
+                '',
+              ]}
+              tableRows={costTableRows}
+              emptyMessage="No cost data for this period."
+              chartType="bar-line"
+              rowVariant="card"
+              comparisonHsl={COST_PROJECTED_LINE_HSL}
+              tableZebra
+              tableHeaderTone="neutral"
+              statusDisplay="pill"
+              leftKpiLayout="stat-box"
+            />
+          )}
 
           {!selectedEquipmentId && summary.by_equipment && summary.by_equipment.length > 0 && (
-            <div className="bg-card rounded-lg border border-border p-4">
-              <h4 className="text-sm font-medium text-foreground mb-2">By equipment</h4>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-border">
-                      <th className="text-left py-1.5 font-medium text-muted-foreground">Equipment</th>
-                      <th className="text-right py-1.5 font-medium text-muted-foreground">Actual (kWh)</th>
-                      <th className="text-right py-1.5 font-medium text-muted-foreground">Limit (kWh)</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {summary.by_equipment.map((row) => (
-                      <tr key={row.equipment_id} className="border-b border-border/50">
-                        <td className="py-1.5 font-mono">{row.equipment_id}</td>
-                        <td className="text-right py-1.5">{row.actual_power_kwh.toFixed(1)}</td>
-                        <td className="text-right py-1.5">{row.limit_power_kwh.toFixed(1)}</td>
+            <Collapsible defaultOpen className="rounded-lg border border-border bg-muted/10">
+              <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 px-4 py-3 text-sm font-medium text-foreground hover:bg-muted/30 [&[data-state=open]_svg]:rotate-180">
+                By equipment
+                <ChevronDown className="h-4 w-4 shrink-0 transition-transform" />
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <div className="overflow-x-auto border-t border-border px-4 pb-4">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-border" style={{ backgroundColor: `hsl(${POWER_ACCENT_HSL} / 0.12)` }}>
+                        <th className="text-left py-2 px-2 font-semibold">Equipment</th>
+                        <th className="text-right py-2 px-2 font-semibold">Actual (kWh)</th>
+                        <th className="text-right py-2 px-2 font-semibold">Limit (kWh)</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              {summary.by_equipment.some((row) => row.limit_power_kwh === 0) && (
-                <p className="text-xs text-muted-foreground mt-2">
-                  Limit 0? Set daily power limit in Settings → Chiller daily limits for each equipment.
-                </p>
-              )}
-            </div>
+                    </thead>
+                    <tbody>
+                      {summary.by_equipment.map((row, idx) => (
+                        <tr
+                          key={row.equipment_id}
+                          className={cn('border-b border-border/50', idx % 2 === 1 && 'bg-muted/25')}
+                        >
+                          <td className="py-2 px-2 font-mono">{row.equipment_id}</td>
+                          <td className="text-right py-2 px-2 tabular-nums">{row.actual_power_kwh.toFixed(1)}</td>
+                          <td className="text-right py-2 px-2 tabular-nums">{row.limit_power_kwh.toFixed(1)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {summary.by_equipment.some((row) => row.limit_power_kwh === 0) && (
+                    <p className="text-xs text-muted-foreground mt-2">
+                      Limit 0? Set daily power limit in Settings → Chiller daily limits for each equipment.
+                    </p>
+                  )}
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
           )}
         </>
       )}
 
       {!loading && !error && !summary && (
-        <div className="bg-muted/50 rounded-lg border border-border p-6 text-center text-muted-foreground">
+        <div className="bg-muted/50 rounded-lg border border-border p-6 text-center text-muted-foreground text-sm">
           No summary available.
         </div>
       )}
-    </div>
+    </DashboardSectionShell>
   );
 }

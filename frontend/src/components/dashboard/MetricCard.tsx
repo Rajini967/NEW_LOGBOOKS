@@ -31,7 +31,7 @@ export function MetricCard({
   };
 
   return (
-    <div className={cn('metric-card group', className)}>
+    <div className={cn('metric-card group min-h-[96px]', className)}>
       <div
         className="absolute top-0 left-0 h-1 w-full bg-gradient-to-r"
         style={{
