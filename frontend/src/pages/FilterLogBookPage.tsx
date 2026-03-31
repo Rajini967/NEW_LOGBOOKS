@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Header } from "@/components/layout/Header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,7 +11,6 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 import {
   Select,
@@ -21,8 +20,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useAuth } from "@/contexts/AuthContext";
-import { format } from "date-fns";
-import { toast } from "sonner";
+import { format, subDays } from "date-fns";
+import { toast } from "@/lib/toast";
 import {
   equipmentAPI,
   equipmentCategoryAPI,
@@ -33,7 +32,7 @@ import {
 import { cn } from "@/lib/utils";
 import { firstRequiredFieldError } from "@/lib/requiredFields";
 import { Link, useNavigate } from "react-router-dom";
-import { Clock, Save, Filter, X, Plus, Trash2, CheckCircle, XCircle, Edit, History, ArrowLeft } from "lucide-react";
+import { Clock, Filter, X, Trash2, CheckCircle, XCircle, Edit, History, ArrowLeft } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   AlertDialog,
@@ -48,271 +47,40 @@ import {
 import { EntryIntervalBadge } from "@/components/logbook/EntryIntervalBadge";
 import { MissedReadingPopup } from "@/components/logbook/MissedReadingPopup";
 import {
-  getTotalMissingSlots,
   type EquipmentMissInfo,
 } from "@/lib/missed-reading";
 import { MaintenanceTimingsSection } from "@/components/logbook/MaintenanceTimingsSection";
 import type { MaintenanceTimingsValue } from "@/types/maintenance-timings";
-
-type FilterCategory = string;
-
-interface FilterCategoryOption {
-  value: string;
-  label: string;
-}
-
-interface EquipmentOption {
-  id: string;
-  equipment_number: string;
-  name: string;
-}
-
-/** Distinct filter_id values for list-filter dialog (from assignments). */
-interface FilterIdFilterOption {
-  filter_id: string;
-  label: string;
-}
-
-interface FilterAssignmentRow {
-  id: string;
-  filter: string;
-  filter_id: string;
-  filter_category_name?: string;
-  filter_make?: string;
-  filter_model?: string;
-  is_active?: boolean;
-  filter_micron_size?: string;
-  filter_size_l?: number | null;
-  filter_size_w?: number | null;
-  filter_size_h?: number | null;
-  tag_info?: string | null;
-  area_category?: string | null;
-  equipment?: string;
-  equipment_number?: string;
-  equipment_name?: string;
-}
-
-interface FilterLog {
-  id: string;
-  equipmentId: string;
-  category: FilterCategory;
-  filterNo: string;
-  filterMicron?: string;
-  filterSize?: string;
-  tagInfo?: string;
-  /** From API / assignment; list view shows stored value or resolves from assignments. */
-  areaCategory?: string | null;
-  installedDate: string;
-  replacementApplicable?: boolean;
-  cleaningApplicable?: boolean;
-  integrityApplicable?: boolean;
-  integrityDoneDate?: string | null;
-  integrityDueDate: string;
-  cleaningDoneDate?: string | null;
-  cleaningDueDate: string;
-  replacementDueDate: string;
-  remarks: string;
-  comment?: string;
-  checkedBy: string;
-  approvedBy?: string;
-  rejectedBy?: string;
-  timestamp: Date;
-  status: "pending" | "approved" | "rejected" | "draft" | "pending_secondary_approval";
-  operator_id?: string;
-  approved_by_id?: string;
-  corrects_id?: string;
-  has_corrections?: boolean;
-  tolerance_status?: "none" | "within" | "outside";
-  activity_type?: "operation" | "maintenance" | "shutdown";
-  activity_from_date?: string | null;
-  activity_to_date?: string | null;
-  activity_from_time?: string | null;
-  activity_to_time?: string | null;
-}
-type LogEntryIntervalType = "hourly" | "shift" | "daily";
-
-type ScheduleFreqState = {
-  replacement: number | null;
-  cleaning: number | null;
-  integrity: number | null;
-};
-
-const emptyScheduleFreq = (): ScheduleFreqState => ({
-  replacement: null,
-  cleaning: null,
-  integrity: null,
-});
-
-/** Due dates: installed + frequency_days when set; else legacy rules (6mo+15d / 1y+30d). */
-function dueDatesForInstalled(installedDate: string, freq: ScheduleFreqState): {
-  integrityDueDate: string;
-  cleaningDueDate: string;
-  replacementDueDate: string;
-} {
-  if (!installedDate) {
-    return { integrityDueDate: "", cleaningDueDate: "", replacementDueDate: "" };
-  }
-  const base = new Date(`${installedDate}T12:00:00`);
-  if (Number.isNaN(base.getTime())) {
-    return { integrityDueDate: "", cleaningDueDate: "", replacementDueDate: "" };
-  }
-  const addDays = (d: Date, days: number) => {
-    const copy = new Date(d.getTime());
-    copy.setDate(copy.getDate() + days);
-    return copy;
-  };
-  const fmt = (d: Date) => format(d, "yyyy-MM-dd");
-  const fromFreq = (days: number | null) =>
-    days != null && !Number.isNaN(days) && days >= 0 ? fmt(addDays(base, days)) : null;
-
-  return {
-    integrityDueDate: fromFreq(freq.integrity) ?? "",
-    cleaningDueDate: fromFreq(freq.cleaning) ?? "",
-    replacementDueDate: fromFreq(freq.replacement) ?? "",
-  };
-}
-
-const CREATOR_ONLY_REJECTED_EDIT_MESSAGE = "Only the original creator can edit/correct a rejected entry.";
-
-/** Normalize assignment area_category for grouping (Register → Assign → Area category). */
-const AREA_CATEGORY_DEFAULT_KEY = "__area_default__";
-function assignmentAreaCategoryKey(area: string | null | undefined): string {
-  const t = String(area ?? "").trim();
-  return t ? t : AREA_CATEGORY_DEFAULT_KEY;
-}
-function assignmentAreaCategoryLabel(key: string): string {
-  return key === AREA_CATEGORY_DEFAULT_KEY ? "General (unspecified area)" : key;
-}
-
-function formatAssignmentSelectLabel(
-  a: FilterAssignmentRow,
-  siblings: FilterAssignmentRow[],
-): string {
-  const makeModel =
-    a.filter_make || a.filter_model
-      ? ` – ${[a.filter_make, a.filter_model].filter(Boolean).join(" ")}`
-      : "";
-  let label = `${a.filter_id}${makeModel}`;
-  const sameFilter = siblings.filter((x) => x.filter_id === a.filter_id);
-  if (sameFilter.length > 1) {
-    const hint = (a.tag_info || "").trim() || `id ${a.id.slice(0, 8)}…`;
-    const short = hint.length > 44 ? `${hint.slice(0, 41)}…` : hint;
-    label = `${label} · ${short}`;
-  }
-  return label;
-}
-
-/** "EN-001 – Name" from Filter Register assignment row. */
-function formatAssignmentEquipmentLabel(a: FilterAssignmentRow): string {
-  const num = (a.equipment_number ?? "").trim();
-  const name = (a.equipment_name ?? "").trim();
-  if (num && name) return `${num} – ${name}`;
-  return name || num || "";
-}
-
-function narrowAssignmentPoolByLogContext(
-  pool: FilterAssignmentRow[],
-  log: Pick<FilterLog, "areaCategory" | "tagInfo">,
-): FilterAssignmentRow[] {
-  let p = pool;
-  const areaNorm = (log.areaCategory || "").trim().toLowerCase();
-  if (p.length > 1 && areaNorm) {
-    const byA = p.filter((a) => (a.area_category || "").trim().toLowerCase() === areaNorm);
-    if (byA.length >= 1) p = byA;
-  }
-  if (p.length > 1 && (log.tagInfo || "").trim()) {
-    const logTag = (log.tagInfo || "").trim();
-    const narrowed = p.filter((m) => {
-      const t = (m.tag_info || "").trim();
-      if (!t) return false;
-      return t === logTag || logTag.startsWith(t) || t.startsWith(logTag);
-    });
-    if (narrowed.length >= 1) p = narrowed;
-  }
-  return p;
-}
-
-/**
- * Pick the assignment row that best matches a list log (for equipment label).
- * Register list includes all assignments; equipment dropdown options may omit equipment
- * without fully approved schedules, so this must not depend on equipmentOptions alone.
- */
-function pickAssignmentForEquipmentColumn(
-  log: Pick<FilterLog, "equipmentId" | "filterNo" | "areaCategory" | "tagInfo">,
-  rows: FilterAssignmentRow[],
-): FilterAssignmentRow | null {
-  const raw = (log.equipmentId || "").trim();
-  const filterNo = (log.filterNo || "").trim();
-  if (!rows.length) return null;
-
-  if (raw) {
-    let pool = rows.filter((a) => a.equipment && a.equipment.toLowerCase() === raw.toLowerCase());
-    if (pool.length && filterNo) {
-      const byF = pool.filter((a) => a.filter_id === filterNo);
-      if (byF.length) pool = byF;
-    }
-    pool = narrowAssignmentPoolByLogContext(pool, log);
-    if (pool.length) return pool.find((x) => x.is_active !== false) ?? pool[0];
-
-    let pool2 = rows.filter((a) => a.filter_id === raw);
-    if (pool2.length && filterNo && raw !== filterNo) {
-      pool2 = pool2.filter((a) => a.filter_id === filterNo);
-    }
-    pool2 = narrowAssignmentPoolByLogContext(pool2, log);
-    if (pool2.length) return pool2.find((x) => x.is_active !== false) ?? pool2[0];
-  }
-
-  if (filterNo) {
-    let pool3 = rows.filter((a) => a.filter_id === filterNo);
-    pool3 = narrowAssignmentPoolByLogContext(pool3, log);
-    if (pool3.length === 1) return pool3[0];
-    if (pool3.length > 1) return pool3.find((x) => x.is_active !== false) ?? pool3[0];
-  }
-
-  return null;
-}
-
-/** Resolve equipment UUID for a log row (stored id may be UUID or legacy filter_id). */
-function equipmentUuidForFilterLogRow(
-  log: Pick<FilterLog, "equipmentId" | "filterNo">,
-  equipmentOptions: EquipmentOption[],
-  filterIdToEquipmentInterval: Map<
-    string,
-    {
-      equipment_id?: string;
-      log_entry_interval?: string | null;
-      shift_duration_hours?: number | null;
-      tolerance_minutes?: number | null;
-    }
-  >,
-): string | null {
-  const raw = (log.equipmentId || "").trim();
-  if (!raw) return null;
-  const optHit = equipmentOptions.find((o) => o.id && o.id.toLowerCase() === raw.toLowerCase());
-  if (optHit) return optHit.id;
-  const meta =
-    filterIdToEquipmentInterval.get(raw) ??
-    filterIdToEquipmentInterval.get(raw.toLowerCase()) ??
-    filterIdToEquipmentInterval.get(log.filterNo);
-  return meta?.equipment_id ?? null;
-}
-
-/** Assignment is eligible when at least one schedule type is approved. */
-function assignmentIdsWithAnyApprovedSchedules(
-  schedules: { assignment: string; schedule_type: string }[],
-): Set<string> {
-  const byAssignment = new Map<string, Set<string>>();
-  for (const s of schedules) {
-    if (!s?.assignment) continue;
-    if (!byAssignment.has(s.assignment)) byAssignment.set(s.assignment, new Set());
-    byAssignment.get(s.assignment)!.add(s.schedule_type);
-  }
-  const out = new Set<string>();
-  for (const [aid] of byAssignment) {
-    out.add(aid);
-  }
-  return out;
-}
+import { useFilterLogsQuery, useFilterMissingSlotsQuery } from "@/hooks/useLogbookQueries";
+import type { MissingSlotsEquipment, MissingSlotsRangeResponse, MissingSlotsResponse } from "@/lib/api/types";
+import {
+  type FilterLikeLog,
+  mapFilterLogPayload,
+  mapFilterPreviousReadingPayload,
+} from "@/lib/logbookPayloadMappers";
+import {
+  AREA_CATEGORY_DEFAULT_KEY,
+  CREATOR_ONLY_REJECTED_EDIT_MESSAGE,
+  assignmentAreaCategoryKey,
+  assignmentAreaCategoryLabel,
+  assignmentIdsWithAnyApprovedSchedules,
+  dueDatesForInstalled,
+  emptyScheduleFreq,
+  equipmentUuidForFilterLogRow,
+  formatAssignmentEquipmentLabel,
+  pickAssignmentForEquipmentColumn,
+  type EquipmentOption,
+  type FilterAssignmentRow,
+  type FilterCategory,
+  type FilterCategoryOption,
+  type FilterIdFilterOption,
+  type FilterLog,
+  type LogEntryIntervalType,
+} from "@/pages/filter-logbook/helpers";
+import { useFilterScheduleState } from "@/pages/filter-logbook/hooks/useFilterScheduleState";
+import { useFilterScheduleLoader } from "@/pages/filter-logbook/hooks/useFilterScheduleLoader";
+import { useFilterAssignmentForm } from "@/pages/filter-logbook/hooks/useFilterAssignmentForm";
+import { FilterLogEntryDialog } from "@/pages/filter-logbook/components/FilterLogEntryDialog";
 
 const FilterLogBookPage: React.FC = () => {
   const { user, sessionSettings } = useAuth();
@@ -321,9 +89,16 @@ const FilterLogBookPage: React.FC = () => {
   const [showMissedReadingPopup, setShowMissedReadingPopup] = useState(false);
   const [missedReadingNextDue, setMissedReadingNextDue] = useState<Date | null>(null);
   const [missedEquipments, setMissedEquipments] = useState<EquipmentMissInfo[] | null>(null);
+  const [missingRangeFrom, setMissingRangeFrom] = useState(format(subDays(new Date(), 30), "yyyy-MM-dd"));
+  const [missingRangeTo, setMissingRangeTo] = useState(format(new Date(), "yyyy-MM-dd"));
+  const [missingRangeLoading, setMissingRangeLoading] = useState(false);
+  const [missingRangeRefreshKey, setMissingRangeRefreshKey] = useState(0);
+  const [missingRangeTotalSlots, setMissingRangeTotalSlots] = useState<number>(0);
+  const [missingRangeGroups, setMissingRangeGroups] = useState<
+    { date: string; totalMissingSlots: number; equipmentList: EquipmentMissInfo[] }[]
+  >([]);
   const [missingRefreshKey, setMissingRefreshKey] = useState(0);
   const [filteredLogs, setFilteredLogs] = useState<FilterLog[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [approveConfirmOpen, setApproveConfirmOpen] = useState(false);
@@ -362,21 +137,13 @@ const FilterLogBookPage: React.FC = () => {
     AREA_CATEGORY_DEFAULT_KEY,
   );
   const [selectedAssignmentId, setSelectedAssignmentId] = useState<string>("");
-  const [scheduleFrequencies, setScheduleFrequencies] = useState<ScheduleFreqState>(emptyScheduleFreq());
-  const scheduleFreqRef = useRef<ScheduleFreqState>(emptyScheduleFreq());
-  const scheduleApplicability = useMemo(
-    () => ({
-      replacement: scheduleFrequencies.replacement != null && scheduleFrequencies.replacement > 0,
-      cleaning: scheduleFrequencies.cleaning != null && scheduleFrequencies.cleaning > 0,
-      integrity: scheduleFrequencies.integrity != null && scheduleFrequencies.integrity > 0,
-    }),
-    [scheduleFrequencies],
-  );
+  const {
+    scheduleFrequencies,
+    setScheduleFrequencies,
+    scheduleFreqRef,
+    scheduleApplicability,
+  } = useFilterScheduleState();
   const [selectedEquipmentUuid, setSelectedEquipmentUuid] = useState<string>("");
-
-  useEffect(() => {
-    scheduleFreqRef.current = scheduleFrequencies;
-  }, [scheduleFrequencies]);
 
   const uniqueAreaCategoryKeys = useMemo(() => {
     const set = new Set<string>();
@@ -427,6 +194,20 @@ const FilterLogBookPage: React.FC = () => {
     time: "",
   });
 
+  const { loadApprovedSchedulesForAssignment, maybeToastScheduleOverdue } = useFilterScheduleLoader({
+    setScheduleFrequencies,
+    scheduleFreqRef,
+    setFormData,
+  });
+
+  const { applyAssignmentRowToForm } = useFilterAssignmentForm({
+    filterIdToEquipmentInterval,
+    setFormData,
+    setEntryLogInterval,
+    setEntryShiftDurationHours,
+    setEntryToleranceMinutes,
+  });
+
   const updateInstalledAndDueDates = (installedDate: string) => {
     if (!installedDate) {
       setFormData((prev) => ({
@@ -462,6 +243,10 @@ const FilterLogBookPage: React.FC = () => {
     fromTime: "",
     toTime: "",
   });
+  const selectedDate = filters.fromDate || format(new Date(), "yyyy-MM-dd");
+  const filterLogs = useFilterLogsQuery();
+  const filterMissing = useFilterMissingSlotsQuery(selectedDate, missingRefreshKey);
+  const isLoading = filterLogs.isLoading || filterLogs.isFetching;
 
   const loadCategories = async () => {
     try {
@@ -598,94 +383,6 @@ const FilterLogBookPage: React.FC = () => {
     }
   };
 
-  const formatFilterSize = (a: FilterAssignmentRow) => {
-    const parts = [a.filter_size_l, a.filter_size_w, a.filter_size_h].filter(
-      (v) => v != null
-    );
-    if (parts.length === 3) return `${parts[0]} × ${parts[1]} × ${parts[2]}`;
-    return "";
-  };
-
-  const applyAssignmentRowToForm = (active: FilterAssignmentRow) => {
-    const catRaw = (active.filter_category_name || "").trim();
-    setFormData((prev) => ({
-      ...prev,
-      equipmentId: active.filter_id || "",
-      category: (catRaw || prev.category || "hvac") as FilterCategory,
-      filterNo: active.filter_id || "",
-      filterMicron: active.filter_micron_size || prev.filterMicron,
-      filterSize: formatFilterSize(active) || prev.filterSize,
-      tagInfo: active.tag_info ?? prev.tagInfo,
-    }));
-    const timingMeta = filterIdToEquipmentInterval.get(active.filter_id || "");
-    if (timingMeta) {
-      setEntryLogInterval((timingMeta.log_entry_interval as LogEntryIntervalType) || "");
-      setEntryShiftDurationHours(timingMeta.shift_duration_hours ?? "");
-      setEntryToleranceMinutes(timingMeta.tolerance_minutes ?? "");
-    } else {
-      setEntryLogInterval("");
-      setEntryShiftDurationHours("");
-      setEntryToleranceMinutes("");
-    }
-  };
-
-  const loadApprovedSchedulesForAssignment = async (
-    equipmentUuid: string,
-    assignmentId: string,
-  ) => {
-    const nextFreq = emptyScheduleFreq();
-    try {
-      const rows = (await filterScheduleAPI.list({
-        equipment: equipmentUuid,
-        approval: "approved",
-      })) as any[];
-      const mine = (rows || []).filter(
-        (s) => s.assignment === assignmentId && s.is_approved === true,
-      );
-      for (const s of mine) {
-        const d =
-          s.frequency_days != null && !Number.isNaN(Number(s.frequency_days))
-            ? Number(s.frequency_days)
-            : null;
-        if (s.schedule_type === "replacement") nextFreq.replacement = d;
-        else if (s.schedule_type === "cleaning") nextFreq.cleaning = d;
-        else if (s.schedule_type === "integrity") nextFreq.integrity = d;
-      }
-    } catch {
-      /* ignore */
-    }
-    setScheduleFrequencies(nextFreq);
-    scheduleFreqRef.current = nextFreq;
-    setFormData((prev) => {
-      const installed = prev.installedDate || getTodayDateString();
-      const due = dueDatesForInstalled(installed, nextFreq);
-      return {
-        ...prev,
-        installedDate: installed,
-        integrityDoneDate: nextFreq.integrity ? prev.integrityDoneDate : "",
-        cleaningDoneDate: nextFreq.cleaning ? prev.cleaningDoneDate : "",
-        integrityDueDate: due.integrityDueDate,
-        cleaningDueDate: due.cleaningDueDate,
-        replacementDueDate: due.replacementDueDate,
-      };
-    });
-  };
-
-  const maybeToastScheduleOverdue = async (equipmentUuid: string) => {
-    try {
-      const overdue = await filterScheduleAPI.list({
-        equipment: equipmentUuid,
-        overdue: true,
-      });
-      if (Array.isArray(overdue) && overdue.length > 0) {
-        const types = Array.from(new Set(overdue.map((s: any) => s.schedule_type))).join(", ");
-        toast.warning(`Maintenance overdue for this equipment: ${types}`);
-      }
-    } catch {
-      // ignore
-    }
-  };
-
   const onAssignmentRowSelected = async (assignmentId: string, equipmentUuid: string) => {
     const row =
       assignmentsForSelectedArea.find((a) => a.id === assignmentId) ??
@@ -761,61 +458,12 @@ const FilterLogBookPage: React.FC = () => {
 
   const refreshLogs = async () => {
     try {
-      setIsLoading(true);
-      const apiLogs = await filterLogAPI.list().catch((err) => {
-        console.error("Error fetching filter logs:", err);
-        return [];
-      });
+      const result = await filterLogs.refetch();
+      const apiLogs = result.data ?? [];
 
-      const allLogs: FilterLog[] = [];
-      apiLogs.forEach((log: any) => {
-        const timestamp = new Date(log.timestamp);
-        allLogs.push({
-          id: log.id,
-          equipmentId: log.equipment_id ?? "",
-          category: log.category,
-          filterNo: log.filter_no,
-          filterMicron: log.filter_micron || "",
-          filterSize: log.filter_size || "",
-          tagInfo: log.tag_info || "",
-          areaCategory: log.area_category ?? null,
-          installedDate: log.installed_date,
-          replacementApplicable:
-            typeof log.replacement_applicable === "boolean" ? log.replacement_applicable : true,
-          cleaningApplicable:
-            typeof log.cleaning_applicable === "boolean" ? log.cleaning_applicable : true,
-          integrityApplicable:
-            typeof log.integrity_applicable === "boolean" ? log.integrity_applicable : true,
-          integrityDoneDate: log.integrity_done_date,
-          integrityDueDate: log.integrity_due_date,
-          cleaningDoneDate: log.cleaning_done_date,
-          cleaningDueDate: log.cleaning_due_date,
-          replacementDueDate: log.replacement_due_date,
-          remarks: log.remarks || "",
-          comment: log.comment || "",
-          checkedBy: log.operator_name,
-          approvedBy:
-            log.status === "approved"
-              ? (log.secondary_approved_by_name || log.approved_by_name || "")
-              : "",
-          rejectedBy:
-            log.status === "rejected" || log.status === "pending_secondary_approval"
-              ? (log.approved_by_name || "")
-              : "",
-          timestamp,
-          status: log.status as FilterLog["status"],
-          operator_id: log.operator_id,
-          approved_by_id: log.approved_by_id,
-          corrects_id: log.corrects_id,
-          has_corrections: log.has_corrections,
-          tolerance_status: log.tolerance_status as FilterLog["tolerance_status"],
-          activity_type: log.activity_type,
-          activity_from_date: log.activity_from_date,
-          activity_to_date: log.activity_to_date,
-          activity_from_time: log.activity_from_time,
-          activity_to_time: log.activity_to_time,
-        });
-      });
+      const allLogs: FilterLog[] = apiLogs.map((log: FilterLikeLog) =>
+        mapFilterLogPayload(log),
+      );
 
       allLogs.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
       setLogs(allLogs);
@@ -824,8 +472,6 @@ const FilterLogBookPage: React.FC = () => {
     } catch (error) {
       console.error("Error refreshing filter logs:", error);
       toast.error("Failed to refresh filter log entries");
-    } finally {
-      setIsLoading(false);
     }
   };
 
@@ -836,14 +482,34 @@ const FilterLogBookPage: React.FC = () => {
     void refreshLogs();
   }, []);
 
+  const getFilterMissingDisplayLabel = useCallback(
+    (equipmentIdRaw: string, equipmentNameRaw: string): string => {
+      const rawId = (equipmentIdRaw || "").trim();
+      const rawName = (equipmentNameRaw || "").trim();
+      const [candidateEquipmentId, candidateFilterNo] = rawId.split("||");
+      const filterNoFromId = (candidateFilterNo || "").trim();
+      const suffixMatch = rawName.match(/\|\s*([A-Za-z0-9-]+)\s*$/);
+      const filterNo = filterNoFromId || (suffixMatch?.[1] || "");
+      if (filterNo) return filterNo;
+      return rawName || rawId || "Filter";
+    },
+    [],
+  );
+
   useEffect(() => {
-    const selectedDate = filters.fromDate || format(new Date(), "yyyy-MM-dd");
-    filterLogAPI
-      .missingSlots({ date: selectedDate })
-      .then((payload) => {
-        const mapped: EquipmentMissInfo[] = (payload?.equipments || []).map((eq) => ({
-          equipmentId: eq.equipment_id,
-          equipmentName: eq.equipment_name,
+    if (!filterMissing.data && !filterMissing.error) return;
+    if (filterMissing.error) {
+      setMissedEquipments(null);
+      setShowMissedReadingPopup(false);
+      setMissedReadingNextDue(null);
+      return;
+    }
+    const payload = filterMissing.data;
+    const mapped: EquipmentMissInfo[] = (payload?.equipments || []).map((eq) => {
+          const displayLabel = getFilterMissingDisplayLabel(eq.equipment_id, eq.equipment_name);
+          return {
+          equipmentId: displayLabel,
+          equipmentName: displayLabel,
           lastTimestamp: eq.last_reading_timestamp ? new Date(eq.last_reading_timestamp) : null,
           nextDue: eq.next_due ? new Date(eq.next_due) : null,
           isMissed: (eq.missing_slot_count || 0) > 0,
@@ -857,33 +523,95 @@ const FilterLogBookPage: React.FC = () => {
             slotEnd: new Date(slot.slot_end),
             label: slot.label,
           })),
-        }));
-        const anyMisses = mapped.some((m) => (m.missingSlotCount || 0) > 0);
-        if (!anyMisses) {
-          setMissedEquipments(null);
-          setShowMissedReadingPopup(false);
-          setMissedReadingNextDue(null);
-          return;
-        }
-        mapped.sort((a, b) => {
-          const diff = (b.missingSlotCount || 0) - (a.missingSlotCount || 0);
-          if (diff !== 0) return diff;
-          return (a.equipmentName || a.equipmentId).localeCompare(b.equipmentName || b.equipmentId);
-        });
-        setMissedEquipments(mapped);
-        const firstNext =
-          mapped
-            .map((m) => m.nextDue)
-            .filter((d): d is Date => !!d)
-            .sort((a, b) => a.getTime() - b.getTime())[0] || null;
-        setMissedReadingNextDue(firstNext);
+        };
+      });
+    const anyMisses = mapped.some((m) => (m.missingSlotCount || 0) > 0);
+    if (!anyMisses) {
+      setMissedEquipments(null);
+      setShowMissedReadingPopup(false);
+      setMissedReadingNextDue(null);
+      return;
+    }
+    mapped.sort((a, b) => {
+      const diff = (b.missingSlotCount || 0) - (a.missingSlotCount || 0);
+      if (diff !== 0) return diff;
+      return (a.equipmentName || a.equipmentId).localeCompare(b.equipmentName || b.equipmentId);
+    });
+    setMissedEquipments(mapped);
+    const firstNext =
+      mapped
+        .map((m) => m.nextDue)
+        .filter((d): d is Date => !!d)
+        .sort((a, b) => a.getTime() - b.getTime())[0] || null;
+    setMissedReadingNextDue(firstNext);
+  }, [filterMissing.data, filterMissing.error, getFilterMissingDisplayLabel]);
+
+  useEffect(() => {
+    if (!showMissedReadingPopup) return;
+    if (!missingRangeFrom || !missingRangeTo) return;
+    if (missingRangeFrom > missingRangeTo) {
+      setMissingRangeGroups([]);
+      setMissingRangeTotalSlots(0);
+      return;
+    }
+
+    const mapEquipment = (eq: MissingSlotsEquipment): EquipmentMissInfo => {
+      const displayLabel = getFilterMissingDisplayLabel(eq.equipment_id, eq.equipment_name);
+      return {
+      equipmentId: displayLabel,
+      equipmentName: displayLabel,
+      lastTimestamp: eq.last_reading_timestamp ? new Date(eq.last_reading_timestamp) : null,
+      nextDue: eq.next_due ? new Date(eq.next_due) : null,
+      isMissed: (eq.missing_slot_count || 0) > 0,
+      interval: eq.interval,
+      shiftHours: eq.shift_duration_hours || 8,
+      expectedSlotCount: eq.expected_slot_count,
+      presentSlotCount: eq.present_slot_count,
+      missingSlotCount: eq.missing_slot_count,
+      missingSlotRanges: (eq.missing_slots || []).map((slot) => ({
+        slotStart: new Date(slot.slot_start),
+        slotEnd: new Date(slot.slot_end),
+        label: slot.label,
+      })),
+    }};
+
+    setMissingRangeLoading(true);
+    filterLogAPI
+      .missingSlots({ date_from: missingRangeFrom, date_to: missingRangeTo })
+      .then((payload) => {
+        const totalMissingSlots =
+          payload && typeof payload === "object" && "days" in payload
+            ? (payload as MissingSlotsRangeResponse).total_missing_slots || 0
+            : (payload as MissingSlotsResponse)?.total_missing_slots || 0;
+        const groups =
+          payload && typeof payload === "object" && "days" in payload
+            ? (payload as MissingSlotsRangeResponse).days
+                .map((day) => ({
+                  date: day.date,
+                  totalMissingSlots: day.total_missing_slots || 0,
+                  equipmentList: (day.equipments || [])
+                    .filter((eq) => (eq.missing_slot_count || 0) > 0)
+                    .map(mapEquipment),
+                }))
+                .filter((group) => group.equipmentList.length > 0)
+            : (() => {
+                const single = payload as MissingSlotsResponse;
+                const equipmentList = (single?.equipments || [])
+                  .filter((eq) => (eq.missing_slot_count || 0) > 0)
+                  .map(mapEquipment);
+                return equipmentList.length
+                  ? [{ date: single.date, totalMissingSlots: single.total_missing_slots || 0, equipmentList }]
+                  : [];
+              })();
+        setMissingRangeTotalSlots(totalMissingSlots);
+        setMissingRangeGroups(groups);
       })
       .catch(() => {
-        setMissedEquipments(null);
-        setShowMissedReadingPopup(false);
-        setMissedReadingNextDue(null);
-      });
-  }, [filters.fromDate, missingRefreshKey]);
+        setMissingRangeTotalSlots(0);
+        setMissingRangeGroups([]);
+      })
+      .finally(() => setMissingRangeLoading(false));
+  }, [showMissedReadingPopup, missingRangeFrom, missingRangeTo, missingRangeRefreshKey, getFilterMissingDisplayLabel]);
 
   useEffect(() => {
     if (!isDialogOpen || !!editingLogId) return;
@@ -904,8 +632,7 @@ const FilterLogBookPage: React.FC = () => {
     entryToleranceMinutes,
   ]);
 
-  const missedReadingsCount = getTotalMissingSlots(missedEquipments);
-  const hasMissedReadings = missedReadingsCount > 0;
+  const hasMissedReadings = (missedEquipments?.length ?? 0) > 0;
 
   // After equipment selection, fetch previous readings with entered-by for that equipment
   useEffect(() => {
@@ -922,47 +649,9 @@ const FilterLogBookPage: React.FC = () => {
       .list({ equipment_id: eqIdForApi })
       .then((raw: any[]) => {
         if (cancelled) return;
-        const list: FilterLog[] = (Array.isArray(raw) ? raw : []).slice(0, 10).map((log: any) => {
-          const timestamp = new Date(log.timestamp);
-          return {
-            id: log.id,
-            equipmentId: log.equipment_id ?? "",
-            category: log.category,
-            filterNo: log.filter_no,
-            filterMicron: log.filter_micron || "",
-            filterSize: log.filter_size || "",
-            tagInfo: log.tag_info || "",
-            replacementApplicable:
-              typeof log.replacement_applicable === "boolean" ? log.replacement_applicable : true,
-            cleaningApplicable:
-              typeof log.cleaning_applicable === "boolean" ? log.cleaning_applicable : true,
-            integrityApplicable:
-              typeof log.integrity_applicable === "boolean" ? log.integrity_applicable : true,
-            installedDate: log.installed_date,
-            integrityDoneDate: log.integrity_done_date,
-            integrityDueDate: log.integrity_due_date,
-            cleaningDoneDate: log.cleaning_done_date,
-            cleaningDueDate: log.cleaning_due_date,
-            replacementDueDate: log.replacement_due_date,
-            remarks: log.remarks || "",
-            comment: log.comment || "",
-            checkedBy: log.operator_name,
-            approvedBy:
-              log.status === "approved"
-                ? (log.secondary_approved_by_name || log.approved_by_name || "")
-                : "",
-            rejectedBy:
-              log.status === "rejected" || log.status === "pending_secondary_approval"
-                ? (log.approved_by_name || "")
-                : "",
-            timestamp,
-            status: log.status,
-            operator_id: log.operator_id,
-            approved_by_id: log.approved_by_id,
-            corrects_id: log.corrects_id,
-            has_corrections: log.has_corrections,
-          };
-        });
+        const list: FilterLog[] = (Array.isArray(raw) ? raw : [])
+          .slice(0, 10)
+          .map((log: FilterLikeLog) => mapFilterPreviousReadingPayload(log));
         setPreviousReadingsForEquipment(list);
       })
       .catch(() => {
@@ -1695,6 +1384,14 @@ const FilterLogBookPage: React.FC = () => {
           logTypeLabel="Filter"
           nextDue={missedReadingNextDue}
           equipmentList={missedEquipments ?? undefined}
+          isRangeLoading={missingRangeLoading}
+          dateFrom={missingRangeFrom}
+          dateTo={missingRangeTo}
+          onDateFromChange={setMissingRangeFrom}
+          onDateToChange={setMissingRangeTo}
+          onApplyRange={() => setMissingRangeRefreshKey((prev) => prev + 1)}
+          dayGroups={missingRangeGroups}
+          totalMissingSlotsInRange={missingRangeTotalSlots}
         />
       )}
       <div className="px-4 pt-2">
@@ -1746,11 +1443,6 @@ const FilterLogBookPage: React.FC = () => {
             >
               <Clock className="w-4 h-4 mr-2" />
               Missing Readings
-              {missedReadingsCount > 0 && (
-                <span className="ml-2 px-1.5 py-0.5 text-xs font-semibold bg-primary text-primary-foreground rounded-full">
-                  {missedReadingsCount}
-                </span>
-              )}
             </Button>
             <Button
               size="sm"
@@ -1770,487 +1462,47 @@ const FilterLogBookPage: React.FC = () => {
               )}
             </Button>
 
-            <Dialog
+            <FilterLogEntryDialog
               open={isDialogOpen}
               onOpenChange={(open) => {
                 setIsDialogOpen(open);
                 if (!open) setEditingLogId(null);
               }}
-            >
-              <DialogTrigger asChild>
-                <Button variant="accent" size="sm" onClick={handleOpenNewEntry}>
-                  <Plus className="w-4 h-4 mr-1" />
-                  New Entry
-                </Button>
-              </DialogTrigger>
-              <DialogContent className="sm:max-w-[700px] max-h-[90vh] flex flex-col overflow-hidden">
-                <DialogHeader>
-                  <DialogTitle>
-                    {editingLogId ? "Edit Filter Log Entry" : "New Filter Log Entry"}
-                  </DialogTitle>
-                </DialogHeader>
-                <form onSubmit={handleSubmit} className="flex flex-col flex-1 min-h-0 overflow-y-auto space-y-4">
-                  <div className="bg-muted/50 rounded-lg p-3 flex items-center gap-3">
-                    <Clock className="w-5 h-5 text-muted-foreground" />
-                    <div>
-                      <p className="text-sm font-medium">
-                        {format(new Date(), "PPP")} · {format(new Date(), "p")}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        Done By: {user?.name || user?.email || "Unknown"}
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Editable Date/Time when correcting rejected or pending-secondary-approval */}
-                  {editingLogId && (() => {
-                    const editingLog = logs.find((l) => l.id === editingLogId);
-                    const canEditDateTime =
-                      editingLog &&
-                      (editingLog.status === "rejected" ||
-                        editingLog.status === "pending_secondary_approval");
-                    return (
-                      <div className="grid grid-cols-2 gap-4">
-                        <div className="space-y-2">
-                          <Label>Date</Label>
-                          <Input
-                            type="date"
-                            value={formData.date}
-                            onChange={(e) =>
-                              setFormData({ ...formData, date: e.target.value })
-                            }
-                            disabled={!canEditDateTime}
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label>Time</Label>
-                          <Input
-                            type="time"
-                            step={1}
-                            value={formData.time}
-                            onChange={(e) =>
-                              setFormData({ ...formData, time: e.target.value })
-                            }
-                            disabled={!canEditDateTime}
-                          />
-                        </div>
-                      </div>
-                    );
-                  })()}
-
-                  <div className="space-y-2">
-                    <Label>Equipment Name *</Label>
-                    <Select
-                      value={selectedEquipmentUuid}
-                      onValueChange={(value) => onEquipmentSelectedForTagInfo(value)}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select equipment (loads assigned filter & approved schedules)" />
-                      </SelectTrigger>
-                      <SelectContent
-                        className="!z-[9999] max-h-60 max-w-[min(100vw-2rem,24rem)] overflow-y-auto"
-                        position="popper"
-                      >
-                        {equipmentOptions.length === 0 ? (
-                          <SelectItem value="__none__" disabled className="text-muted-foreground">
-                            No equipment available
-                          </SelectItem>
-                        ) : (
-                          equipmentOptions.map((eq) => (
-                            <SelectItem key={eq.id} value={eq.id}>
-                              {eq.equipment_number} – {eq.name}
-                            </SelectItem>
-                          ))
-                        )}
-                      </SelectContent>
-                    </Select>
-                    <p className="text-xs text-muted-foreground max-w-full break-words">
-                      {equipmentOptions.length === 0 ? (
-                        <>
-                          No eligible equipment yet. Assign a filter in{" "}
-                          <span className="font-medium">Filter Register</span>, then approve{" "}
-                          <span className="font-medium">replacement</span>,{" "}
-                          <span className="font-medium">cleaning</span>, and{" "}
-                          <span className="font-medium">integrity</span> schedules under{" "}
-                          <span className="font-medium">Filter → Schedule approvals</span>.
-                        </>
-                      ) : (
-                        <>
-                          Uses the active assignment and only{" "}
-                          <span className="font-medium">approved</span> filter schedules for frequencies and due
-                          dates.
-                        </>
-                      )}
-                    </p>
-                  </div>
-
-                  {assignmentsOnEquipment.length > 0 ? (
-                    <div className="space-y-2">
-                      <Label>Area category{uniqueAreaCategoryKeys.length > 1 ? " *" : ""}</Label>
-                      {uniqueAreaCategoryKeys.length > 1 ? (
-                        <Select
-                          value={selectedAreaCategoryKey}
-                          onValueChange={(value) => {
-                            if (selectedEquipmentUuid) {
-                              void onAreaCategorySelected(value, selectedEquipmentUuid);
-                            }
-                          }}
-                        >
-                          <SelectTrigger>
-                            <SelectValue placeholder="Select area for this equipment" />
-                          </SelectTrigger>
-                          <SelectContent className="!z-[9999] max-h-60 overflow-y-auto" position="popper">
-                            {uniqueAreaCategoryKeys.map((k) => (
-                              <SelectItem key={k} value={k}>
-                                {assignmentAreaCategoryLabel(k)}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      ) : (
-                        <Input
-                          type="text"
-                          value={assignmentAreaCategoryLabel(selectedAreaCategoryKey)}
-                          readOnly
-                          disabled
-                          className="bg-muted"
-                          aria-label="Area category"
-                        />
-                      )}
-                      <p className="text-xs text-muted-foreground max-w-full break-words">
-                        {uniqueAreaCategoryKeys.length > 1
-                          ? "Choose the area when this equipment has filters assigned under more than one area category in Filter Register."
-                          : "From Filter Register when assigning the filter to this equipment. Shown for all equipment so it matches Schedule approvals."}
-                      </p>
-                    </div>
-                  ) : null}
-
-                  {assignmentsForSelectedArea.length > 1 ? (
-                    <div className="space-y-2">
-                      <Label>Assigned filter *</Label>
-                      <Select
-                        value={selectedAssignmentId || "__none__"}
-                        onValueChange={(value) => {
-                          if (value !== "__none__" && selectedEquipmentUuid) {
-                            void onAssignmentRowSelected(value, selectedEquipmentUuid);
-                          }
-                        }}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select filter on this equipment" />
-                        </SelectTrigger>
-                        <SelectContent className="!z-[9999] max-h-60 overflow-y-auto" position="popper">
-                          {assignmentsForSelectedArea.map((a) => (
-                            <SelectItem key={a.id} value={a.id}>
-                              {formatAssignmentSelectLabel(a, assignmentsForSelectedArea)}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <p className="text-xs text-muted-foreground max-w-full break-words">
-                        If two lines look the same, the extra text is tag info or assignment id to tell them
-                        apart.
-                      </p>
-                    </div>
-                  ) : null}
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label>Category</Label>
-                      <Input
-                        type="text"
-                        value={formData.category}
-                        readOnly
-                        disabled
-                        className="bg-muted"
-                        placeholder="From assignment"
-                      />
-                      <p className="text-xs text-muted-foreground">From filter assignment category.</p>
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Filter No *</Label>
-                      <Input
-                        type="text"
-                        value={formData.filterNo}
-                        onChange={(e) =>
-                          setFormData({
-                            ...formData,
-                            filterNo: e.target.value,
-                          })
-                        }
-                        placeholder="e.g., FMT-0001"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-4">
-                    <div className="space-y-2">
-                      <Label>Log entry interval</Label>
-                      <Select
-                        value={entryLogInterval || "__none__"}
-                        onValueChange={(v) => {
-                          const next = v === "__none__" ? "" : (v as LogEntryIntervalType);
-                          setEntryLogInterval(next);
-                          if (next !== "shift") setEntryShiftDurationHours("");
-                        }}
-                        disabled={!isReadingsApplicable}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Use global default" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="__none__">Use global default</SelectItem>
-                          <SelectItem value="hourly">Hourly</SelectItem>
-                          <SelectItem value="shift">Shift</SelectItem>
-                          <SelectItem value="daily">Daily</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Shift duration (hours)</Label>
-                      <Input
-                        type="number"
-                        min={1}
-                        max={24}
-                        disabled={!isReadingsApplicable || entryLogInterval !== "shift"}
-                        value={entryShiftDurationHours === "" ? "" : entryShiftDurationHours}
-                        onChange={(e) =>
-                          setEntryShiftDurationHours(
-                            e.target.value === ""
-                              ? ""
-                              : Math.max(1, Math.min(24, Number(e.target.value) || 8)),
-                          )
-                        }
-                        placeholder="e.g. 8"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Log entry tolerance (minutes)</Label>
-                      <Input
-                        type="number"
-                        min={0}
-                        value={entryToleranceMinutes === "" ? "" : entryToleranceMinutes}
-                        onChange={(e) =>
-                          setEntryToleranceMinutes(
-                            e.target.value === "" ? "" : Math.max(0, Number(e.target.value) || 0),
-                          )
-                        }
-                        disabled={!isReadingsApplicable}
-                        placeholder="e.g. 15"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Previous readings for selected equipment with entered-by */}
-                  {formData.equipmentId && (
-                    <div className="rounded-lg border bg-muted/30 p-3 space-y-2">
-                      <p className="text-sm font-medium">Previous readings (Entered by)</p>
-                      {previousReadingsLoading ? (
-                        <p className="text-xs text-muted-foreground">Loading…</p>
-                      ) : previousReadingsForEquipment.length === 0 ? (
-                        <p className="text-xs text-muted-foreground">No previous entries for this equipment.</p>
-                      ) : (
-                        <div className="max-h-40 overflow-y-auto space-y-2">
-                          {previousReadingsForEquipment.map((log) => (
-                            <div key={log.id} className="text-xs border-b border-border/50 pb-2 last:border-0 last:pb-0">
-                              <span className="font-medium">{format(log.timestamp, "yyyy-MM-dd HH:mm")}</span>
-                              <span className="text-muted-foreground"> — Entered by: {log.checkedBy || "—"}</span>
-                              <div className="mt-1 text-muted-foreground">
-                                {log.category} · {log.filterNo}
-                                {log.filterMicron ? ` · ${log.filterMicron}` : ""}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  <MaintenanceTimingsSection value={maintenanceTimings} onChange={setMaintenanceTimings} />
-
-                  <div className="space-y-2">
-                    <Label>Tag Information (auto-fetched)</Label>
-                    <Input
-                      type="text"
-                      value={formData.tagInfo}
-                      onChange={(e) =>
-                        setFormData({
-                          ...formData,
-                          tagInfo: e.target.value,
-                        })
-                      }
-                      placeholder="Auto-filled from assignment (editable)"
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label>Filter Micron</Label>
-                      <Input
-                        type="text"
-                        value={formData.filterMicron}
-                        onChange={(e) =>
-                          setFormData({
-                            ...formData,
-                            filterMicron: e.target.value,
-                          })
-                        }
-                        placeholder="e.g., 0.2 µm"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Filter Size</Label>
-                      <Input
-                        type="text"
-                        value={formData.filterSize}
-                        onChange={(e) =>
-                          setFormData({
-                            ...formData,
-                            filterSize: e.target.value,
-                          })
-                        }
-                        placeholder="e.g., 10 inch"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-4">
-                    <div className="space-y-2">
-                      <Label>Filter Installed Date *</Label>
-                      <Input
-                        type="date"
-                        value={formData.installedDate}
-                        onChange={(e) => updateInstalledAndDueDates(e.target.value)}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label>
-                        Integrity Done Date {!scheduleApplicability.integrity ? "(N/A)" : ""}
-                      </Label>
-                      <Input
-                        type="date"
-                        value={formData.integrityDoneDate}
-                        disabled={!scheduleApplicability.integrity}
-                        onChange={(e) =>
-                          setFormData({
-                            ...formData,
-                            integrityDoneDate: e.target.value,
-                          })
-                        }
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label>
-                        Cleaning Done Date {!scheduleApplicability.cleaning ? "(N/A)" : ""}
-                      </Label>
-                      <Input
-                        type="date"
-                        value={formData.cleaningDoneDate}
-                        disabled={!scheduleApplicability.cleaning}
-                        onChange={(e) =>
-                          setFormData({
-                            ...formData,
-                            cleaningDoneDate: e.target.value,
-                          })
-                        }
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-4">
-                    <div className="space-y-2">
-                      <Label>
-                        Replacement Due Date {!scheduleApplicability.replacement ? "(N/A)" : ""}
-                      </Label>
-                      <Input
-                        type="date"
-                        value={formData.replacementDueDate}
-                        disabled={!scheduleApplicability.replacement}
-                        onChange={(e) =>
-                          setFormData({
-                            ...formData,
-                            replacementDueDate: e.target.value,
-                          })
-                        }
-                      />
-                      <p className="mt-1 text-[11px] text-muted-foreground">
-                        Calculated from installed date and approved assignment schedules; you may override.
-                      </p>
-                    </div>
-                    <div className="space-y-2">
-                      <Label>
-                        Integrity Due Date {!scheduleApplicability.integrity ? "(N/A)" : ""}
-                      </Label>
-                      <Input
-                        type="date"
-                        value={formData.integrityDueDate}
-                        disabled={!scheduleApplicability.integrity}
-                        onChange={(e) =>
-                          setFormData({
-                            ...formData,
-                            integrityDueDate: e.target.value,
-                          })
-                        }
-                      />
-                      <p className="mt-1 text-[11px] text-muted-foreground">
-                        Calculated from installed date and approved assignment schedules; you may override.
-                      </p>
-                    </div>
-                    <div className="space-y-2">
-                      <Label>
-                        Cleaning Due Date {!scheduleApplicability.cleaning ? "(N/A)" : ""}
-                      </Label>
-                      <Input
-                        type="date"
-                        value={formData.cleaningDueDate}
-                        disabled={!scheduleApplicability.cleaning}
-                        onChange={(e) =>
-                          setFormData({
-                            ...formData,
-                            cleaningDueDate: e.target.value,
-                          })
-                        }
-                      />
-                      <p className="mt-1 text-[11px] text-muted-foreground">
-                        Calculated from installed date and approved assignment schedules; you may override.
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label>Remarks</Label>
-                    <Textarea
-                      value={formData.remarks}
-                      onChange={(e) =>
-                        setFormData({
-                          ...formData,
-                          remarks: e.target.value,
-                        })
-                      }
-                      rows={3}
-                    />
-                  </div>
-
-                  <div className="flex justify-end gap-2 pt-2 border-t mt-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => {
-                        setIsDialogOpen(false);
-                        resetForm();
-                      }}
-                    >
-                      <X className="w-4 h-4 mr-2" />
-                      Cancel
-                    </Button>
-                    <Button type="submit" variant="accent">
-                      <Save className="w-4 h-4 mr-2" />
-                      Save
-                    </Button>
-                  </div>
-                </form>
-              </DialogContent>
-            </Dialog>
+              onNewEntryClick={handleOpenNewEntry}
+              editingLogId={editingLogId}
+              logs={logs}
+              user={user}
+              formData={formData}
+              setFormData={setFormData}
+              onSubmit={handleSubmit}
+              selectedEquipmentUuid={selectedEquipmentUuid}
+              onEquipmentSelected={onEquipmentSelectedForTagInfo}
+              equipmentOptions={equipmentOptions}
+              assignmentsOnEquipment={assignmentsOnEquipment}
+              uniqueAreaCategoryKeys={uniqueAreaCategoryKeys}
+              selectedAreaCategoryKey={selectedAreaCategoryKey}
+              onAreaCategorySelected={onAreaCategorySelected}
+              assignmentsForSelectedArea={assignmentsForSelectedArea}
+              selectedAssignmentId={selectedAssignmentId}
+              onAssignmentRowSelected={onAssignmentRowSelected}
+              entryLogInterval={entryLogInterval}
+              setEntryLogInterval={setEntryLogInterval}
+              entryShiftDurationHours={entryShiftDurationHours}
+              setEntryShiftDurationHours={setEntryShiftDurationHours}
+              entryToleranceMinutes={entryToleranceMinutes}
+              setEntryToleranceMinutes={setEntryToleranceMinutes}
+              isReadingsApplicable={isReadingsApplicable}
+              scheduleApplicability={scheduleApplicability}
+              previousReadingsLoading={previousReadingsLoading}
+              previousReadingsForEquipment={previousReadingsForEquipment}
+              maintenanceTimings={maintenanceTimings}
+              setMaintenanceTimings={setMaintenanceTimings}
+              updateInstalledAndDueDates={updateInstalledAndDueDates}
+              onCancel={() => {
+                setIsDialogOpen(false);
+                resetForm();
+              }}
+            />
           </div>
         </div>
 

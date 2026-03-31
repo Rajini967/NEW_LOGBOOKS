@@ -24,7 +24,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { chemicalStockAPI, equipmentCategoryAPI } from "@/lib/api";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { useAuth } from "@/contexts/AuthContext";
 
 interface ChemicalStockRow {

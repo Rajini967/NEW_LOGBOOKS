@@ -14,12 +14,19 @@ from equipment.models import Equipment
 from core.log_slot_utils import (
     get_interval_for_equipment,
     get_slot_range,
-    compute_slot_status,
     compute_missing_slots_for_day,
     get_slot_day_bounds,
     get_slot_timezone,
 )
-from reports.utils import log_limit_change, log_audit_event, create_report_entry, delete_report_entry
+from reports.utils import log_limit_change, log_audit_event, delete_report_entry, save_missing_slots_snapshot
+from reports.services import create_utility_report_for_log
+from reports.approval_workflow import (
+    ensure_not_operator,
+    ensure_secondary_approver_diff,
+    ensure_status_allowed,
+    normalize_approval_action,
+    require_rejection_comment,
+)
 
 from .models import FilterLog
 from .serializers import FilterLogSerializer
@@ -88,7 +95,6 @@ class FilterLogViewSet(viewsets.ModelViewSet):
             qs = qs.filter(status='approved')
         if date_from:
             try:
-                from datetime import datetime
                 dt = datetime.fromisoformat(date_from.replace('Z', '+00:00'))
                 if timezone.is_naive(dt):
                     dt = timezone.make_aware(dt, timezone.get_current_timezone())
@@ -97,7 +103,6 @@ class FilterLogViewSet(viewsets.ModelViewSet):
                 pass
         if date_to:
             try:
-                from datetime import datetime
                 dt = datetime.fromisoformat(date_to.replace('Z', '+00:00'))
                 if timezone.is_naive(dt):
                     dt = timezone.make_aware(dt, timezone.get_current_timezone())
@@ -137,6 +142,12 @@ class FilterLogViewSet(viewsets.ModelViewSet):
             object_id=str(log.id),
             field_name="created",
             new_value=timezone.localtime(log.timestamp).isoformat() if log.timestamp else None,
+            extra={
+                "equipment_id": str(log.equipment_id or ""),
+                "filter_no": str(log.filter_no or ""),
+                "log_timestamp": timezone.localtime(log.timestamp).isoformat() if log.timestamp else "",
+                "log_date": str(log.timestamp.date()) if log.timestamp else "",
+            },
         )
 
     def perform_destroy(self, instance):
@@ -148,6 +159,12 @@ class FilterLogViewSet(viewsets.ModelViewSet):
             object_id=str(instance.id),
             field_name="deleted",
             new_value=timezone.localtime(timezone.now()).isoformat(),
+            extra={
+                "equipment_id": str(instance.equipment_id or ""),
+                "filter_no": str(instance.filter_no or ""),
+                "log_timestamp": timezone.localtime(instance.timestamp).isoformat() if instance.timestamp else "",
+                "log_date": str(instance.timestamp.date()) if instance.timestamp else "",
+            },
         )
         delete_report_entry(source_id=str(instance.id), source_table='filter_logs')
         super().perform_destroy(instance)
@@ -252,59 +269,117 @@ class FilterLogViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'], url_path='missing-slots')
     def missing_slots(self, request):
         date_str = (request.query_params.get("date") or "").strip()
+        date_from_str = (request.query_params.get("date_from") or "").strip()
+        date_to_str = (request.query_params.get("date_to") or "").strip()
         equipment_id_filter = (request.query_params.get("equipment_id") or "").strip()
-        if date_str:
-            try:
-                day = datetime.strptime(date_str[:10], "%Y-%m-%d").date()
-            except ValueError:
-                return Response({"error": "date must be YYYY-MM-DD"}, status=status.HTTP_400_BAD_REQUEST)
-        else:
-            day = timezone.localdate()
+        range_mode = bool(date_from_str or date_to_str)
 
-        day_start, day_end = get_slot_day_bounds(day)
-        slot_tz = get_slot_timezone()
-        base_qs = FilterLog.objects.filter(timestamp__gte=day_start, timestamp__lt=day_end)
-        if equipment_id_filter:
-            base_qs = base_qs.filter(equipment_id=equipment_id_filter)
-
-        suppressed_equipment_ids = set(
-            FilterLog.objects.filter(
-                timestamp__gte=day_start,
-                timestamp__lt=day_end,
-                activity_type__in=["maintenance", "shutdown"],
-                status__in=["draft", "pending", "pending_secondary_approval"],
+        if range_mode and date_str:
+            return Response(
+                {"error": "Use either date or date_from/date_to, not both."},
+                status=status.HTTP_400_BAD_REQUEST,
             )
-            .exclude(equipment_id__isnull=True)
-            .exclude(equipment_id="")
-            .values_list("equipment_id", flat=True)
-            .distinct()
-        )
+
+        def parse_day(raw: str, field_name: str):
+            try:
+                return datetime.strptime(raw[:10], "%Y-%m-%d").date()
+            except ValueError:
+                raise ValidationError({"error": f"{field_name} must be YYYY-MM-DD"})
+
+        if range_mode:
+            if not (date_from_str and date_to_str):
+                return Response(
+                    {"error": "Both date_from and date_to are required for range mode."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            try:
+                day_from = parse_day(date_from_str, "date_from")
+                day_to = parse_day(date_to_str, "date_to")
+            except ValidationError as exc:
+                return Response(exc.detail, status=status.HTTP_400_BAD_REQUEST)
+            if day_from > day_to:
+                return Response(
+                    {"error": "date_from cannot be after date_to."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if (day_to - day_from).days > 366:
+                return Response(
+                    {"error": "Date range too large. Maximum span is 366 days."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            days = [day_from + timedelta(days=i) for i in range((day_to - day_from).days + 1)]
+        else:
+            if date_str:
+                try:
+                    day = parse_day(date_str, "date")
+                except ValidationError as exc:
+                    return Response(exc.detail, status=status.HTTP_400_BAD_REQUEST)
+            else:
+                day = timezone.localdate()
+            days = [day]
+
+        slot_tz = get_slot_timezone()
+        first_day_start, _ = get_slot_day_bounds(days[0])
+        _, last_day_end = get_slot_day_bounds(days[-1])
+        range_qs = FilterLog.objects.filter(timestamp__gte=first_day_start, timestamp__lt=last_day_end)
         if equipment_id_filter:
-            suppressed_equipment_ids = {
-                equipment_id for equipment_id in suppressed_equipment_ids if equipment_id == equipment_id_filter
-            }
+            range_qs = range_qs.filter(equipment_id=equipment_id_filter)
 
-        timestamps_by_equipment = defaultdict(list)
-        timestamps_qs = base_qs.exclude(activity_type__in=["maintenance", "shutdown"])
-        for row in timestamps_qs.values("equipment_id", "timestamp"):
-            equipment_id = row.get("equipment_id") or ""
-            if not equipment_id:
+        def bucket_key(equipment_id: str, filter_no: str) -> str:
+            return f"{equipment_id}||{filter_no}" if filter_no else equipment_id
+
+        bucket_meta = {}
+        timestamps_by_day_bucket = defaultdict(lambda: defaultdict(list))
+        daily_last_reading = {}
+        active_qs = range_qs.exclude(activity_type__in=["maintenance", "shutdown"])
+        for row in active_qs.values("equipment_id", "filter_no", "timestamp"):
+            equipment_id = (row.get("equipment_id") or "").strip()
+            filter_no = (row.get("filter_no") or "").strip()
+            ts = row.get("timestamp")
+            if not equipment_id or ts is None:
                 continue
-            timestamps_by_equipment[equipment_id].append(row.get("timestamp"))
+            key = bucket_key(equipment_id, filter_no)
+            bucket_meta[key] = {"equipment_id": equipment_id, "filter_no": filter_no}
+            day_key = timezone.localtime(ts, slot_tz).date().isoformat()
+            timestamps_by_day_bucket[day_key][key].append(ts)
+            prev = daily_last_reading.get((day_key, key))
+            if prev is None or ts > prev:
+                daily_last_reading[(day_key, key)] = ts
 
-        equipment_ids = set(timestamps_by_equipment.keys())
-        historical_filter_ids = set(
+        suppressed_by_day = defaultdict(set)
+        suppressed_qs = range_qs.filter(
+            activity_type__in=["maintenance", "shutdown"],
+            status__in=["draft", "pending", "pending_secondary_approval"],
+        )
+        for row in suppressed_qs.values("equipment_id", "filter_no", "timestamp"):
+            equipment_id = (row.get("equipment_id") or "").strip()
+            filter_no = (row.get("filter_no") or "").strip()
+            ts = row.get("timestamp")
+            if not equipment_id or ts is None:
+                continue
+            day_key = timezone.localtime(ts, slot_tz).date().isoformat()
+            suppressed_by_day[day_key].add(bucket_key(equipment_id, filter_no))
+
+        bucket_keys = set(bucket_meta.keys())
+        historical_rows = (
             FilterLog.objects.exclude(equipment_id__isnull=True)
             .exclude(equipment_id="")
-            .values_list("equipment_id", flat=True)
+            .values("equipment_id", "filter_no")
             .distinct()
         )
-        equipment_ids.update(historical_filter_ids)
+        for row in historical_rows:
+            equipment_id = (row.get("equipment_id") or "").strip()
+            filter_no = (row.get("filter_no") or "").strip()
+            if not equipment_id:
+                continue
+            key = bucket_key(equipment_id, filter_no)
+            bucket_meta.setdefault(key, {"equipment_id": equipment_id, "filter_no": filter_no})
+            bucket_keys.add(key)
         if equipment_id_filter:
-            equipment_ids.add(equipment_id_filter)
+            bucket_keys = {k for k, meta in bucket_meta.items() if meta.get("equipment_id") == equipment_id_filter}
 
         uuid_pk_list = []
-        for eid in equipment_ids:
+        for eid in {meta["equipment_id"] for meta in bucket_meta.values() if meta.get("equipment_id")}:
             if not eid:
                 continue
             try:
@@ -334,85 +409,97 @@ class FilterLogViewSet(viewsets.ModelViewSet):
                 return f"{num} – {name}"
             return name or num or equipment_id
 
-        equipments_payload = []
-        total_expected_slots = 0
-        total_present_slots = 0
-        total_missing_slots = 0
-        for equipment_id in sorted(equipment_ids):
-            if not equipment_id_filter and equipment_id in suppressed_equipment_ids:
+        global_last_reading = {}
+        last_qs = FilterLog.objects.exclude(equipment_id__isnull=True).exclude(equipment_id="")
+        if equipment_id_filter:
+            last_qs = last_qs.filter(equipment_id=equipment_id_filter)
+        for row in last_qs.values("equipment_id", "filter_no", "timestamp").order_by("equipment_id", "filter_no", "-timestamp"):
+            equipment_id = (row.get("equipment_id") or "").strip()
+            filter_no = (row.get("filter_no") or "").strip()
+            if not equipment_id:
                 continue
-            interval, shift_hours = get_interval_for_equipment(equipment_id, "filter")
-            stats = compute_missing_slots_for_day(
-                day_value=day,
-                timestamps=timestamps_by_equipment.get(equipment_id, []),
-                interval=interval,
-                shift_duration_hours=shift_hours,
-                equipment_identifier=equipment_id,
-                log_type="filter",
-            )
-            expected_count = stats["expected_slot_count"]
-            present_count = stats["present_slot_count"]
-            missing_count = stats["missing_slot_count"]
-            has_activity_today = equipment_id in timestamps_by_equipment
-            # Skip idle historical equipment with no logs today and nothing missing (keeps payload small).
-            if missing_count == 0 and not has_activity_today:
-                continue
-            total_expected_slots += expected_count
-            total_present_slots += present_count
-            total_missing_slots += missing_count
-            missing_ranges = [
-                {
-                    "slot_start": timezone.localtime(slot["slot_start"], slot_tz).isoformat(),
-                    "slot_end": timezone.localtime(slot["slot_end"], slot_tz).isoformat(),
-                    "label": (
-                        f'{timezone.localtime(slot["slot_start"], slot_tz).strftime("%H:%M")}'
-                        f' - {timezone.localtime(slot["slot_end"], slot_tz).strftime("%H:%M")}'
-                    ),
-                }
-                for slot in stats["missing_slots"]
-            ]
-            last_reading_ts = (
-                FilterLog.objects.filter(
-                    equipment_id=equipment_id,
-                    timestamp__gte=day_start,
-                    timestamp__lt=day_end,
+            key = bucket_key(equipment_id, filter_no)
+            if key not in global_last_reading:
+                global_last_reading[key] = row.get("timestamp")
+
+        def build_day_payload(day_value):
+            day_key = day_value.isoformat()
+            equipments_payload = []
+            total_expected_slots = 0
+            total_present_slots = 0
+            total_missing_slots = 0
+            suppressed_for_day = suppressed_by_day.get(day_key, set())
+
+            for key in sorted(bucket_keys):
+                meta = bucket_meta.get(key) or {}
+                equipment_id = meta.get("equipment_id", "")
+                filter_no = (meta.get("filter_no") or "").strip()
+                if not equipment_id:
+                    continue
+                if not equipment_id_filter and key in suppressed_for_day:
+                    continue
+                interval, shift_hours = get_interval_for_equipment(equipment_id, "filter")
+                stats = compute_missing_slots_for_day(
+                    day_value=day_value,
+                    timestamps=timestamps_by_day_bucket.get(day_key, {}).get(key, []),
+                    interval=interval,
+                    shift_duration_hours=shift_hours,
+                    equipment_identifier=equipment_id,
+                    log_type="filter",
                 )
-                .order_by("-timestamp")
-                .values_list("timestamp", flat=True)
-                .first()
-            )
-            if last_reading_ts is None:
-                last_reading_ts = (
-                    FilterLog.objects.filter(equipment_id=equipment_id)
-                    .order_by("-timestamp")
-                    .values_list("timestamp", flat=True)
-                    .first()
+                expected_count = stats["expected_slot_count"]
+                present_count = stats["present_slot_count"]
+                missing_count = stats["missing_slot_count"]
+                has_activity_today = key in timestamps_by_day_bucket.get(day_key, {})
+                if missing_count == 0 and not has_activity_today:
+                    continue
+                total_expected_slots += expected_count
+                total_present_slots += present_count
+                total_missing_slots += missing_count
+                missing_ranges = [
+                    {
+                        "slot_start": timezone.localtime(slot["slot_start"], slot_tz).isoformat(),
+                        "slot_end": timezone.localtime(slot["slot_end"], slot_tz).isoformat(),
+                        "label": (
+                            f'{timezone.localtime(slot["slot_start"], slot_tz).strftime("%H:%M")}'
+                            f' - {timezone.localtime(slot["slot_end"], slot_tz).strftime("%H:%M")}'
+                        ),
+                    }
+                    for slot in stats["missing_slots"]
+                ]
+                _, day_end = get_slot_day_bounds(day_value)
+                global_last = global_last_reading.get(key)
+                last_reading_ts = daily_last_reading.get((day_key, key))
+                if last_reading_ts is None and global_last is not None and global_last < day_end:
+                    last_reading_ts = global_last
+                equipment_display = display_name_for_row(equipment_id)
+                if filter_no:
+                    equipment_display = f"{equipment_display} | {filter_no}"
+                equipments_payload.append(
+                    {
+                        "equipment_id": key,
+                        "equipment_name": equipment_display,
+                        "interval": interval,
+                        "shift_duration_hours": shift_hours,
+                        "expected_slot_count": expected_count,
+                        "present_slot_count": present_count,
+                        "missing_slot_count": missing_count,
+                        "next_due": (
+                            timezone.localtime(stats["next_due"]).isoformat()
+                            if stats["next_due"] is not None
+                            else None
+                        ),
+                        "last_reading_timestamp": (
+                            timezone.localtime(last_reading_ts).isoformat()
+                            if last_reading_ts is not None
+                            else None
+                        ),
+                        "missing_slots": missing_ranges,
+                    }
                 )
-            equipments_payload.append(
-                {
-                    "equipment_id": equipment_id,
-                    "equipment_name": display_name_for_row(equipment_id),
-                    "interval": interval,
-                    "shift_duration_hours": shift_hours,
-                    "expected_slot_count": expected_count,
-                    "present_slot_count": present_count,
-                    "missing_slot_count": missing_count,
-                    "next_due": (
-                        timezone.localtime(stats["next_due"]).isoformat()
-                        if stats["next_due"] is not None
-                        else None
-                    ),
-                    "last_reading_timestamp": (
-                        timezone.localtime(last_reading_ts).isoformat()
-                        if last_reading_ts is not None
-                        else None
-                    ),
-                    "missing_slots": missing_ranges,
-                }
-            )
-        return Response(
-            {
-                "date": day.isoformat(),
+
+            return {
+                "date": day_key,
                 "log_type": "filter",
                 "total_expected_slots": total_expected_slots,
                 "total_present_slots": total_present_slots,
@@ -421,7 +508,40 @@ class FilterLogViewSet(viewsets.ModelViewSet):
                 "affected_equipment_count": len([e for e in equipments_payload if e["missing_slot_count"] > 0]),
                 "equipments": equipments_payload,
             }
+
+        day_payloads = [build_day_payload(day_item) for day_item in days]
+        if not range_mode:
+            payload = day_payloads[0]
+            save_missing_slots_snapshot(
+                user=request.user,
+                log_type="filter",
+                date_from=days[0],
+                date_to=days[0],
+                payload=payload,
+                filters={"equipment_id": equipment_id_filter or ""},
+            )
+            return Response(payload)
+
+        payload = {
+            "log_type": "filter",
+            "date_from": days[0].isoformat(),
+            "date_to": days[-1].isoformat(),
+            "day_count": len(day_payloads),
+            "days": day_payloads,
+            "total_expected_slots": sum(day_payload["total_expected_slots"] for day_payload in day_payloads),
+            "total_present_slots": sum(day_payload["total_present_slots"] for day_payload in day_payloads),
+            "total_missing_slots": sum(day_payload["total_missing_slots"] for day_payload in day_payloads),
+            "affected_day_count": sum(1 for day_payload in day_payloads if day_payload["total_missing_slots"] > 0),
+        }
+        save_missing_slots_snapshot(
+            user=request.user,
+            log_type="filter",
+            date_from=days[0],
+            date_to=days[-1],
+            payload=payload,
+            filters={"equipment_id": equipment_id_filter or ""},
         )
+        return Response(payload)
 
     @action(detail=True, methods=['post'])
     def correct(self, request, pk=None):
@@ -545,37 +665,21 @@ class FilterLogViewSet(viewsets.ModelViewSet):
         - Secondary approval must be by a different user than the rejector.
         """
         log = self.get_object()
-        action_type = request.data.get('action', 'approve')
+        action_type = normalize_approval_action(request.data.get('action'))
         # Backwards compatible: frontend currently sends approval/rejection comment as `remarks`.
         comment = (request.data.get('comment') or request.data.get('remarks') or '').strip()
-
-        if action_type == 'reject' and not comment:
-            raise ValidationError({'remarks': ['Comment is required when rejecting.']})
+        require_rejection_comment(action_type, comment)
 
         if action_type == 'approve':
-            if log.operator_id and log.operator_id == request.user.id:
-                raise ValidationError(
-                    {'detail': ['Log Book Done By and Approved By users must be different.']}
-                )
-        elif action_type != 'reject':
-            return Response(
-                {'error': 'Invalid action. Use "approve" or "reject".'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            ensure_not_operator(log.operator_id, request.user.id, "approved")
 
-        if log.status not in ('draft', 'pending', 'pending_secondary_approval'):
-            raise ValidationError(
-                {'detail': ['Only draft, pending or pending secondary approval entries can be approved or rejected.']}
-            )
+        ensure_status_allowed(log.status, ('draft', 'pending', 'pending_secondary_approval'), action_type)
 
         now = timezone.now()
 
         if action_type == 'reject':
             # Rejector must be different from the operator (Log Book Done By)
-            if log.operator_id and log.operator_id == request.user.id:
-                raise ValidationError(
-                    {'detail': ['Log Book Done By and Rejected By users must be different.']}
-                )
+            ensure_not_operator(log.operator_id, request.user.id, "rejected")
             previous_status = log.status
             log.status = 'rejected'
             log.approved_by = request.user
@@ -591,10 +695,7 @@ class FilterLogViewSet(viewsets.ModelViewSet):
             )
         else:
             if log.status == 'pending_secondary_approval':
-                if log.approved_by and log.approved_by_id == request.user.id:
-                    raise ValidationError(
-                        {'detail': ['Secondary approver must be different from the primary approver.']}
-                    )
+                ensure_secondary_approver_diff(log.approved_by_id, request.user.id)
                 log.secondary_approved_by = request.user
                 log.secondary_approved_at = now
                 log.status = 'approved'
@@ -621,14 +722,12 @@ class FilterLogViewSet(viewsets.ModelViewSet):
             title = f"Filter Monitoring - {eq_title}"
             if fn:
                 title = f"{title} · {fn}"
-            create_report_entry(
-                report_type='utility',
-                source_id=str(log.id),
+
+            create_utility_report_for_log(
+                log=log,
                 source_table='filter_logs',
-                title=title,
-                site=log.equipment_id or 'N/A',
-                created_by=log.operator_name or 'Unknown',
-                created_at=log.created_at,
+                title_prefix='Filter Monitoring',
+                title_override=title,
                 approved_by=request.user,
                 remarks=comment or None,
             )

@@ -20,7 +20,7 @@ import {
 } from '@/components/ui/dialog';
 import { LogbookSchema, LogbookField, FieldType } from '@/types/logbook-config';
 import { Plus, Trash2, GripVertical, Save, Eye, Settings2 } from 'lucide-react';
-import { toast } from 'sonner';
+import { toast } from '@/lib/toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { cn } from '@/lib/utils';
 import { logbookAPI } from '@/lib/api';

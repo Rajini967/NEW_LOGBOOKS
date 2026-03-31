@@ -7,15 +7,23 @@ from django.utils import timezone
 from core.log_slot_utils import (
     get_interval_for_equipment,
     get_slot_range,
-    compute_slot_status,
     compute_missing_slots_for_day,
     get_slot_day_bounds,
     get_slot_timezone,
+    format_missing_slots_equipment_label,
 )
 from .models import ChillerLog, ChillerEquipmentStatusAudit, ChillerEquipmentLimit, ChillerDashboardConfig
 from .serializers import ChillerLogSerializer, ChillerEquipmentLimitSerializer
 from accounts.permissions import CanLogEntries, CanApproveReports, IsSuperAdminOrAdmin
-from reports.utils import log_limit_change, log_audit_event
+from reports.utils import log_limit_change, log_audit_event, save_missing_slots_snapshot
+from reports.services import create_utility_report_for_log
+from reports.approval_workflow import (
+    ensure_not_operator,
+    ensure_secondary_approver_diff,
+    ensure_status_allowed,
+    normalize_approval_action,
+    require_rejection_comment,
+)
 from django.db.models import Sum
 from datetime import datetime, date, timedelta
 from collections import defaultdict
@@ -209,7 +217,6 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
             qs = qs.filter(equipment_id=equipment_id)
         if date_from:
             try:
-                from datetime import datetime
                 dt = datetime.fromisoformat(date_from.replace('Z', '+00:00'))
                 if timezone.is_naive(dt):
                     dt = timezone.make_aware(dt, timezone.get_current_timezone())
@@ -218,7 +225,6 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
                 pass
         if date_to:
             try:
-                from datetime import datetime
                 dt = datetime.fromisoformat(date_to.replace('Z', '+00:00'))
                 if timezone.is_naive(dt):
                     dt = timezone.make_aware(dt, timezone.get_current_timezone())
@@ -368,6 +374,11 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
             object_id=str(log.id),
             field_name="created",
             new_value=timezone.localtime(log.timestamp).isoformat() if log.timestamp else None,
+            extra={
+                "equipment_id": str(log.equipment_id or ""),
+                "log_timestamp": timezone.localtime(log.timestamp).isoformat() if log.timestamp else "",
+                "log_date": str(log.timestamp.date()) if log.timestamp else "",
+            },
         )
 
     def perform_update(self, serializer):
@@ -421,48 +432,91 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'], url_path='missing-slots')
     def missing_slots(self, request):
         date_str = (request.query_params.get("date") or "").strip()
+        date_from_str = (request.query_params.get("date_from") or "").strip()
+        date_to_str = (request.query_params.get("date_to") or "").strip()
         equipment_id_filter = (request.query_params.get("equipment_id") or "").strip()
-        if date_str:
-            try:
-                day = datetime.strptime(date_str[:10], "%Y-%m-%d").date()
-            except ValueError:
-                return Response({"error": "date must be YYYY-MM-DD"}, status=status.HTTP_400_BAD_REQUEST)
-        else:
-            day = timezone.localdate()
 
-        day_start, day_end = get_slot_day_bounds(day)
-        slot_tz = get_slot_timezone()
-        base_qs = ChillerLog.objects.filter(timestamp__gte=day_start, timestamp__lt=day_end)
-        if equipment_id_filter:
-            base_qs = base_qs.filter(equipment_id=equipment_id_filter)
-
-        suppressed_equipment_ids = set(
-            ChillerLog.objects.filter(
-                timestamp__gte=day_start,
-                timestamp__lt=day_end,
-                activity_type__in=["maintenance", "shutdown"],
-                status__in=["draft", "pending", "pending_secondary_approval"],
+        range_mode = bool(date_from_str or date_to_str)
+        if range_mode and (not date_from_str or not date_to_str):
+            return Response(
+                {"error": "date_from and date_to are both required for range mode (YYYY-MM-DD)."},
+                status=status.HTTP_400_BAD_REQUEST,
             )
-            .exclude(equipment_id__isnull=True)
-            .exclude(equipment_id="")
-            .values_list("equipment_id", flat=True)
-            .distinct()
-        )
-        if equipment_id_filter:
-            suppressed_equipment_ids = {
-                equipment_id for equipment_id in suppressed_equipment_ids if equipment_id == equipment_id_filter
-            }
 
-        timestamps_by_equipment = defaultdict(list)
-        timestamps_qs = base_qs.exclude(activity_type__in=["maintenance", "shutdown"])
-        for row in timestamps_qs.values("equipment_id", "timestamp"):
-            equipment_id = row.get("equipment_id") or ""
-            if not equipment_id:
+        if range_mode:
+            try:
+                day_from = datetime.strptime(date_from_str[:10], "%Y-%m-%d").date()
+                day_to = datetime.strptime(date_to_str[:10], "%Y-%m-%d").date()
+            except ValueError:
+                return Response({"error": "date_from/date_to must be YYYY-MM-DD"}, status=status.HTTP_400_BAD_REQUEST)
+            if day_to < day_from:
+                return Response({"error": "date_to must be on or after date_from."}, status=status.HTTP_400_BAD_REQUEST)
+            day_count = (day_to - day_from).days + 1
+            if day_count > 366:
+                return Response({"error": "Date range cannot exceed 366 days."}, status=status.HTTP_400_BAD_REQUEST)
+            days = [day_from + timedelta(days=idx) for idx in range(day_count)]
+        else:
+            if date_str:
+                try:
+                    day = datetime.strptime(date_str[:10], "%Y-%m-%d").date()
+                except ValueError:
+                    return Response({"error": "date must be YYYY-MM-DD"}, status=status.HTTP_400_BAD_REQUEST)
+            else:
+                day = timezone.localdate()
+            days = [day]
+
+        slot_tz = get_slot_timezone()
+        first_day_start, _ = get_slot_day_bounds(days[0])
+        _, last_day_end = get_slot_day_bounds(days[-1])
+
+        range_qs = ChillerLog.objects.filter(timestamp__gte=first_day_start, timestamp__lt=last_day_end)
+        if equipment_id_filter:
+            range_qs = range_qs.filter(equipment_id=equipment_id_filter)
+
+        timestamps_by_day_equipment = defaultdict(lambda: defaultdict(list))
+        daily_last_reading = {}
+
+        active_qs = range_qs.exclude(activity_type__in=["maintenance", "shutdown"])
+        for row in active_qs.values("equipment_id", "timestamp"):
+            equipment_id = (row.get("equipment_id") or "").strip()
+            ts = row.get("timestamp")
+            if not equipment_id or ts is None:
                 continue
-            timestamps_by_equipment[equipment_id].append(row.get("timestamp"))
+            local_ts = timezone.localtime(ts, slot_tz)
+            day_key = local_ts.date().isoformat()
+            timestamps_by_day_equipment[day_key][equipment_id].append(ts)
+            prev = daily_last_reading.get((day_key, equipment_id))
+            if prev is None or ts > prev:
+                daily_last_reading[(day_key, equipment_id)] = ts
+
+        suppressed_by_day = defaultdict(set)
+        suppressed_qs = range_qs.filter(
+            activity_type__in=["maintenance", "shutdown"],
+            status__in=["draft", "pending", "pending_secondary_approval"],
+        )
+        for row in suppressed_qs.values("equipment_id", "timestamp"):
+            equipment_id = (row.get("equipment_id") or "").strip()
+            ts = row.get("timestamp")
+            if not equipment_id or ts is None:
+                continue
+            day_key = timezone.localtime(ts, slot_tz).date().isoformat()
+            suppressed_by_day[day_key].add(equipment_id)
 
         equipment_name_map = {}
-        equipment_ids = set(timestamps_by_equipment.keys())
+        chiller_equipment_rows = Equipment.objects.filter(
+            is_active=True,
+            category__name__icontains="chiller",
+        ).values("equipment_number", "name", "site_id")
+        for row in chiller_equipment_rows:
+            eq_number = (row.get("equipment_number") or "").strip()
+            if eq_number:
+                equipment_name_map[eq_number] = format_missing_slots_equipment_label(
+                    eq_number,
+                    row.get("name"),
+                    row.get("site_id"),
+                )
+
+        equipment_ids = set()
         historical_equipment_ids = set(
             ChillerLog.objects.exclude(equipment_id__isnull=True)
             .exclude(equipment_id="")
@@ -470,98 +524,93 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
             .distinct()
         )
         equipment_ids.update(historical_equipment_ids)
+        equipment_ids.update(equipment_name_map.keys())
+        for day_eq_map in timestamps_by_day_equipment.values():
+            equipment_ids.update(day_eq_map.keys())
         if equipment_id_filter:
-            equipment_ids.add(equipment_id_filter)
+            equipment_ids = {equipment_id_filter}
 
-        chiller_equipment_rows = Equipment.objects.filter(
-            is_active=True,
-            category__name__icontains="chiller",
-        ).values("equipment_number", "name")
-        for row in chiller_equipment_rows:
-            eq_number = (row.get("equipment_number") or "").strip()
-            if not eq_number:
-                continue
-            equipment_name_map[eq_number] = row.get("name") or eq_number
+        global_last_reading = {}
+        last_qs = ChillerLog.objects.exclude(equipment_id__isnull=True).exclude(equipment_id="")
+        if equipment_id_filter:
+            last_qs = last_qs.filter(equipment_id=equipment_id_filter)
+        for row in last_qs.values("equipment_id", "timestamp").order_by("equipment_id", "-timestamp"):
+            equipment_id = row.get("equipment_id")
+            if equipment_id and equipment_id not in global_last_reading:
+                global_last_reading[equipment_id] = row.get("timestamp")
 
-        equipments_payload = []
-        total_expected_slots = 0
-        total_present_slots = 0
-        total_missing_slots = 0
+        def build_day_payload(day_value):
+            day_key = day_value.isoformat()
+            equipments_payload = []
+            total_expected_slots = 0
+            total_present_slots = 0
+            total_missing_slots = 0
+            suppressed_for_day = suppressed_by_day.get(day_key, set())
 
-        for equipment_id in sorted(equipment_ids):
-            if not equipment_id_filter and equipment_id in suppressed_equipment_ids:
-                continue
-            interval, shift_hours = get_interval_for_equipment(equipment_id, "chiller")
-            stats = compute_missing_slots_for_day(
-                day_value=day,
-                timestamps=timestamps_by_equipment.get(equipment_id, []),
-                interval=interval,
-                shift_duration_hours=shift_hours,
-                equipment_identifier=equipment_id,
-                log_type="chiller",
-            )
-            expected_count = stats["expected_slot_count"]
-            present_count = stats["present_slot_count"]
-            missing_count = stats["missing_slot_count"]
-            total_expected_slots += expected_count
-            total_present_slots += present_count
-            total_missing_slots += missing_count
+            for equipment_id in sorted(equipment_ids):
+                if not equipment_id_filter and equipment_id in suppressed_for_day:
+                    continue
 
-            missing_ranges = [
-                {
-                    "slot_start": timezone.localtime(slot["slot_start"], slot_tz).isoformat(),
-                    "slot_end": timezone.localtime(slot["slot_end"], slot_tz).isoformat(),
-                    "label": (
-                        f'{timezone.localtime(slot["slot_start"], slot_tz).strftime("%H:%M")}'
-                        f' - {timezone.localtime(slot["slot_end"], slot_tz).strftime("%H:%M")}'
-                    ),
-                }
-                for slot in stats["missing_slots"]
-            ]
-            last_reading_ts = (
-                ChillerLog.objects.filter(
-                    equipment_id=equipment_id,
-                    timestamp__gte=day_start,
-                    timestamp__lt=day_end,
+                interval, shift_hours = get_interval_for_equipment(equipment_id, "chiller")
+                stats = compute_missing_slots_for_day(
+                    day_value=day_value,
+                    timestamps=timestamps_by_day_equipment.get(day_key, {}).get(equipment_id, []),
+                    interval=interval,
+                    shift_duration_hours=shift_hours,
+                    equipment_identifier=equipment_id,
+                    log_type="chiller",
                 )
-                .order_by("-timestamp")
-                .values_list("timestamp", flat=True)
-                .first()
-            )
-            if last_reading_ts is None:
-                last_reading_ts = (
-                    ChillerLog.objects.filter(equipment_id=equipment_id)
-                    .order_by("-timestamp")
-                    .values_list("timestamp", flat=True)
-                    .first()
+                expected_count = stats["expected_slot_count"]
+                present_count = stats["present_slot_count"]
+                missing_count = stats["missing_slot_count"]
+                total_expected_slots += expected_count
+                total_present_slots += present_count
+                total_missing_slots += missing_count
+
+                missing_ranges = [
+                    {
+                        "slot_start": timezone.localtime(slot["slot_start"], slot_tz).isoformat(),
+                        "slot_end": timezone.localtime(slot["slot_end"], slot_tz).isoformat(),
+                        "label": (
+                            f'{timezone.localtime(slot["slot_start"], slot_tz).strftime("%H:%M")}'
+                            f' - {timezone.localtime(slot["slot_end"], slot_tz).strftime("%H:%M")}'
+                        ),
+                    }
+                    for slot in stats["missing_slots"]
+                ]
+
+                _, day_end = get_slot_day_bounds(day_value)
+                global_last = global_last_reading.get(equipment_id)
+                last_reading_ts = daily_last_reading.get((day_key, equipment_id))
+                if last_reading_ts is None and global_last is not None and global_last < day_end:
+                    # Prevent showing a future reading (relative to this day) in historical day rows.
+                    last_reading_ts = global_last
+
+                equipments_payload.append(
+                    {
+                        "equipment_id": equipment_id,
+                        "equipment_name": equipment_name_map.get(equipment_id, equipment_id),
+                        "interval": interval,
+                        "shift_duration_hours": shift_hours,
+                        "expected_slot_count": expected_count,
+                        "present_slot_count": present_count,
+                        "missing_slot_count": missing_count,
+                        "next_due": (
+                            timezone.localtime(stats["next_due"]).isoformat()
+                            if stats["next_due"] is not None
+                            else None
+                        ),
+                        "last_reading_timestamp": (
+                            timezone.localtime(last_reading_ts).isoformat()
+                            if last_reading_ts is not None
+                            else None
+                        ),
+                        "missing_slots": missing_ranges,
+                    }
                 )
 
-            equipments_payload.append(
-                {
-                    "equipment_id": equipment_id,
-                    "equipment_name": equipment_name_map.get(equipment_id, equipment_id),
-                    "interval": interval,
-                    "shift_duration_hours": shift_hours,
-                    "expected_slot_count": expected_count,
-                    "present_slot_count": present_count,
-                    "missing_slot_count": missing_count,
-                    "next_due": (
-                        timezone.localtime(stats["next_due"]).isoformat()
-                        if stats["next_due"] is not None
-                        else None
-                    ),
-                    "last_reading_timestamp": (
-                        timezone.localtime(last_reading_ts).isoformat()
-                        if last_reading_ts is not None
-                        else None
-                    ),
-                    "missing_slots": missing_ranges,
-                }
-            )
-
-        return Response(
-            {
-                "date": day.isoformat(),
+            return {
+                "date": day_key,
                 "log_type": "chiller",
                 "total_expected_slots": total_expected_slots,
                 "total_present_slots": total_present_slots,
@@ -570,7 +619,40 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
                 "affected_equipment_count": len([e for e in equipments_payload if e["missing_slot_count"] > 0]),
                 "equipments": equipments_payload,
             }
+
+        day_payloads = [build_day_payload(day_item) for day_item in days]
+        if not range_mode:
+            payload = day_payloads[0]
+            save_missing_slots_snapshot(
+                user=request.user,
+                log_type="chiller",
+                date_from=days[0],
+                date_to=days[0],
+                payload=payload,
+                filters={"equipment_id": equipment_id_filter or ""},
+            )
+            return Response(payload)
+
+        payload = {
+            "log_type": "chiller",
+            "date_from": days[0].isoformat(),
+            "date_to": days[-1].isoformat(),
+            "day_count": len(day_payloads),
+            "days": day_payloads,
+            "total_expected_slots": sum(day_payload["total_expected_slots"] for day_payload in day_payloads),
+            "total_present_slots": sum(day_payload["total_present_slots"] for day_payload in day_payloads),
+            "total_missing_slots": sum(day_payload["total_missing_slots"] for day_payload in day_payloads),
+            "affected_day_count": sum(1 for day_payload in day_payloads if day_payload["total_missing_slots"] > 0),
+        }
+        save_missing_slots_snapshot(
+            user=request.user,
+            log_type="chiller",
+            date_from=days[0],
+            date_to=days[-1],
+            payload=payload,
+            filters={"equipment_id": equipment_id_filter or ""},
         )
+        return Response(payload)
 
     def perform_destroy(self, instance):
         """Record log_deleted in audit trail before deleting."""
@@ -581,6 +663,11 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
             object_id=str(instance.id),
             field_name="deleted",
             new_value=timezone.localtime(timezone.now()).isoformat(),
+            extra={
+                "equipment_id": str(instance.equipment_id or ""),
+                "log_timestamp": timezone.localtime(instance.timestamp).isoformat() if instance.timestamp else "",
+                "log_date": str(instance.timestamp.date()) if instance.timestamp else "",
+            },
         )
         super().perform_destroy(instance)
 
@@ -1193,26 +1280,16 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
     def approve(self, request, pk=None):
         """Approve or reject a chiller log. Handles primary approval, secondary approval (after correction), and reject."""
         log = self.get_object()
-        action_type = request.data.get('action', 'approve')
+        action_type = normalize_approval_action(request.data.get('action'))
         remarks = (request.data.get('remarks') or '').strip()
-        
-        if action_type == 'reject' and not remarks:
-            raise ValidationError({'remarks': ['Comment is required when rejecting.']})
+        require_rejection_comment(action_type, remarks)
         
         if action_type == 'approve':
             # Primary/secondary approver must be different from the operator (Log Book Done By)
-            if log.operator_id and log.operator_id == request.user.id:
-                return Response(
-                    {'error': 'The log book entry must be approved by a different user than the operator (Log Book Done By).'},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
+            ensure_not_operator(log.operator_id, request.user.id, "approved")
             if log.status == 'pending_secondary_approval':
                 # Secondary approval must be done by a different person than who rejected
-                if log.approved_by_id and log.approved_by_id == request.user.id:
-                    return Response(
-                        {'error': 'A different person must perform secondary approval. The person who rejected cannot approve the corrected entry.'},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
+                ensure_secondary_approver_diff(log.approved_by_id, request.user.id)
                 # Secondary approval (after correction)
                 log.status = 'approved'
                 log.secondary_approved_by = request.user
@@ -1220,22 +1297,11 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
             elif log.status in ('pending', 'draft'):
                 log.status = 'approved'
             else:
-                return Response(
-                    {'error': 'Only pending, draft, or pending secondary approval entries can be approved.'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+                ensure_status_allowed(log.status, ('pending', 'draft', 'pending_secondary_approval'), 'approve')
         elif action_type == 'reject':
             # Rejector must be different from the operator (Log Book Done By)
-            if log.operator_id and log.operator_id == request.user.id:
-                return Response(
-                    {'error': 'The log book entry must be rejected by a different user than the operator (Log Book Done By).'},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            if log.status not in ('pending', 'draft', 'pending_secondary_approval'):
-                return Response(
-                    {'error': 'Only pending, draft, or pending secondary approval entries can be rejected.'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+            ensure_not_operator(log.operator_id, request.user.id, "rejected")
+            ensure_status_allowed(log.status, ('pending', 'draft', 'pending_secondary_approval'), 'reject')
             previous_status = log.status
             log.status = 'rejected'
             log.secondary_approved_by = None
@@ -1249,12 +1315,6 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
                 old_value=previous_status,
                 new_value="rejected",
             )
-        else:
-            return Response(
-                {'error': 'Invalid action. Use "approve" or "reject".'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
         if action_type == 'reject' or (action_type == 'approve' and log.status == 'approved'):
             log.approved_by = request.user
             log.approved_at = timezone.now()
@@ -1264,18 +1324,12 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
         
         # Create report entry when approved (primary or secondary)
         if action_type == 'approve' and log.status == 'approved':
-            from reports.utils import create_report_entry
-            title = f"Chiller Monitoring - {log.equipment_id or 'N/A'}"
-            create_report_entry(
-                report_type='utility',
-                source_id=str(log.id),
+            create_utility_report_for_log(
+                log=log,
                 source_table='chiller_logs',
-                title=title,
-                site=log.equipment_id or 'N/A',
-                created_by=log.operator_name or 'Unknown',
-                created_at=log.created_at,
+                title_prefix='Chiller Monitoring',
                 approved_by=request.user,
-                remarks=remarks
+                remarks=remarks,
             )
         
         serializer = self.get_serializer(log)

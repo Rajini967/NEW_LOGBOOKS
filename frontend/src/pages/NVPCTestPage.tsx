@@ -19,7 +19,7 @@ import {
 import { useAuth } from '@/contexts/AuthContext';
 import { Plus, Trash2, Save, Download, CheckCircle, XCircle } from 'lucide-react';
 import { format } from 'date-fns';
-import { toast } from 'sonner';
+import { toast } from '@/lib/toast';
 import { NVPCTestData, NVPCRoomData, NVPCSamplingPoint } from '@/types/test-certificates';
 import { generateNVPCPDF, downloadPDF } from '@/lib/pdf-generator';
 import { calculateAverage } from '@/lib/test-calculations';

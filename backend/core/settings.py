@@ -13,13 +13,28 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/
 
+ENVIRONMENT = config('ENVIRONMENT', default='development').strip().lower()
+IS_PRODUCTION = ENVIRONMENT in {'production', 'prod'}
+
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = config('SECRET_KEY', default='django-insecure-change-this-in-production-!@#$%^&*()')
+SECRET_KEY = config('SECRET_KEY', default='')
+if not SECRET_KEY:
+    if IS_PRODUCTION:
+        raise ValueError('SECRET_KEY must be set in production environments.')
+    SECRET_KEY = 'django-insecure-local-dev-only-change-me'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = config('DEBUG', default=True, cast=bool)
+DEBUG = config('DEBUG', default=(not IS_PRODUCTION), cast=bool)
+if IS_PRODUCTION and DEBUG:
+    raise ValueError('DEBUG must be False in production environments.')
 
-ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='localhost,127.0.0.1', cast=lambda v: [s.strip() for s in v.split(',')])
+ALLOWED_HOSTS = config(
+    'ALLOWED_HOSTS',
+    default='localhost,127.0.0.1' if not IS_PRODUCTION else '',
+    cast=lambda v: [s.strip() for s in v.split(',') if s.strip()],
+)
+if IS_PRODUCTION and not ALLOWED_HOSTS:
+    raise ValueError('ALLOWED_HOSTS must be set in production environments.')
 
 
 # Application definition
@@ -261,4 +276,12 @@ EMAIL_USE_TLS = config('EMAIL_USE_TLS', default=True, cast=bool)
 EMAIL_USE_SSL = config('EMAIL_USE_SSL', default=False, cast=bool)
 DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='no-reply@logbook.local')
 FRONTEND_BASE_URL = config('FRONTEND_BASE_URL', default='http://localhost:8080')
+
+# Deployment security defaults (enabled in production, configurable via env)
+SECURE_SSL_REDIRECT = config('SECURE_SSL_REDIRECT', default=IS_PRODUCTION, cast=bool)
+SESSION_COOKIE_SECURE = config('SESSION_COOKIE_SECURE', default=IS_PRODUCTION, cast=bool)
+CSRF_COOKIE_SECURE = config('CSRF_COOKIE_SECURE', default=IS_PRODUCTION, cast=bool)
+SECURE_HSTS_SECONDS = config('SECURE_HSTS_SECONDS', default=(31536000 if IS_PRODUCTION else 0), cast=int)
+SECURE_HSTS_INCLUDE_SUBDOMAINS = config('SECURE_HSTS_INCLUDE_SUBDOMAINS', default=IS_PRODUCTION, cast=bool)
+SECURE_HSTS_PRELOAD = config('SECURE_HSTS_PRELOAD', default=IS_PRODUCTION, cast=bool)
 

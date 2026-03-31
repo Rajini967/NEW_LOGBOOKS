@@ -31,7 +31,7 @@ import {
   equipmentAPI,
   equipmentCategoryAPI,
 } from "@/lib/api";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { useAuth } from "@/contexts/AuthContext";
 
 // Map display labels from stock API to backend filter keys

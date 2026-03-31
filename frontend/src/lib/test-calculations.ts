@@ -105,20 +105,6 @@ export function calculateRecoveryTime(timeSeries: RecoveryDataPoint[]): number {
       const withinLimit05 = count05 <= ISO8_LIMIT_05;
       const withinLimit5 = count5 <= ISO8_LIMIT_5;
       
-      // Debug logging for each point checked
-      if (process.env.NODE_ENV === 'development') {
-        console.log(`Checking recovery point ${i} (${point.time}):`, {
-          count05,
-          count5,
-          total: count05 + count5,
-          limit05: ISO8_LIMIT_05,
-          limit5: ISO8_LIMIT_5,
-          withinLimit05,
-          withinLimit5,
-          bothWithinLimits: withinLimit05 && withinLimit5
-        });
-      }
-      
       // Check if both particle sizes are within ISO limits
       if (withinLimit05 && withinLimit5) {
         // Calculate total particles to find the point closest to baseline
@@ -128,9 +114,6 @@ export function calculateRecoveryTime(timeSeries: RecoveryDataPoint[]): number {
         if (recoveryIndex === -1 || totalParticles < lowestTotalParticles) {
           recoveryIndex = i;
           lowestTotalParticles = totalParticles;
-          if (process.env.NODE_ENV === 'development') {
-            console.log(`✓ New best recovery point at index ${i}, time: ${point.time}, total particles: ${totalParticles}`);
-          }
         }
         // Continue checking all points to find the one with lowest counts
       }
@@ -146,18 +129,6 @@ export function calculateRecoveryTime(timeSeries: RecoveryDataPoint[]): number {
   // Step 3: Calculate recovery time in minutes (rounded up conservatively)
   const recoveryTime = parseTime(timeSeries[recoveryIndex].time);
   const timeDiffMinutes = recoveryTime - worstTime;
-  
-  // Debug logging
-  if (process.env.NODE_ENV === 'development') {
-    console.log('Recovery Time Calculation:', {
-      worstTime: timeSeries[worstIndex].time,
-      worstTimeMinutes: worstTime,
-      recoveryTime: timeSeries[recoveryIndex].time,
-      recoveryTimeMinutes: recoveryTime,
-      differenceMinutes: timeDiffMinutes,
-      roundedMinutes: Math.ceil(timeDiffMinutes)
-    });
-  }
   
   // Round up conservatively (e.g., 3.25 min → 4 min, 3.01 min → 4 min)
   // Math.ceil ensures any fractional minutes round up to the next whole minute
@@ -197,11 +168,6 @@ function parseTime(timeStr: string): number {
   // Example: 13:34:44 = 13*60 + 34 + 44/60 = 814.733 minutes
   // Example: 13:34 = 13*60 + 34 + 0/60 = 814 minutes
   const totalMinutes = hours * 60 + minutes + seconds / 60;
-  
-  // Debug logging
-  if (process.env.NODE_ENV === 'development') {
-    console.log(`parseTime("${timeStr}") = ${totalMinutes} minutes (${hours}h ${minutes}m ${seconds}s)`);
-  }
   
   return totalMinutes;
 }

@@ -1,4 +1,5 @@
 from django.utils import timezone
+from datetime import datetime
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -6,6 +7,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import ValidationError
 from core.log_slot_utils import get_interval_for_equipment, get_slot_range
 from reports.utils import log_audit_event, log_limit_change
+from reports.services import create_utility_report_for_log
 from .models import CompressorLog
 from .serializers import CompressorLogSerializer
 from accounts.permissions import CanLogEntries, CanApproveReports
@@ -30,7 +32,6 @@ class CompressorLogViewSet(viewsets.ModelViewSet):
             qs = qs.filter(equipment_id=equipment_id)
         if date_from:
             try:
-                from datetime import datetime
                 dt = datetime.fromisoformat(date_from.replace('Z', '+00:00'))
                 if timezone.is_naive(dt):
                     dt = timezone.make_aware(dt, timezone.get_current_timezone())
@@ -39,7 +40,6 @@ class CompressorLogViewSet(viewsets.ModelViewSet):
                 pass
         if date_to:
             try:
-                from datetime import datetime
                 dt = datetime.fromisoformat(date_to.replace('Z', '+00:00'))
                 if timezone.is_naive(dt):
                     dt = timezone.make_aware(dt, timezone.get_current_timezone())
@@ -266,18 +266,12 @@ class CompressorLogViewSet(viewsets.ModelViewSet):
         log.save()
 
         if action_type == 'approve' and log.status == 'approved':
-            from reports.utils import create_report_entry
-            title = f"Air Compressor Monitoring - {log.equipment_id or 'N/A'}"
-            create_report_entry(
-                report_type='utility',
-                source_id=str(log.id),
+            create_utility_report_for_log(
+                log=log,
                 source_table='compressor_logs',
-                title=title,
-                site=log.equipment_id or 'N/A',
-                created_by=log.operator_name or 'Unknown',
-                created_at=log.created_at,
+                title_prefix='Air Compressor Monitoring',
                 approved_by=request.user,
-                remarks=remarks
+                remarks=remarks,
             )
 
         serializer = self.get_serializer(log)

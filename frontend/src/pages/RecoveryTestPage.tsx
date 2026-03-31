@@ -19,7 +19,7 @@ import {
 import { useAuth } from '@/contexts/AuthContext';
 import { Plus, Trash2, Save, Download, CheckCircle, XCircle } from 'lucide-react';
 import { format } from 'date-fns';
-import { toast } from 'sonner';
+import { toast } from '@/lib/toast';
 import { RecoveryTestData, RecoveryDataPoint } from '@/types/test-certificates';
 import { calculateRecoveryTime, checkRecoveryStatus, generateRecoveryAuditStatement } from '@/lib/test-calculations';
 import { generateRecoveryTestPDF, downloadPDF } from '@/lib/pdf-generator';
@@ -569,15 +569,6 @@ export default function RecoveryTestPage() {
                     </div>
                   ))}
                   {formData.timeSeries.length > 0 && (() => {
-                    // Debug: Log time values to check if seconds are included
-                    if (process.env.NODE_ENV === 'development') {
-                      console.log('Time Series Data:', formData.timeSeries.map(p => ({
-                        time: p.time,
-                        ahuStatus: p.ahuStatus,
-                        count05: p.particleCount05,
-                        count5: p.particleCount5
-                      })));
-                    }
                     const recoveryTime = calculateRecoveryTime(formData.timeSeries);
                     const testStatus = checkRecoveryStatus(recoveryTime);
                     return (
@@ -648,7 +639,7 @@ export default function RecoveryTestPage() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
-                          {(test.status === 'pending' || test.status === 'draft') && user?.role !== 'operator' && (
+                          {test.status === 'pending' && user?.role !== 'operator' && (
                             <>
                               <Button
                                 variant="outline"

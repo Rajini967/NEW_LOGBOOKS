@@ -25,7 +25,14 @@ from .serializers import (
     ChemicalPreparationSerializer,
 )
 from accounts.permissions import CanLogEntries, CanApproveReports, IsSuperAdminOrAdmin
-from reports.utils import log_limit_change, log_audit_event
+from reports.utils import log_limit_change, log_audit_event, save_missing_slots_snapshot
+from reports.approval_workflow import (
+    ensure_not_operator,
+    ensure_secondary_approver_diff,
+    ensure_status_allowed,
+    normalize_approval_action,
+    require_rejection_comment,
+)
 from collections import defaultdict
 
 CREATOR_ONLY_REJECTED_EDIT_MESSAGE = "Only the original creator can edit/correct a rejected entry."
@@ -512,6 +519,11 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
             object_id=str(log.id),
             field_name="created",
             new_value=timezone.localtime(log.timestamp).isoformat() if log.timestamp else None,
+            extra={
+                "equipment_name": str(log.equipment_name or ""),
+                "log_timestamp": timezone.localtime(log.timestamp).isoformat() if log.timestamp else "",
+                "log_date": str(log.timestamp.date()) if log.timestamp else "",
+            },
         )
 
     def perform_destroy(self, instance):
@@ -523,6 +535,11 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
             object_id=str(instance.id),
             field_name="deleted",
             new_value=timezone.localtime(timezone.now()).isoformat(),
+            extra={
+                "equipment_name": str(instance.equipment_name or ""),
+                "log_timestamp": timezone.localtime(instance.timestamp).isoformat() if instance.timestamp else "",
+                "log_date": str(instance.timestamp.date()) if instance.timestamp else "",
+            },
         )
         super().perform_destroy(instance)
 
@@ -640,47 +657,90 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'], url_path='missing-slots')
     def missing_slots(self, request):
         date_str = (request.query_params.get("date") or "").strip()
+        date_from_str = (request.query_params.get("date_from") or "").strip()
+        date_to_str = (request.query_params.get("date_to") or "").strip()
         equipment_name_filter = (request.query_params.get("equipment_name") or "").strip()
-        if date_str:
-            try:
-                day = datetime.strptime(date_str[:10], "%Y-%m-%d").date()
-            except ValueError:
-                return Response({"error": "date must be YYYY-MM-DD"}, status=status.HTTP_400_BAD_REQUEST)
-        else:
-            day = timezone.localdate()
+        range_mode = bool(date_from_str or date_to_str)
 
-        day_start, day_end = get_slot_day_bounds(day)
-        slot_tz = get_slot_timezone()
-        base_qs = ChemicalPreparation.objects.filter(timestamp__gte=day_start, timestamp__lt=day_end)
-        if equipment_name_filter:
-            base_qs = base_qs.filter(equipment_name=equipment_name_filter)
-
-        suppressed_equipment_names = set(
-            ChemicalPreparation.objects.filter(
-                timestamp__gte=day_start,
-                timestamp__lt=day_end,
-                activity_type__in=["maintenance", "shutdown"],
-                status__in=["draft", "pending", "pending_secondary_approval"],
+        if range_mode and date_str:
+            return Response(
+                {"error": "Use either date or date_from/date_to, not both."},
+                status=status.HTTP_400_BAD_REQUEST,
             )
-            .exclude(equipment_name__isnull=True)
-            .exclude(equipment_name="")
-            .values_list("equipment_name", flat=True)
-            .distinct()
-        )
+
+        def parse_day(raw: str, field_name: str):
+            try:
+                return datetime.strptime(raw[:10], "%Y-%m-%d").date()
+            except ValueError:
+                raise ValidationError({"error": f"{field_name} must be YYYY-MM-DD"})
+
+        if range_mode:
+            if not (date_from_str and date_to_str):
+                return Response(
+                    {"error": "Both date_from and date_to are required for range mode."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            try:
+                day_from = parse_day(date_from_str, "date_from")
+                day_to = parse_day(date_to_str, "date_to")
+            except ValidationError as exc:
+                return Response(exc.detail, status=status.HTTP_400_BAD_REQUEST)
+            if day_from > day_to:
+                return Response(
+                    {"error": "date_from cannot be after date_to."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if (day_to - day_from).days > 366:
+                return Response(
+                    {"error": "Date range too large. Maximum span is 366 days."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            days = [day_from + timedelta(days=i) for i in range((day_to - day_from).days + 1)]
+        else:
+            if date_str:
+                try:
+                    day = parse_day(date_str, "date")
+                except ValidationError as exc:
+                    return Response(exc.detail, status=status.HTTP_400_BAD_REQUEST)
+            else:
+                day = timezone.localdate()
+            days = [day]
+
+        slot_tz = get_slot_timezone()
+        first_day_start, _ = get_slot_day_bounds(days[0])
+        _, last_day_end = get_slot_day_bounds(days[-1])
+        range_qs = ChemicalPreparation.objects.filter(timestamp__gte=first_day_start, timestamp__lt=last_day_end)
         if equipment_name_filter:
-            suppressed_equipment_names = {
-                equipment_name for equipment_name in suppressed_equipment_names if equipment_name == equipment_name_filter
-            }
+            range_qs = range_qs.filter(equipment_name=equipment_name_filter)
 
-        timestamps_by_equipment = defaultdict(list)
-        timestamps_qs = base_qs.exclude(activity_type__in=["maintenance", "shutdown"])
-        for row in timestamps_qs.values("equipment_name", "timestamp"):
+        timestamps_by_day_equipment = defaultdict(lambda: defaultdict(list))
+        daily_last_reading = {}
+        active_qs = range_qs.exclude(activity_type__in=["maintenance", "shutdown"])
+        for row in active_qs.values("equipment_name", "timestamp"):
             equipment_name = (row.get("equipment_name") or "").strip()
-            if not equipment_name:
+            ts = row.get("timestamp")
+            if not equipment_name or ts is None:
                 continue
-            timestamps_by_equipment[equipment_name].append(row.get("timestamp"))
+            day_key = timezone.localtime(ts, slot_tz).date().isoformat()
+            timestamps_by_day_equipment[day_key][equipment_name].append(ts)
+            prev = daily_last_reading.get((day_key, equipment_name))
+            if prev is None or ts > prev:
+                daily_last_reading[(day_key, equipment_name)] = ts
 
-        equipment_names = set(timestamps_by_equipment.keys())
+        suppressed_by_day = defaultdict(set)
+        suppressed_qs = range_qs.filter(
+            activity_type__in=["maintenance", "shutdown"],
+            status__in=["draft", "pending", "pending_secondary_approval"],
+        )
+        for row in suppressed_qs.values("equipment_name", "timestamp"):
+            equipment_name = (row.get("equipment_name") or "").strip()
+            ts = row.get("timestamp")
+            if not equipment_name or ts is None:
+                continue
+            day_key = timezone.localtime(ts, slot_tz).date().isoformat()
+            suppressed_by_day[day_key].add(equipment_name)
+
+        equipment_names = set()
         historical_names = set(
             ChemicalPreparation.objects.exclude(equipment_name__isnull=True)
             .exclude(equipment_name="")
@@ -688,84 +748,87 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
             .distinct()
         )
         equipment_names.update(historical_names)
+        for day_eq_map in timestamps_by_day_equipment.values():
+            equipment_names.update(day_eq_map.keys())
         if equipment_name_filter:
-            equipment_names.add(equipment_name_filter)
+            equipment_names = {equipment_name_filter}
 
-        equipments_payload = []
-        total_expected_slots = 0
-        total_present_slots = 0
-        total_missing_slots = 0
-        for equipment_name in sorted(equipment_names):
-            if not equipment_name_filter and equipment_name in suppressed_equipment_names:
-                continue
-            interval, shift_hours = get_interval_for_equipment(equipment_name, "chemical")
-            stats = compute_missing_slots_for_day(
-                day_value=day,
-                timestamps=timestamps_by_equipment.get(equipment_name, []),
-                interval=interval,
-                shift_duration_hours=shift_hours,
-                equipment_identifier=equipment_name,
-                log_type="chemical",
-            )
-            expected_count = stats["expected_slot_count"]
-            present_count = stats["present_slot_count"]
-            missing_count = stats["missing_slot_count"]
-            total_expected_slots += expected_count
-            total_present_slots += present_count
-            total_missing_slots += missing_count
-            missing_ranges = [
-                {
-                    "slot_start": timezone.localtime(slot["slot_start"], slot_tz).isoformat(),
-                    "slot_end": timezone.localtime(slot["slot_end"], slot_tz).isoformat(),
-                    "label": (
-                        f'{timezone.localtime(slot["slot_start"], slot_tz).strftime("%H:%M")}'
-                        f' - {timezone.localtime(slot["slot_end"], slot_tz).strftime("%H:%M")}'
-                    ),
-                }
-                for slot in stats["missing_slots"]
-            ]
-            last_reading_ts = (
-                ChemicalPreparation.objects.filter(
-                    equipment_name=equipment_name,
-                    timestamp__gte=day_start,
-                    timestamp__lt=day_end,
+        global_last_reading = {}
+        last_qs = ChemicalPreparation.objects.exclude(equipment_name__isnull=True).exclude(equipment_name="")
+        if equipment_name_filter:
+            last_qs = last_qs.filter(equipment_name=equipment_name_filter)
+        for row in last_qs.values("equipment_name", "timestamp").order_by("equipment_name", "-timestamp"):
+            equipment_name = row.get("equipment_name")
+            if equipment_name and equipment_name not in global_last_reading:
+                global_last_reading[equipment_name] = row.get("timestamp")
+
+        def build_day_payload(day_value):
+            day_key = day_value.isoformat()
+            equipments_payload = []
+            total_expected_slots = 0
+            total_present_slots = 0
+            total_missing_slots = 0
+            suppressed_for_day = suppressed_by_day.get(day_key, set())
+
+            for equipment_name in sorted(equipment_names):
+                if not equipment_name_filter and equipment_name in suppressed_for_day:
+                    continue
+                interval, shift_hours = get_interval_for_equipment(equipment_name, "chemical")
+                stats = compute_missing_slots_for_day(
+                    day_value=day_value,
+                    timestamps=timestamps_by_day_equipment.get(day_key, {}).get(equipment_name, []),
+                    interval=interval,
+                    shift_duration_hours=shift_hours,
+                    equipment_identifier=equipment_name,
+                    log_type="chemical",
                 )
-                .order_by("-timestamp")
-                .values_list("timestamp", flat=True)
-                .first()
-            )
-            if last_reading_ts is None:
-                last_reading_ts = (
-                    ChemicalPreparation.objects.filter(equipment_name=equipment_name)
-                    .order_by("-timestamp")
-                    .values_list("timestamp", flat=True)
-                    .first()
+                expected_count = stats["expected_slot_count"]
+                present_count = stats["present_slot_count"]
+                missing_count = stats["missing_slot_count"]
+                total_expected_slots += expected_count
+                total_present_slots += present_count
+                total_missing_slots += missing_count
+                missing_ranges = [
+                    {
+                        "slot_start": timezone.localtime(slot["slot_start"], slot_tz).isoformat(),
+                        "slot_end": timezone.localtime(slot["slot_end"], slot_tz).isoformat(),
+                        "label": (
+                            f'{timezone.localtime(slot["slot_start"], slot_tz).strftime("%H:%M")}'
+                            f' - {timezone.localtime(slot["slot_end"], slot_tz).strftime("%H:%M")}'
+                        ),
+                    }
+                    for slot in stats["missing_slots"]
+                ]
+                _, day_end = get_slot_day_bounds(day_value)
+                global_last = global_last_reading.get(equipment_name)
+                last_reading_ts = daily_last_reading.get((day_key, equipment_name))
+                if last_reading_ts is None and global_last is not None and global_last < day_end:
+                    last_reading_ts = global_last
+                equipments_payload.append(
+                    {
+                        "equipment_id": equipment_name.split(" – ")[0].strip() if " – " in equipment_name else equipment_name,
+                        "equipment_name": equipment_name,
+                        "interval": interval,
+                        "shift_duration_hours": shift_hours,
+                        "expected_slot_count": expected_count,
+                        "present_slot_count": present_count,
+                        "missing_slot_count": missing_count,
+                        "next_due": (
+                            timezone.localtime(stats["next_due"]).isoformat()
+                            if stats["next_due"] is not None
+                            else None
+                        ),
+                        "last_reading_timestamp": (
+                            timezone.localtime(last_reading_ts).isoformat()
+                            if last_reading_ts is not None
+                            else None
+                        ),
+                        "missing_slots": missing_ranges,
+                    }
                 )
-            equipments_payload.append(
-                {
-                    "equipment_id": equipment_name.split(" – ")[0].strip() if " – " in equipment_name else equipment_name,
-                    "equipment_name": equipment_name,
-                    "interval": interval,
-                    "shift_duration_hours": shift_hours,
-                    "expected_slot_count": expected_count,
-                    "present_slot_count": present_count,
-                    "missing_slot_count": missing_count,
-                    "next_due": (
-                        timezone.localtime(stats["next_due"]).isoformat()
-                        if stats["next_due"] is not None
-                        else None
-                    ),
-                    "last_reading_timestamp": (
-                        timezone.localtime(last_reading_ts).isoformat()
-                        if last_reading_ts is not None
-                        else None
-                    ),
-                    "missing_slots": missing_ranges,
-                }
-            )
-        return Response(
-            {
-                "date": day.isoformat(),
+
+            return {
+                "date": day_key,
                 "log_type": "chemical",
                 "total_expected_slots": total_expected_slots,
                 "total_present_slots": total_present_slots,
@@ -774,7 +837,40 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
                 "affected_equipment_count": len([e for e in equipments_payload if e["missing_slot_count"] > 0]),
                 "equipments": equipments_payload,
             }
+
+        day_payloads = [build_day_payload(day_item) for day_item in days]
+        if not range_mode:
+            payload = day_payloads[0]
+            save_missing_slots_snapshot(
+                user=request.user,
+                log_type="chemical",
+                date_from=days[0],
+                date_to=days[0],
+                payload=payload,
+                filters={"equipment_name": equipment_name_filter or ""},
+            )
+            return Response(payload)
+
+        payload = {
+            "log_type": "chemical",
+            "date_from": days[0].isoformat(),
+            "date_to": days[-1].isoformat(),
+            "day_count": len(day_payloads),
+            "days": day_payloads,
+            "total_expected_slots": sum(day_payload["total_expected_slots"] for day_payload in day_payloads),
+            "total_present_slots": sum(day_payload["total_present_slots"] for day_payload in day_payloads),
+            "total_missing_slots": sum(day_payload["total_missing_slots"] for day_payload in day_payloads),
+            "affected_day_count": sum(1 for day_payload in day_payloads if day_payload["total_missing_slots"] > 0),
+        }
+        save_missing_slots_snapshot(
+            user=request.user,
+            log_type="chemical",
+            date_from=days[0],
+            date_to=days[-1],
+            payload=payload,
+            filters={"equipment_name": equipment_name_filter or ""},
         )
+        return Response(payload)
 
     def partial_update(self, request, *args, **kwargs):
         """
@@ -1205,26 +1301,16 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
     def approve(self, request, pk=None):
         """Approve or reject a chemical preparation. Handles primary, secondary approval (after correction), and reject."""
         prep = self.get_object()
-        action_type = request.data.get('action', 'approve')
+        action_type = normalize_approval_action(request.data.get('action'))
         remarks = (request.data.get('remarks') or '').strip()
-        
-        if action_type == 'reject' and not remarks:
-            raise ValidationError({'remarks': ['Comment is required when rejecting.']})
+        require_rejection_comment(action_type, remarks)
         
         if action_type == 'approve':
             # Primary/secondary approver must be different from the operator (Log Book Done By)
-            if prep.operator_id and prep.operator_id == request.user.id:
-                return Response(
-                    {'error': 'The log book entry must be approved by a different user than the operator (Log Book Done By).'},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
+            ensure_not_operator(prep.operator_id, request.user.id, "approved")
             if prep.status == 'pending_secondary_approval':
                 # Secondary approval must be done by a different person than who rejected
-                if prep.approved_by_id and prep.approved_by_id == request.user.id:
-                    return Response(
-                        {'error': 'A different person must perform secondary approval. The person who rejected cannot approve the corrected entry.'},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
+                ensure_secondary_approver_diff(prep.approved_by_id, request.user.id)
                 prep.status = 'approved'
                 prep.secondary_approved_by = request.user
                 from django.utils import timezone
@@ -1232,22 +1318,11 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
             elif prep.status in ('pending', 'draft'):
                 prep.status = 'approved'
             else:
-                return Response(
-                    {'error': 'Only pending, draft, or pending secondary approval entries can be approved.'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+                ensure_status_allowed(prep.status, ('pending', 'draft', 'pending_secondary_approval'), 'approve')
         elif action_type == 'reject':
             # Rejector must be different from the operator (Log Book Done By)
-            if prep.operator_id and prep.operator_id == request.user.id:
-                return Response(
-                    {'error': 'The log book entry must be rejected by a different user than the operator (Log Book Done By).'},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            if prep.status not in ('pending', 'draft', 'pending_secondary_approval'):
-                return Response(
-                    {'error': 'Only pending, draft, or pending secondary approval entries can be rejected.'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+            ensure_not_operator(prep.operator_id, request.user.id, "rejected")
+            ensure_status_allowed(prep.status, ('pending', 'draft', 'pending_secondary_approval'), 'reject')
             previous_status = prep.status
             prep.status = 'rejected'
             prep.secondary_approved_by = None
@@ -1261,12 +1336,6 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
                 old_value=previous_status,
                 new_value="rejected",
             )
-        else:
-            return Response(
-                {'error': 'Invalid action. Use "approve" or "reject".'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
         from django.utils import timezone
         if action_type == 'reject' or (action_type == 'approve' and prep.status == 'approved'):
             prep.approved_by = request.user

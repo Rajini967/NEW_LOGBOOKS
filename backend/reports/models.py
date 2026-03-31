@@ -88,6 +88,7 @@ class AuditEvent(models.Model):
         ("password_changed", "Password Changed"),
         ("user_locked", "User Locked"),
         ("user_unlocked", "User Unlocked"),
+        ("missing_slots_snapshot", "Missing Slots"),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -113,6 +114,40 @@ class AuditEvent(models.Model):
 
     def __str__(self) -> str:  # pragma: no cover - trivial
         return f"{self.event_type} on {self.object_type}:{self.object_id or ''}"
+
+
+class MissingSlotsSnapshot(models.Model):
+    """
+    Persisted snapshot of missing-slot report payloads for audit traceability.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    log_type = models.CharField(max_length=32, db_index=True)
+    date_from = models.DateField(db_index=True)
+    date_to = models.DateField(db_index=True)
+    day_count = models.PositiveIntegerField(default=1)
+    total_missing_slots = models.PositiveIntegerField(default=0)
+    payload = models.JSONField()
+    filters = models.JSONField(blank=True, null=True)
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="missing_slots_snapshots",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "missing_slots_snapshots"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["log_type", "date_from", "date_to"]),
+            models.Index(fields=["created_at"]),
+        ]
+
+    def __str__(self) -> str:  # pragma: no cover - trivial
+        return f"{self.log_type} missing slots {self.date_from}..{self.date_to}"
 
 
 class ManualChillerConsumption(models.Model):

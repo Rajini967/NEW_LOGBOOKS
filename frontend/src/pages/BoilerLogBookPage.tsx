@@ -21,9 +21,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useAuth } from "@/contexts/AuthContext";
-import { format } from "date-fns";
-import { toast } from "sonner";
+import { format, subDays } from "date-fns";
+import { toast } from "@/lib/toast";
 import { boilerLogAPI, briquetteLogAPI, equipmentAPI, equipmentCategoryAPI } from "@/lib/api";
+import type { MissingSlotsEquipment, MissingSlotsRangeResponse, MissingSlotsResponse } from "@/lib/api/types";
 import { cn } from "@/lib/utils";
 import { firstRequiredFieldError } from "@/lib/requiredFields";
 import { Link } from "react-router-dom";
@@ -42,11 +43,20 @@ import {
 import { EntryIntervalBadge } from "@/components/logbook/EntryIntervalBadge";
 import { MissedReadingPopup } from "@/components/logbook/MissedReadingPopup";
 import {
-  getTotalMissingSlots,
   type EquipmentMissInfo,
 } from "@/lib/missed-reading";
 import { MaintenanceTimingsSection } from "@/components/logbook/MaintenanceTimingsSection";
 import type { MaintenanceTimingsValue } from "@/types/maintenance-timings";
+import {
+  type BoilerLikeLog,
+  mapBoilerLogPayload,
+  mapBoilerPreviousReadingPayload,
+  mapBriquetteLogPayload,
+} from "@/lib/logbookPayloadMappers";
+import {
+  useBoilerAndBriquetteLogsQuery,
+  useBoilerAndBriquetteMissingSlotsQuery,
+} from "@/hooks/useLogbookQueries";
 
 const boilerLimits = {
   feedWaterTemp: { min: 50, unit: "°C", type: "NLT" as const },
@@ -184,9 +194,16 @@ const BoilerLogBookPage: React.FC = () => {
   const [showMissedReadingPopup, setShowMissedReadingPopup] = useState(false);
   const [missedReadingNextDue, setMissedReadingNextDue] = useState<Date | null>(null);
   const [missedEquipments, setMissedEquipments] = useState<EquipmentMissInfo[] | null>(null);
+  const [missingRangeFrom, setMissingRangeFrom] = useState(format(subDays(new Date(), 30), "yyyy-MM-dd"));
+  const [missingRangeTo, setMissingRangeTo] = useState(format(new Date(), "yyyy-MM-dd"));
+  const [missingRangeLoading, setMissingRangeLoading] = useState(false);
+  const [missingRangeRefreshKey, setMissingRangeRefreshKey] = useState(0);
+  const [missingRangeTotalSlots, setMissingRangeTotalSlots] = useState<number>(0);
+  const [missingRangeGroups, setMissingRangeGroups] = useState<
+    { date: string; totalMissingSlots: number; equipmentList: EquipmentMissInfo[] }[]
+  >([]);
   const [missingRefreshKey, setMissingRefreshKey] = useState(0);
   const [filteredLogs, setFilteredLogs] = useState<BoilerLog[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [approveConfirmOpen, setApproveConfirmOpen] = useState(false);
@@ -359,6 +376,17 @@ const BoilerLogBookPage: React.FC = () => {
     fromTime: "",
     toTime: "",
   });
+  const selectedDate = filters.fromDate || format(new Date(), "yyyy-MM-dd");
+  const { boiler, briquette } = useBoilerAndBriquetteLogsQuery();
+  const { boilerMissing, briquetteMissing } = useBoilerAndBriquetteMissingSlotsQuery(
+    selectedDate,
+    missingRefreshKey,
+  );
+  const isLoading =
+    boiler.isLoading ||
+    briquette.isLoading ||
+    boiler.isFetching ||
+    briquette.isFetching;
 
   useEffect(() => {
     (async () => {
@@ -390,131 +418,17 @@ const BoilerLogBookPage: React.FC = () => {
 
   const refreshLogs = async () => {
     try {
-      setIsLoading(true);
-      const boilerLogs = await boilerLogAPI.list().catch((err) => {
-        console.error("Error fetching boiler logs:", err);
-        return [];
-      });
-      const briquetteLogs = await briquetteLogAPI.list().catch((err) => {
-        console.error("Error fetching briquette logs:", err);
-        return [];
-      });
+      const [boilerResult, briquetteResult] = await Promise.all([
+        boiler.refetch(),
+        briquette.refetch(),
+      ]);
+      const boilerLogs = boilerResult.data ?? [];
+      const briquetteLogs = briquetteResult.data ?? [];
 
-      const allLogs: BoilerLog[] = [];
-      boilerLogs.forEach((log: any) => {
-        const timestamp = new Date(log.timestamp);
-        allLogs.push({
-          id: log.id,
-          equipmentType: "boiler",
-          equipmentId: log.equipment_id,
-          date: format(timestamp, "yyyy-MM-dd"),
-          time: format(timestamp, "HH:mm:ss"),
-          feedWaterTemp: log.feed_water_temp,
-          oilTemp: log.oil_temp,
-          steamTemp: log.steam_temp,
-          steamPressure: log.steam_pressure,
-          steamFlowLPH: log.steam_flow_lph ?? undefined,
-          foHsdNgDayTankLevel: log.fo_hsd_ng_day_tank_level ?? undefined,
-          feedWaterTankLevel: log.feed_water_tank_level ?? undefined,
-          foPreHeaterTemp: log.fo_pre_heater_temp ?? undefined,
-          burnerOilPressure: log.burner_oil_pressure ?? undefined,
-          burnerHeaterTemp: log.burner_heater_temp ?? undefined,
-          boilerSteamPressure: log.boiler_steam_pressure ?? undefined,
-          stackTemperature: log.stack_temperature ?? undefined,
-          steamPressureAfterPrv: log.steam_pressure_after_prv ?? undefined,
-          feedWaterHardnessPpm: log.feed_water_hardness_ppm ?? undefined,
-          feedWaterTdsPpm: log.feed_water_tds_ppm ?? undefined,
-          foHsdNgConsumption: log.fo_hsd_ng_consumption ?? undefined,
-          mobreyFunctioning: log.mobrey_functioning ?? undefined,
-          manualBlowdownTime: log.manual_blowdown_time ?? undefined,
-          dieselStockLiters: log.diesel_stock_liters ?? undefined,
-          dieselCostRupees: log.diesel_cost_rupees ?? undefined,
-          furnaceOilStockLiters: log.furnace_oil_stock_liters ?? undefined,
-          furnaceOilCostRupees: log.furnace_oil_cost_rupees ?? undefined,
-          brigadeStockKg: log.brigade_stock_kg ?? undefined,
-          brigadeCostRupees: log.brigade_cost_rupees ?? undefined,
-          dailyPowerConsumptionKwh: log.daily_power_consumption_kwh ?? undefined,
-          dailyWaterConsumptionLiters: log.daily_water_consumption_liters ?? undefined,
-          dailyChemicalConsumptionKg: log.daily_chemical_consumption_kg ?? undefined,
-          dailyDieselConsumptionLiters: log.daily_diesel_consumption_liters ?? undefined,
-          dailyFurnaceOilConsumptionLiters: log.daily_furnace_oil_consumption_liters ?? undefined,
-          dailyBrigadeConsumptionKg: log.daily_brigade_consumption_kg ?? undefined,
-          steamConsumptionKgHr: log.steam_consumption_kg_hr ?? undefined,
-          remarks: log.remarks || "",
-          comment: log.comment || "",
-          checkedBy: log.operator_name,
-          approvedBy: log.status === "approved" ? (log.approved_by_name || "") : "",
-          rejectedBy:
-            log.status === "rejected" || log.status === "pending_secondary_approval"
-              ? (log.approved_by_name || "")
-              : "",
-          timestamp,
-          status: log.status as BoilerLog["status"],
-          operator_id: log.operator_id,
-          approved_by_id: log.approved_by_id,
-          corrects_id: log.corrects_id,
-          has_corrections: log.has_corrections,
-          tolerance_status: log.tolerance_status as BoilerLog["tolerance_status"],
-          activity_type: log.activity_type,
-          activity_from_date: log.activity_from_date,
-          activity_to_date: log.activity_to_date,
-          activity_from_time: log.activity_from_time,
-          activity_to_time: log.activity_to_time,
-        });
-      });
-
-      briquetteLogs.forEach((log: any) => {
-        const timestamp = new Date(log.timestamp);
-        allLogs.push({
-          id: log.id,
-          equipmentType: "briquette",
-          equipmentId: log.equipment_id,
-          date: format(timestamp, "yyyy-MM-dd"),
-          time: format(timestamp, "HH:mm:ss"),
-          remarks: log.remarks || "",
-          comment: log.comment || "",
-          checkedBy: log.operator_name,
-          approvedBy: log.status === "approved" ? (log.approved_by_name || "") : "",
-          rejectedBy:
-            log.status === "rejected" || log.status === "pending_secondary_approval"
-              ? (log.approved_by_name || "")
-              : "",
-          timestamp,
-          status: log.status as BoilerLog["status"],
-          operator_id: log.operator_id,
-          approved_by_id: log.approved_by_id,
-          corrects_id: log.corrects_id,
-          has_corrections: log.has_corrections,
-          tolerance_status: log.tolerance_status as BoilerLog["tolerance_status"],
-          activity_type: log.activity_type,
-          activity_from_date: log.activity_from_date,
-          activity_to_date: log.activity_to_date,
-          activity_from_time: log.activity_from_time,
-          activity_to_time: log.activity_to_time,
-          steamPressure: log.steam_pressure ?? undefined,
-          furnacePressureMmwc: log.furnace_pressure_mmwc ?? undefined,
-          idFanOpPercent: log.id_fan_op_percent ?? undefined,
-          paDamperPosition1: log.pa_damper_position_1 ?? undefined,
-          paDamperPosition2: log.pa_damper_position_2 ?? undefined,
-          meteringScrewPercent: log.metering_screw_percent ?? undefined,
-          steamReadingTon: log.steam_reading_ton ?? undefined,
-          steamFlowKgHr: log.steam_flow_kg_hr ?? undefined,
-          stackTemp: log.stack_temp ?? undefined,
-          furnaceTemp: log.furnace_temp ?? undefined,
-          hotAirTemp: log.hot_air_temp ?? "",
-          feedPump12: log.feed_pump_1_2 ?? "",
-          operatorSignDate: log.operator_sign_date ?? "",
-          verifiedSignDate: log.verified_sign_date ?? "",
-          feedWaterPh: log.feed_water_ph ?? undefined,
-          feedWaterHardnessPpm: log.feed_water_hardness_ppm ?? undefined,
-          feedWaterTdsPpm: log.feed_water_tds_ppm ?? undefined,
-          boilerWaterPh: log.boiler_water_ph ?? undefined,
-          boilerWaterHardnessPpm: log.boiler_water_hardness_ppm ?? undefined,
-          boilerWaterTdsPpm: log.boiler_water_tds_ppm ?? undefined,
-          totalSteamIn1Day: log.total_steam_in_1_day ?? "",
-          totalSteamFlowRatio: log.total_steam_flow_ratio ?? "",
-        });
-      });
+      const allLogs: BoilerLog[] = [
+        ...boilerLogs.map((log: BoilerLikeLog) => mapBoilerLogPayload(log)),
+        ...briquetteLogs.map((log: BoilerLikeLog) => mapBriquetteLogPayload(log)),
+      ];
 
       allLogs.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
       setLogs(allLogs);
@@ -523,8 +437,6 @@ const BoilerLogBookPage: React.FC = () => {
     } catch (error) {
       console.error("Error refreshing boiler logs:", error);
       toast.error("Failed to refresh boiler log entries");
-    } finally {
-      setIsLoading(false);
     }
   };
 
@@ -546,41 +458,10 @@ const BoilerLogBookPage: React.FC = () => {
     listApi({ equipment_id: formData.equipmentId })
       .then((raw: any[]) => {
         if (cancelled) return;
-        const list: BoilerLog[] = raw.slice(0, 10).map((log: any) => {
-          const timestamp = new Date(log.timestamp);
-          return {
-            id: log.id,
-            equipmentId: log.equipment_id,
-            date: format(timestamp, "yyyy-MM-dd"),
-            time: format(timestamp, "HH:mm:ss"),
-            feedWaterTemp: log.feed_water_temp,
-            oilTemp: log.oil_temp,
-            steamTemp: log.steam_temp,
-            steamPressure: log.steam_pressure,
-            steamFlowLPH: log.steam_flow_lph,
-            remarks: log.remarks || "",
-            comment: log.comment,
-            checkedBy: log.operator_name,
-            approvedBy: log.status === "approved" ? (log.approved_by_name || "") : "",
-            rejectedBy:
-              log.status === "rejected" || log.status === "pending_secondary_approval"
-                ? (log.approved_by_name || "")
-                : "",
-            timestamp,
-            status: log.status,
-            operator_id: log.operator_id,
-            approved_by_id: log.approved_by_id,
-            corrects_id: log.corrects_id,
-            has_corrections: log.has_corrections,
-            equipmentType:
-              formData.equipmentType === "briquette" ? "briquette" : "boiler",
-            activity_type: log.activity_type,
-            activity_from_date: log.activity_from_date,
-            activity_to_date: log.activity_to_date,
-            activity_from_time: log.activity_from_time,
-            activity_to_time: log.activity_to_time,
-          } as BoilerLog;
-        });
+        const currentType = formData.equipmentType === "briquette" ? "briquette" : "boiler";
+        const list: BoilerLog[] = raw
+          .slice(0, 10)
+          .map((log: BoilerLikeLog) => mapBoilerPreviousReadingPayload(log, currentType));
         setPreviousReadingsForEquipment(list);
       })
       .catch(() => {
@@ -595,13 +476,16 @@ const BoilerLogBookPage: React.FC = () => {
   }, [formData.equipmentId, formData.equipmentType]);
 
   useEffect(() => {
-    const selectedDate = filters.fromDate || format(new Date(), "yyyy-MM-dd");
-    Promise.all([
-      boilerLogAPI.missingSlots({ date: selectedDate }),
-      briquetteLogAPI.missingSlots({ date: selectedDate }),
-    ])
-      .then(([boilerPayload, briquettePayload]) => {
-        const boilerMissed: EquipmentMissInfo[] = (boilerPayload?.equipments || [])
+    if (!boilerMissing.data && !briquetteMissing.data) return;
+    if (boilerMissing.error || briquetteMissing.error) {
+      setMissedEquipments(null);
+      setShowMissedReadingPopup(false);
+      setMissedReadingNextDue(null);
+      return;
+    }
+    const boilerPayload = boilerMissing.data;
+    const briquettePayload = briquetteMissing.data;
+    const boilerMissed: EquipmentMissInfo[] = (boilerPayload?.equipments || [])
           .filter((eq) => (eq.missing_slot_count || 0) > 0)
           .map((eq) => ({
             equipmentTypeLabel: "Boiler",
@@ -621,7 +505,7 @@ const BoilerLogBookPage: React.FC = () => {
               label: slot.label,
             })),
           }));
-        const briquetteMissed: EquipmentMissInfo[] = (briquettePayload?.equipments || [])
+    const briquetteMissed: EquipmentMissInfo[] = (briquettePayload?.equipments || [])
           .filter((eq) => (eq.missing_slot_count || 0) > 0)
           .map((eq) => ({
             equipmentTypeLabel: "Briquette",
@@ -641,27 +525,87 @@ const BoilerLogBookPage: React.FC = () => {
               label: slot.label,
             })),
           }));
-        const missedOnly: EquipmentMissInfo[] = [...boilerMissed, ...briquetteMissed];
-        if (missedOnly.length > 0) {
-          setMissedEquipments(missedOnly);
-          const firstNext =
-            missedOnly
-              .map((m) => m.nextDue)
-              .filter((d): d is Date => !!d)
-              .sort((a, b) => a.getTime() - b.getTime())[0] || null;
-          setMissedReadingNextDue(firstNext);
-          return;
-        }
-        setMissedEquipments(null);
-        setShowMissedReadingPopup(false);
-        setMissedReadingNextDue(null);
+    const missedOnly: EquipmentMissInfo[] = [...boilerMissed, ...briquetteMissed];
+    if (missedOnly.length > 0) {
+      setMissedEquipments(missedOnly);
+      const firstNext =
+        missedOnly
+          .map((m) => m.nextDue)
+          .filter((d): d is Date => !!d)
+          .sort((a, b) => a.getTime() - b.getTime())[0] || null;
+      setMissedReadingNextDue(firstNext);
+      return;
+    }
+    setMissedEquipments(null);
+    setShowMissedReadingPopup(false);
+    setMissedReadingNextDue(null);
+  }, [boilerMissing.data, briquetteMissing.data, boilerMissing.error, briquetteMissing.error]);
+
+  useEffect(() => {
+    if (!showMissedReadingPopup) return;
+    if (!missingRangeFrom || !missingRangeTo) return;
+    if (missingRangeFrom > missingRangeTo) {
+      setMissingRangeGroups([]);
+      setMissingRangeTotalSlots(0);
+      return;
+    }
+
+    const mapEquipment = (eq: MissingSlotsEquipment): EquipmentMissInfo => ({
+      equipmentTypeLabel: "Boiler",
+      equipmentId: eq.equipment_id,
+      equipmentName: eq.equipment_name,
+      lastTimestamp: eq.last_reading_timestamp ? new Date(eq.last_reading_timestamp) : null,
+      nextDue: eq.next_due ? new Date(eq.next_due) : null,
+      isMissed: (eq.missing_slot_count || 0) > 0,
+      interval: eq.interval,
+      shiftHours: eq.shift_duration_hours || 8,
+      expectedSlotCount: eq.expected_slot_count,
+      presentSlotCount: eq.present_slot_count,
+      missingSlotCount: eq.missing_slot_count,
+      missingSlotRanges: (eq.missing_slots || []).map((slot) => ({
+        slotStart: new Date(slot.slot_start),
+        slotEnd: new Date(slot.slot_end),
+        label: slot.label,
+      })),
+    });
+
+    setMissingRangeLoading(true);
+    boilerLogAPI
+      .missingSlots({ date_from: missingRangeFrom, date_to: missingRangeTo })
+      .then((payload) => {
+        const totalMissingSlots =
+          payload && typeof payload === "object" && "days" in payload
+            ? (payload as MissingSlotsRangeResponse).total_missing_slots || 0
+            : (payload as MissingSlotsResponse)?.total_missing_slots || 0;
+        const groups =
+          payload && typeof payload === "object" && "days" in payload
+            ? (payload as MissingSlotsRangeResponse).days
+                .map((day) => ({
+                  date: day.date,
+                  totalMissingSlots: day.total_missing_slots || 0,
+                  equipmentList: (day.equipments || [])
+                    .filter((eq) => (eq.missing_slot_count || 0) > 0)
+                    .map(mapEquipment),
+                }))
+                .filter((group) => group.equipmentList.length > 0)
+            : (() => {
+                const single = payload as MissingSlotsResponse;
+                const equipmentList = (single?.equipments || [])
+                  .filter((eq) => (eq.missing_slot_count || 0) > 0)
+                  .map(mapEquipment);
+                return equipmentList.length
+                  ? [{ date: single.date, totalMissingSlots: single.total_missing_slots || 0, equipmentList }]
+                  : [];
+              })();
+        setMissingRangeTotalSlots(totalMissingSlots);
+        setMissingRangeGroups(groups);
       })
       .catch(() => {
-        setMissedEquipments(null);
-        setShowMissedReadingPopup(false);
-        setMissedReadingNextDue(null);
-      });
-  }, [filters.fromDate, missingRefreshKey]);
+        setMissingRangeTotalSlots(0);
+        setMissingRangeGroups([]);
+      })
+      .finally(() => setMissingRangeLoading(false));
+  }, [showMissedReadingPopup, missingRangeFrom, missingRangeTo, missingRangeRefreshKey]);
 
   useEffect(() => {
     if (!isDialogOpen || !!editingLogId) return;
@@ -686,7 +630,6 @@ const BoilerLogBookPage: React.FC = () => {
 
   const hasMissedReadings =
     !!missedReadingNextDue || (missedEquipments?.length ?? 0) > 0;
-  const missedReadingsCount = getTotalMissingSlots(missedEquipments);
 
   const uniqueCheckedBy = useMemo(() => {
     if (!logs.length) return [];
@@ -1446,6 +1389,14 @@ const BoilerLogBookPage: React.FC = () => {
           logTypeLabel="Boiler"
           nextDue={missedReadingNextDue}
           equipmentList={missedEquipments ?? undefined}
+          isRangeLoading={missingRangeLoading}
+          dateFrom={missingRangeFrom}
+          dateTo={missingRangeTo}
+          onDateFromChange={setMissingRangeFrom}
+          onDateToChange={setMissingRangeTo}
+          onApplyRange={() => setMissingRangeRefreshKey((prev) => prev + 1)}
+          dayGroups={missingRangeGroups}
+          totalMissingSlotsInRange={missingRangeTotalSlots}
         />
       )}
       <main className="p-4 space-y-4">
@@ -1480,11 +1431,6 @@ const BoilerLogBookPage: React.FC = () => {
             >
               <Clock className="w-4 h-4 mr-2" />
               Missing Readings
-              {missedReadingsCount > 0 && (
-                <span className="ml-2 px-1.5 py-0.5 text-xs font-semibold bg-primary text-primary-foreground rounded-full">
-                  {missedReadingsCount}
-                </span>
-              )}
             </Button>
             {/* Filter Button - dialog like Chiller */}
             <Dialog open={isFilterOpen} onOpenChange={setIsFilterOpen}>

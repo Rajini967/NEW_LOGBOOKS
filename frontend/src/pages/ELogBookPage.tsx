@@ -34,19 +34,28 @@ import {
 import { Link } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { Plus, Thermometer, Gauge, Droplets, Zap, Package, Save, Clock, Trash2, Filter, X, CheckCircle, XCircle, Edit, History, Eye } from 'lucide-react';
-import { format } from 'date-fns';
-import { toast } from 'sonner';
+import { format, subDays } from 'date-fns';
+import { toast } from '@/lib/toast';
 import { logbookAPI, chemicalPrepAPI, chillerLogAPI, boilerLogAPI, compressorLogAPI, chemicalMasterAPI, equipmentAPI, equipmentCategoryAPI, filterLogAPI } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import {
+  decodeFanTriple,
+  decodePumpPair,
+  encodeFanTriple,
+  encodePumpPair,
+  formatBlowdownInputValue,
+  parseBlowdownToMinutes,
+  type PumpStatus,
+} from '@/lib/elogbookMappers';
 import { LogbookSchema } from '@/types/logbook-config';
 import { FieldWithValidation } from '@/components/logbook/FieldWithValidation';
 import { EntryIntervalBadge } from '@/components/logbook/EntryIntervalBadge';
 import { MissedReadingPopup } from '@/components/logbook/MissedReadingPopup';
 import { MaintenanceTimingsSection } from "@/components/logbook/MaintenanceTimingsSection";
 import {
-  getTotalMissingSlots,
   type EquipmentMissInfo,
 } from '@/lib/missed-reading';
+import type { MissingSlotsEquipment, MissingSlotsRangeResponse, MissingSlotsResponse } from '@/lib/api/types';
 import type { MaintenanceTimingsValue } from "@/types/maintenance-timings";
 
 interface ELogBook {
@@ -127,63 +136,6 @@ interface ELogBook {
 }
 
 const CREATOR_ONLY_REJECTED_EDIT_MESSAGE = "Only the original creator can edit/correct a rejected entry.";
-
-type PumpStatus = 'ON' | 'OFF';
-
-const encodePumpPair = (p1: PumpStatus, p2: PumpStatus) => `P1:${p1};P2:${p2}`;
-
-const decodePumpPair = (
-  value?: string | null,
-): { p1: PumpStatus; p2: PumpStatus } | null => {
-  if (!value) return null;
-  const match = value.match(/P1:(ON|OFF);P2:(ON|OFF)/i);
-  if (!match) return null;
-  return {
-    p1: match[1].toUpperCase() as PumpStatus,
-    p2: match[2].toUpperCase() as PumpStatus,
-  };
-};
-
-const encodeFanTriple = (f1: PumpStatus, f2: PumpStatus, f3: PumpStatus) =>
-  `F1:${f1};F2:${f2};F3:${f3}`;
-
-const decodeFanTriple = (
-  value?: string | null,
-): { f1: PumpStatus; f2: PumpStatus; f3: PumpStatus } | null => {
-  if (!value) return null;
-  const match = value.match(/F1:(ON|OFF);F2:(ON|OFF);F3:(ON|OFF)/i);
-  if (!match) return null;
-  return {
-    f1: match[1].toUpperCase() as PumpStatus,
-    f2: match[2].toUpperCase() as PumpStatus,
-    f3: match[3].toUpperCase() as PumpStatus,
-  };
-};
-
-const formatBlowdownInputValue = (minutes?: number | null): string => {
-  if (minutes == null || Number.isNaN(minutes)) return "";
-  const totalSeconds = Math.max(0, Math.round(Number(minutes) * 60));
-  const hh = Math.floor(totalSeconds / 3600);
-  const mm = Math.floor((totalSeconds % 3600) / 60);
-  const ss = totalSeconds % 60;
-  return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
-};
-
-const parseBlowdownToMinutes = (raw: string): number | null | "invalid" => {
-  const value = (raw || "").trim();
-  if (!value) return null;
-  if (value.toUpperCase() === "N/A") return null;
-  const timeMatch = value.match(/^(\d{1,2}):([0-5]\d):([0-5]\d)$/);
-  if (timeMatch) {
-    const hh = Number(timeMatch[1]);
-    const mm = Number(timeMatch[2]);
-    const ss = Number(timeMatch[3]);
-    return (hh * 3600 + mm * 60 + ss) / 60;
-  }
-  const asNumber = Number(value);
-  if (!Number.isNaN(asNumber) && asNumber >= 0) return asNumber;
-  return "invalid";
-};
 
 // Equipment limits based on the example documents
 const equipmentLimits = {
@@ -384,6 +336,14 @@ export default function ELogBookPage() {
   const [showMissedReadingPopup, setShowMissedReadingPopup] = useState(false);
   const [missedReadingNextDue, setMissedReadingNextDue] = useState<Date | null>(null);
   const [missedEquipments, setMissedEquipments] = useState<EquipmentMissInfo[] | null>(null);
+  const [missingRangeFrom, setMissingRangeFrom] = useState(format(subDays(new Date(), 30), 'yyyy-MM-dd'));
+  const [missingRangeTo, setMissingRangeTo] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [missingRangeLoading, setMissingRangeLoading] = useState(false);
+  const [missingRangeRefreshKey, setMissingRangeRefreshKey] = useState(0);
+  const [missingRangeTotalSlots, setMissingRangeTotalSlots] = useState<number>(0);
+  const [missingRangeGroups, setMissingRangeGroups] = useState<
+    { date: string; totalMissingSlots: number; equipmentList: EquipmentMissInfo[] }[]
+  >([]);
   const [missingRefreshKey, setMissingRefreshKey] = useState(0);
   const [selectedLogId, setSelectedLogId] = useState<string | null>(null);
   const [selectedLogIds, setSelectedLogIds] = useState<string[]>([]);
@@ -629,6 +589,71 @@ export default function ELogBookPage() {
   }, [filters.fromDate, missingRefreshKey]);
 
   useEffect(() => {
+    if (!showMissedReadingPopup) return;
+    if (!missingRangeFrom || !missingRangeTo) return;
+    if (missingRangeFrom > missingRangeTo) {
+      setMissingRangeGroups([]);
+      setMissingRangeTotalSlots(0);
+      return;
+    }
+
+    const mapEquipment = (eq: MissingSlotsEquipment): EquipmentMissInfo => ({
+      equipmentId: eq.equipment_id,
+      equipmentName: eq.equipment_name,
+      lastTimestamp: eq.last_reading_timestamp ? new Date(eq.last_reading_timestamp) : null,
+      nextDue: eq.next_due ? new Date(eq.next_due) : null,
+      isMissed: (eq.missing_slot_count || 0) > 0,
+      interval: eq.interval,
+      shiftHours: eq.shift_duration_hours || 8,
+      expectedSlotCount: eq.expected_slot_count,
+      presentSlotCount: eq.present_slot_count,
+      missingSlotCount: eq.missing_slot_count,
+      missingSlotRanges: (eq.missing_slots || []).map((slot) => ({
+        slotStart: new Date(slot.slot_start),
+        slotEnd: new Date(slot.slot_end),
+        label: slot.label,
+      })),
+    });
+
+    setMissingRangeLoading(true);
+    chillerLogAPI
+      .missingSlots({ date_from: missingRangeFrom, date_to: missingRangeTo })
+      .then((payload) => {
+        const totalMissingSlots =
+          payload && typeof payload === 'object' && 'days' in payload
+            ? (payload as MissingSlotsRangeResponse).total_missing_slots || 0
+            : (payload as MissingSlotsResponse)?.total_missing_slots || 0;
+        const groups =
+          payload && typeof payload === 'object' && 'days' in payload
+            ? (payload as MissingSlotsRangeResponse).days
+                .map((day) => ({
+                  date: day.date,
+                  totalMissingSlots: day.total_missing_slots || 0,
+                  equipmentList: (day.equipments || [])
+                    .filter((eq) => (eq.missing_slot_count || 0) > 0)
+                    .map(mapEquipment),
+                }))
+                .filter((group) => group.equipmentList.length > 0)
+            : (() => {
+                const single = payload as MissingSlotsResponse;
+                const equipmentList = (single?.equipments || [])
+                  .filter((eq) => (eq.missing_slot_count || 0) > 0)
+                  .map(mapEquipment);
+                return equipmentList.length
+                  ? [{ date: single.date, totalMissingSlots: single.total_missing_slots || 0, equipmentList }]
+                  : [];
+              })();
+        setMissingRangeTotalSlots(totalMissingSlots);
+        setMissingRangeGroups(groups);
+      })
+      .catch(() => {
+        setMissingRangeTotalSlots(0);
+        setMissingRangeGroups([]);
+      })
+      .finally(() => setMissingRangeLoading(false));
+  }, [showMissedReadingPopup, missingRangeFrom, missingRangeTo, missingRangeRefreshKey]);
+
+  useEffect(() => {
     if (!isDialogOpen || !!editingLogId) return;
     if (!formData.equipmentId) return;
     if (entryLogInterval !== '' || entryShiftDurationHours !== '' || entryToleranceMinutes !== '') return;
@@ -650,7 +675,6 @@ export default function ELogBookPage() {
   ]);
 
   const hasMissedReadings = !!missedReadingNextDue || (missedEquipments?.length ?? 0) > 0;
-  const missedReadingsCount = getTotalMissingSlots(missedEquipments);
 
   // Refresh logs from API
   const refreshLogs = async () => {
@@ -679,8 +703,6 @@ export default function ELogBookPage() {
         }),
       ]);
       
-      console.log('Refreshed log data:', { chillerLogs, boilerLogs, chemicalLogs, filterLogs });
-
       const allLogs: ELogBook[] = [];
 
       // Convert chiller logs
@@ -842,7 +864,6 @@ export default function ELogBookPage() {
       });
 
       allLogs.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
-      console.log('Total logs after refresh:', allLogs.length, allLogs);
       setLogs(allLogs);
       setMissingRefreshKey((prev) => prev + 1);
 
@@ -1796,6 +1817,14 @@ export default function ELogBookPage() {
           logTypeLabel="Chiller"
           nextDue={missedReadingNextDue ?? undefined}
           equipmentList={missedEquipments ?? undefined}
+          isRangeLoading={missingRangeLoading}
+          dateFrom={missingRangeFrom}
+          dateTo={missingRangeTo}
+          onDateFromChange={setMissingRangeFrom}
+          onDateToChange={setMissingRangeTo}
+          onApplyRange={() => setMissingRangeRefreshKey((prev) => prev + 1)}
+          dayGroups={missingRangeGroups}
+          totalMissingSlotsInRange={missingRangeTotalSlots}
         />
       )}
 
@@ -1826,11 +1855,6 @@ export default function ELogBookPage() {
             >
               <Clock className="w-4 h-4 mr-2" />
               Missing Readings
-              {missedReadingsCount > 0 && (
-                <span className="ml-2 px-1.5 py-0.5 text-xs font-semibold bg-primary text-primary-foreground rounded-full">
-                  {missedReadingsCount}
-                </span>
-              )}
             </Button>
             {/* Filter Button */}
             <Dialog open={isFilterOpen} onOpenChange={setIsFilterOpen}>

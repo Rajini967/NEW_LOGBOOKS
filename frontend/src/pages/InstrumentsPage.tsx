@@ -13,7 +13,7 @@ import {
 } from '@/components/ui/dialog';
 import { Plus, Wrench, Calendar, FileText, Upload, AlertTriangle, CheckCircle2, Clock } from 'lucide-react';
 import { format, differenceInDays } from 'date-fns';
-import { toast } from 'sonner';
+import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 
 interface Instrument {

@@ -13,6 +13,10 @@ USER_LIFECYCLE_EVENT_TYPES = [
     "user_unlocked",
 ]
 
+AUDIT_EXCLUDED_EVENT_TYPES = [
+    "missing_slots_snapshot",
+]
+
 
 def _exclude_super_admin_operated_reports(queryset, user):
     """
@@ -90,6 +94,14 @@ class AuditReportViewSet(viewsets.ReadOnlyModelViewSet):
     filter_backends = [filters.OrderingFilter]
     ordering = ["-timestamp"]
 
+    def _base_audit_queryset(self):
+        return (
+            AuditEvent.objects.select_related("user")
+            .exclude(event_type__in=USER_LIFECYCLE_EVENT_TYPES)
+            .exclude(event_type__in=AUDIT_EXCLUDED_EVENT_TYPES)
+            .exclude(object_type="missing_slots")
+        )
+
     def get_queryset(self):
         user = self.request.user
 
@@ -97,12 +109,12 @@ class AuditReportViewSet(viewsets.ReadOnlyModelViewSet):
         if user.role not in ["super_admin", "admin", "supervisor"]:
             return AuditEvent.objects.none()
 
-        qs = AuditEvent.objects.select_related("user").exclude(
-            event_type__in=USER_LIFECYCLE_EVENT_TYPES
-        )
+        # Super admin can view complete audit history (except globally excluded event types).
+        if user.role == "super_admin":
+            qs = self._base_audit_queryset()
+        else:
+            qs = self._base_audit_queryset()
 
-        # Non-super-admin users should not see super-admin details.
-        if user.role != "super_admin":
             User = get_user_model()
             super_admin_user_ids = [
                 str(uid)

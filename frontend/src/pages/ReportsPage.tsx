@@ -36,8 +36,10 @@ import {
   X,
 } from 'lucide-react';
 import { format } from 'date-fns';
-import { toast } from 'sonner';
+import { jsPDF } from 'jspdf';
+import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
+import { parseBriquetteTimeToMinutes } from '@/lib/reports/reportMappers';
 import {
   generateAirVelocityPDF,
   generateFilterIntegrityPDF,
@@ -130,6 +132,7 @@ interface AuditEventRow {
   field_name: string;
   old_value: string | null;
   new_value: string | null;
+  extra?: Record<string, any> | null;
 }
 
 const isChillerOperationRaw = (row: any): boolean => {
@@ -223,15 +226,6 @@ function buildChillerMonitoringPdfPayload(
     reportDate: reportDateStr,
   };
 }
-
-const parseBriquetteTimeToMinutes = (t: string): number => {
-  const m = String(t || '').match(/^(\d{1,2}):(\d{2})/);
-  if (!m) return Number.POSITIVE_INFINITY;
-  const hh = Number(m[1]);
-  const mm = Number(m[2]);
-  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return Number.POSITIVE_INFINITY;
-  return hh * 60 + mm;
-};
 
 /** Briquette monitoring PDF: lock main grid + water readings to the report calendar day. */
 function buildBriquetteMonitoringPdfPayload(
@@ -556,8 +550,10 @@ const auditEventLabels: Record<string, string> = {
   config_update: 'Config Update',
   log_update: 'Log Update',
   log_correction: 'Log Correction',
+  log_corrected: 'Log Corrected',
   log_created: 'Log Created',
   log_deleted: 'Log Deleted',
+  log_rejected: 'Log Rejected',
   entity_created: 'Entity Created',
   entity_updated: 'Entity Updated',
   entity_deleted: 'Entity Deleted',
@@ -568,6 +564,153 @@ const auditEventLabels: Record<string, string> = {
   password_changed: 'Password changed',
   user_locked: 'User locked',
   user_unlocked: 'User unlocked',
+};
+
+const humanizeToken = (value: string) =>
+  value
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+
+const AUDIT_UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const AUDIT_ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const AUDIT_ISO_DATETIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
+const AUDIT_SPACE_DATETIME_RE = /^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}/;
+
+const normalizeAuditToken = (value: string): string =>
+  String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+
+const extractEquipmentCode = (value: string): string => {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  const fromLabel = text.split('–')[0]?.trim();
+  const candidate = fromLabel || text;
+  if (!candidate || AUDIT_UUID_RE.test(candidate)) return '';
+  return candidate;
+};
+
+const isLogAuditEvent = (eventType: string): boolean => {
+  const normalized = normalizeAuditToken(eventType);
+  return (
+    normalized === 'log_created' ||
+    normalized === 'log_deleted' ||
+    normalized === 'log_update' ||
+    normalized === 'log_correction' ||
+    normalized === 'log_corrected'
+  );
+};
+
+const formatAuditDateValue = (value: string): string => {
+  if (!value) return value;
+  if (
+    !AUDIT_ISO_DATE_RE.test(value) &&
+    !AUDIT_ISO_DATETIME_RE.test(value) &&
+    !AUDIT_SPACE_DATETIME_RE.test(value)
+  ) {
+    return value;
+  }
+  const parseInput = AUDIT_SPACE_DATETIME_RE.test(value) ? value.replace(' ', 'T') : value;
+  const parsed = new Date(parseInput);
+  if (Number.isNaN(parsed.getTime())) return value;
+  if (AUDIT_ISO_DATE_RE.test(value)) return format(parsed, 'dd/MM/yy');
+  return format(parsed, 'dd/MM/yy HH:mm:ss');
+};
+
+const resolveAuditEquipmentContext = (
+  row: AuditEventRow,
+  equipmentMap: Record<string, string>,
+): { code: string; filterNo: string } => {
+  const extra = (row.extra || {}) as Record<string, any>;
+  const filterNo = String(extra.filter_no || '').trim();
+  const candidates = [
+    String(extra.equipment_id || '').trim(),
+    String(extra.equipment_name || '').trim(),
+  ].filter(Boolean);
+
+  for (const key of candidates) {
+    const mapped = equipmentMap[key];
+    if (mapped) {
+      const code = extractEquipmentCode(mapped);
+      if (code) return { code, filterNo };
+    }
+    const code = extractEquipmentCode(key);
+    if (code) return { code, filterNo };
+  }
+  return { code: '', filterNo };
+};
+
+const displayAuditObjectType = (row: AuditEventRow): string => {
+  const raw = (row.object_type || '').trim();
+  if (!raw) return '';
+  if (raw === 'missing_slots' || raw.endsWith('_missing_slots')) {
+    return 'Missing Slots';
+  }
+  return humanizeToken(raw);
+};
+
+const displayAuditFieldName = (fieldName: string): string => {
+  const raw = (fieldName || '').trim();
+  if (!raw) return '';
+  if (raw === 'snapshot_created') return 'Missing Slots';
+  return humanizeToken(raw);
+};
+
+const displayAuditObjectId = (
+  row: AuditEventRow,
+  equipmentMap: Record<string, string>,
+): string => {
+  const rawId = String(row.object_id ?? '').trim();
+  const objectType = normalizeAuditToken(row.object_type || '');
+  const extra = (row.extra || {}) as Record<string, any>;
+
+  if (objectType === 'missing_slots' || objectType.endsWith('_missing_slots')) {
+    const logType = String(extra.log_type || '').trim();
+    const from = String(extra.date_from || '').trim();
+    const to = String(extra.date_to || '').trim();
+    if (logType && from && to) {
+      const typeLabel = humanizeToken(logType);
+      return from === to ? `${typeLabel} ${from}` : `${typeLabel} ${from} to ${to}`;
+    }
+    return rawId;
+  }
+
+  if (objectType.endsWith('_log') || objectType === 'filter_log' || isLogAuditEvent(row.event_type)) {
+    const { code, filterNo } = resolveAuditEquipmentContext(row, equipmentMap);
+    if (objectType === 'filter_log' && filterNo) return filterNo;
+    if (code && filterNo) return `${code} | ${filterNo}`;
+    if (code) return code;
+    if (filterNo) return filterNo;
+
+    const eventType = normalizeAuditToken(row.event_type || '');
+    const typeLabel = humanizeToken((objectType || 'log_entry').replace(/_log$/i, ''));
+    if (eventType) return `${typeLabel} Log Entry`;
+    if (AUDIT_UUID_RE.test(rawId)) return `${typeLabel} Log Entry`;
+  }
+
+  const eventType = normalizeAuditToken(row.event_type || '');
+  if (eventType.startsWith('entity_')) {
+    const filterId = String(extra.filter_id || '').trim();
+    if (objectType.startsWith('filter_') && filterId) return filterId;
+
+    const entityEquipmentId = String(extra.equipment_id || '').trim();
+    const mappedEntity = entityEquipmentId ? equipmentMap[entityEquipmentId] || '' : '';
+    const entityCode = extractEquipmentCode(mappedEntity || entityEquipmentId);
+    if (entityCode) return entityCode;
+
+    const filterNo = String(extra.filter_no || filterId).trim();
+    if (filterNo) return filterNo;
+
+    if (AUDIT_UUID_RE.test(rawId)) {
+      return `${humanizeToken(objectType || 'entity')} Entry`;
+    }
+  }
+
+  return rawId;
 };
 
 export default function ReportsPage() {
@@ -670,6 +813,7 @@ export default function ReportsPage() {
   const [auditObjectType, setAuditObjectType] = useState<string>('all');
   const [auditObjectId, setAuditObjectId] = useState<string>('');
   const [auditViewRow, setAuditViewRow] = useState<AuditEventRow | null>(null);
+  const [auditEquipmentLabelMap, setAuditEquipmentLabelMap] = useState<Record<string, string>>({});
 
   const [reportFilterOpen, setReportFilterOpen] = useState(false);
   const [reportFilters, setReportFilters] = useState<{
@@ -689,6 +833,96 @@ export default function ReportsPage() {
   const canSeeUserReports = !isManagerRole && (isSupervisor || isAdmin);
   const canSeeActivity = !isManagerRole && (isSupervisor || isAdmin);
   const canSeeAudit = !isManagerRole && (isSupervisor || isAdmin);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const rows = await equipmentAPI.list();
+        const map: Record<string, string> = {};
+        for (const r of rows || []) {
+          const id = String((r as any)?.id || '').trim();
+          const num = String((r as any)?.equipment_number || '').trim();
+          const name = String((r as any)?.name || '').trim();
+          const label = num && name ? `${num} – ${name}` : num || name;
+          if (label) {
+            if (id) map[id] = label;
+            if (num) map[num] = label;
+          }
+        }
+        setAuditEquipmentLabelMap(map);
+      } catch {
+        setAuditEquipmentLabelMap({});
+      }
+    })();
+  }, []);
+
+  const displayAuditCellValue = useCallback(
+    (row: AuditEventRow, rawValue: string | null | undefined, valueKind: 'old' | 'new' = 'new'): string => {
+      const value = String(rawValue ?? '').trim();
+      if (!value) return '';
+      const field = normalizeAuditToken(row.field_name || '');
+      const objectType = normalizeAuditToken(row.object_type || '');
+      const eventType = normalizeAuditToken(row.event_type || '');
+      const isUuid = AUDIT_UUID_RE.test(value);
+
+      if ((eventType === 'log_corrected' || eventType === 'log_correction') && isUuid) {
+        return valueKind === 'old' ? 'Previous Log Entry' : 'Corrected Log Entry';
+      }
+
+      if (isLogAuditEvent(eventType) && (field === 'object_id' || field === 'id') && isUuid) {
+        if (eventType === 'log_created') return 'Created Log Entry';
+        if (eventType === 'log_deleted') return 'Deleted Log Entry';
+        return valueKind === 'old' ? 'Previous Log Entry' : 'Updated Log Entry';
+      }
+
+      if (field === 'equipment_id' || field === 'equipment_name') {
+        const equipmentLabel = auditEquipmentLabelMap[value] || value;
+        if (objectType === 'filter_log') {
+          const filterNo = String((row.extra as any)?.filter_no || '').trim();
+          return filterNo ? `${equipmentLabel} | ${filterNo}` : equipmentLabel;
+        }
+        return equipmentLabel;
+      }
+
+      if (auditEquipmentLabelMap[value]) {
+        const equipmentLabel = auditEquipmentLabelMap[value];
+        if (objectType === 'filter_log') {
+          const filterNo = String((row.extra as any)?.filter_no || '').trim();
+          return filterNo ? `${equipmentLabel} | ${filterNo}` : equipmentLabel;
+        }
+        return equipmentLabel;
+      }
+
+      if (objectType === 'filter_log' && field === 'filter_no') {
+        return value;
+      }
+
+      const formattedDate = formatAuditDateValue(value);
+      if (formattedDate !== value) return formattedDate;
+
+      if (
+        field === 'status' ||
+        field === 'approval_status' ||
+        field === 'state' ||
+        (isLogAuditEvent(eventType) && /^[a-z][a-z0-9_\-\s]*$/i.test(value))
+      ) {
+        return humanizeToken(normalizeAuditToken(value));
+      }
+
+      if (isLogAuditEvent(eventType) && isUuid) {
+        if (eventType === 'log_created') return 'Created Log Entry';
+        if (eventType === 'log_deleted') return 'Deleted Log Entry';
+        return valueKind === 'old' ? 'Previous Value' : 'Updated Value';
+      }
+
+      if (/^[a-z][a-z0-9_-]*$/.test(value) && (value.includes('_') || value.includes('-'))) {
+        return humanizeToken(value);
+      }
+
+      return value;
+    },
+    [auditEquipmentLabelMap],
+  );
   const canSyncBriquetteReports = !isManagerRole && (user?.role === 'super_admin' || isAdmin);
 
   const reportCreatedByOptions = useMemo(() => {
@@ -921,14 +1155,45 @@ export default function ReportsPage() {
 
   const handleAuditView = (row: AuditEventRow) => setAuditViewRow(row);
   const handleAuditDownload = (row: AuditEventRow) => {
-    const blob = new Blob([JSON.stringify(row, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `audit-event-${row.id}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-    toast.success('Audit event downloaded');
+    try {
+      const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+      const left = 40;
+      let y = 48;
+      const lineH = 18;
+      const valueX = 190;
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(16);
+      doc.text('Audit Event', left, y);
+      y += 24;
+
+      const rows: Array<[string, string]> = [
+        ['Date/Time', row.timestamp ? format(new Date(row.timestamp), 'dd/MM/yy HH:mm') : ''],
+        ['User Email', row.user_email ?? row.target_user_email ?? ''],
+        ['Event', auditEventLabels[row.event_type] ?? row.event_type],
+        ['Object Type', displayAuditObjectType(row)],
+        ['Object ID', displayAuditObjectId(row, auditEquipmentLabelMap)],
+        ['Field', displayAuditFieldName(row.field_name)],
+        ['Old Value', displayAuditCellValue(row, row.old_value, 'old')],
+        ['New Value', displayAuditCellValue(row, row.new_value, 'new')],
+      ];
+
+      doc.setFontSize(11);
+      for (const [k, v] of rows) {
+        doc.setFont('helvetica', 'bold');
+        doc.text(`${k}:`, left, y);
+        doc.setFont('helvetica', 'normal');
+        const lines = doc.splitTextToSize(String(v ?? ''), 360);
+        doc.text(lines, valueX, y);
+        y += Math.max(lineH, lines.length * 14 + 2);
+      }
+
+      doc.save(`audit-event-${row.id}.pdf`);
+      toast.success('Audit event PDF downloaded');
+    } catch (e) {
+      console.error('Audit PDF download failed:', e);
+      toast.error('Failed to download audit PDF');
+    }
   };
   const handleAuditPrint = (row: AuditEventRow) => {
     const rowHtml = `
@@ -936,11 +1201,11 @@ export default function ReportsPage() {
         <td>${row.timestamp ? format(new Date(row.timestamp), 'dd/MM/yy HH:mm') : ''}</td>
         <td>${row.user_email ?? row.target_user_email ?? ''}</td>
         <td>${auditEventLabels[row.event_type] ?? row.event_type}</td>
-        <td>${row.object_type}</td>
-        <td>${row.object_id ?? ''}</td>
-        <td>${row.field_name}</td>
-        <td>${row.old_value ?? ''}</td>
-        <td>${row.new_value ?? ''}</td>
+        <td>${displayAuditObjectType(row)}</td>
+        <td>${displayAuditObjectId(row, auditEquipmentLabelMap)}</td>
+        <td>${displayAuditFieldName(row.field_name)}</td>
+        <td>${displayAuditCellValue(row, row.old_value, 'old')}</td>
+        <td>${displayAuditCellValue(row, row.new_value, 'new')}</td>
       </tr>`;
     const html = `
       <!DOCTYPE html>
@@ -3454,11 +3719,11 @@ export default function ReportsPage() {
                           <td>${row.timestamp ? format(new Date(row.timestamp), 'dd/MM/yy HH:mm') : ''}</td>
                           <td>${row.user_email || row.target_user_email || ''}</td>
                           <td>${auditEventLabels[row.event_type] ?? row.event_type}</td>
-                          <td>${row.object_type}</td>
-                          <td>${row.object_id || ''}</td>
-                          <td>${row.field_name}</td>
-                          <td>${row.old_value || ''}</td>
-                          <td>${row.new_value || ''}</td>
+                          <td>${displayAuditObjectType(row as AuditEventRow)}</td>
+                          <td>${displayAuditObjectId(row as AuditEventRow, auditEquipmentLabelMap)}</td>
+                          <td>${displayAuditFieldName(row.field_name)}</td>
+                          <td>${displayAuditCellValue(row as AuditEventRow, row.old_value, 'old')}</td>
+                          <td>${displayAuditCellValue(row as AuditEventRow, row.new_value, 'new')}</td>
                         </tr>
                       `,
                     )
@@ -3569,14 +3834,11 @@ export default function ReportsPage() {
                         <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
                           Event
                         </th>
-                        <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                        <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider min-w-[180px]">
                           Object Type
                         </th>
                         <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
                           Object ID
-                        </th>
-                        <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                          Field
                         </th>
                         <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
                           Old Value
@@ -3599,11 +3861,10 @@ export default function ReportsPage() {
                           </td>
                           <td className="px-4 py-3 text-sm">{row.user_email ?? row.target_user_email ?? '—'}</td>
                           <td className="px-4 py-3 text-sm">{auditEventLabels[row.event_type] ?? row.event_type}</td>
-                          <td className="px-4 py-3 text-sm">{row.object_type}</td>
-                          <td className="px-4 py-3 text-sm">{row.object_id}</td>
-                          <td className="px-4 py-3 text-sm">{row.field_name}</td>
-                          <td className="px-4 py-3 text-sm">{row.old_value}</td>
-                          <td className="px-4 py-3 text-sm">{row.new_value}</td>
+                          <td className="px-4 py-3 text-sm min-w-[180px]">{displayAuditObjectType(row)}</td>
+                          <td className="px-4 py-3 text-sm">{displayAuditObjectId(row, auditEquipmentLabelMap)}</td>
+                          <td className="px-4 py-3 text-sm">{displayAuditCellValue(row, row.old_value, 'old')}</td>
+                          <td className="px-4 py-3 text-sm">{displayAuditCellValue(row, row.new_value, 'new')}</td>
                           <td className="px-4 py-3">
                             <div className="flex items-center gap-1">
                               <Button
@@ -3637,7 +3898,7 @@ export default function ReportsPage() {
                       {auditRows.length === 0 && (
                         <tr>
                           <td
-                            colSpan={9}
+                            colSpan={8}
                             className="px-4 py-6 text-center text-sm text-muted-foreground"
                           >
                             No audit events found for selected filters.
@@ -3679,23 +3940,29 @@ export default function ReportsPage() {
                     </div>
                     <div>
                       <Label className="text-xs text-muted-foreground">Object Type</Label>
-                      <p className="font-medium">{auditViewRow.object_type}</p>
+                      <p className="font-medium">{displayAuditObjectType(auditViewRow)}</p>
                     </div>
                     <div>
                       <Label className="text-xs text-muted-foreground">Object ID</Label>
-                      <p className="font-medium break-all">{auditViewRow.object_id ?? '—'}</p>
+                      <p className="font-medium break-all">
+                        {displayAuditObjectId(auditViewRow, auditEquipmentLabelMap) || '—'}
+                      </p>
                     </div>
                     <div>
                       <Label className="text-xs text-muted-foreground">Field</Label>
-                      <p className="font-medium">{auditViewRow.field_name}</p>
+                      <p className="font-medium">{displayAuditFieldName(auditViewRow.field_name)}</p>
                     </div>
                     <div>
                       <Label className="text-xs text-muted-foreground">Old Value</Label>
-                      <p className="font-medium break-all">{auditViewRow.old_value ?? '—'}</p>
+                      <p className="font-medium break-all">
+                        {displayAuditCellValue(auditViewRow, auditViewRow.old_value, 'old') || '—'}
+                      </p>
                     </div>
                     <div>
                       <Label className="text-xs text-muted-foreground">New Value</Label>
-                      <p className="font-medium break-all">{auditViewRow.new_value ?? '—'}</p>
+                      <p className="font-medium break-all">
+                        {displayAuditCellValue(auditViewRow, auditViewRow.new_value, 'new') || '—'}
+                      </p>
                     </div>
                   </div>
                 )}

@@ -11,6 +11,7 @@ from rest_framework.response import Response
 
 from .models import Report, ManualChillerConsumption, ManualBoilerConsumption, ManualChemicalConsumption
 from .utils import log_audit_event
+from .dashboard_queries import get_dashboard_metrics
 from chiller_logs.views import _get_limit_for_date
 from boiler_logs.views import _get_boiler_limit_for_date
 
@@ -27,137 +28,26 @@ def dashboard_summary(request):
     active alerts (filter overdue), compliance score.
     """
     today = timezone.now().date()
-
-    # Active chillers: Equipment with category name Chiller/Chillers, is_active=True
-    try:
-        from equipment.models import Equipment
-        active_chillers_count = Equipment.objects.filter(
-            is_active=True
-        ).filter(
-            Q(category__name__iexact="chiller") | Q(category__name__iexact="chillers")
-        ).count()
-    except Exception:
-        active_chillers_count = 0
-
-    now = timezone.now()
-
-    # Pending approvals: sum of pending/draft/pending_secondary_approval across log types
-    pending_statuses = ("pending", "draft", "pending_secondary_approval")
-    try:
-        from chiller_logs.models import ChillerLog
-        chiller_pending = ChillerLog.objects.filter(status__in=pending_statuses).count()
-    except Exception:
-        chiller_pending = 0
-    try:
-        from boiler_logs.models import BoilerLog
-        boiler_pending = BoilerLog.objects.filter(status__in=pending_statuses).count()
-    except Exception:
-        boiler_pending = 0
-    try:
-        from chemical_prep.models import ChemicalPreparation
-        chemical_pending = ChemicalPreparation.objects.filter(status__in=pending_statuses).count()
-    except Exception:
-        chemical_pending = 0
-    try:
-        from filter_logs.models import FilterLog
-        filter_pending = FilterLog.objects.filter(status__in=pending_statuses).count()
-    except Exception:
-        filter_pending = 0
-    pending_approvals_count = chiller_pending + boiler_pending + chemical_pending + filter_pending
-
-    # HVAC Validations: pending validations count (draft/pending/pending_secondary_approval)
-    try:
-        from air_validation.models import HVACValidation
-        hvac_validations_pending_count = HVACValidation.objects.filter(
-            status__in=pending_statuses
-        ).count()
-    except Exception:
-        hvac_validations_pending_count = 0
-
-    # E Log Book: total count of chiller, boiler, filter, chemical logbook entries only
-    total_log_entries = (
-        ChillerLog.objects.count()
-        + BoilerLog.objects.count()
-        + FilterLog.objects.count()
-        + ChemicalPreparation.objects.count()
-    )
+    metrics = get_dashboard_metrics()
 
     # Approved today: Report rows approved today
     approved_today_count = Report.objects.filter(approved_at__date=today).count()
 
-    # Active alerts: filter schedule overdue (same logic as filter_master overdue-summary)
-    try:
-        from filter_master.models import FilterSchedule
-        FilterSchedule.objects.filter(
-            is_approved=True, next_due_date__lt=today
-        ).exclude(status__in=["completed", "overdue"]).update(status="overdue")
-        overdue_qs = FilterSchedule.objects.filter(
-            is_approved=True, next_due_date__lt=today
-        ).exclude(status="completed")
-        active_alerts = overdue_qs.count()
-    except Exception:
-        active_alerts = 0
-
     # Compliance score: 100 * approved_today / (approved_today + pending) when denominator > 0
-    total = approved_today_count + pending_approvals_count
+    total = approved_today_count + int(metrics["pending_approvals_count"] or 0)
     if total > 0:
         compliance_score = round(100 * approved_today_count / total)
     else:
         compliance_score = None
 
-    # Avg Pressure (bar): average of recent pressure readings over last 24 hours.
-    # Uses available pressure fields from chiller/boiler/compressor logs.
-    cutoff_24h = now - timedelta(hours=24)
-    pressure_sum = 0.0
-    pressure_count = 0
-
-    try:
-        chiller_agg = ChillerLog.objects.filter(timestamp__gte=cutoff_24h).exclude(
-            evap_water_inlet_pressure__isnull=True
-        ).exclude(evap_water_inlet_pressure=0).aggregate(
-            s=Sum("evap_water_inlet_pressure"),
-            c=Count("evap_water_inlet_pressure"),
-        )
-        pressure_sum += float(chiller_agg["s"] or 0)
-        pressure_count += int(chiller_agg["c"] or 0)
-    except Exception:
-        pass
-
-    try:
-        boiler_agg = BoilerLog.objects.filter(timestamp__gte=cutoff_24h).exclude(
-            steam_pressure__isnull=True
-        ).exclude(steam_pressure=0).aggregate(
-            s=Sum("steam_pressure"),
-            c=Count("steam_pressure"),
-        )
-        pressure_sum += float(boiler_agg["s"] or 0)
-        pressure_count += int(boiler_agg["c"] or 0)
-    except Exception:
-        pass
-
-    try:
-        from compressor_logs.models import CompressorLog
-        comp_agg = CompressorLog.objects.filter(timestamp__gte=cutoff_24h).exclude(
-            compressor_pressure__isnull=True
-        ).exclude(compressor_pressure=0).aggregate(
-            s=Sum("compressor_pressure"),
-            c=Count("compressor_pressure"),
-        )
-        pressure_sum += float(comp_agg["s"] or 0)
-        pressure_count += int(comp_agg["c"] or 0)
-    except Exception:
-        pass
-
-    avg_pressure_bar = round(pressure_sum / pressure_count, 1) if pressure_count > 0 else None
-
     return Response({
-        "active_chillers_count": active_chillers_count,
-        "avg_pressure_bar": avg_pressure_bar,
-        "pending_approvals_count": pending_approvals_count,
+        "active_chillers_count": metrics["active_chillers_count"],
+        "avg_pressure_bar": metrics["avg_pressure_bar"],
+        "pending_approvals_count": metrics["pending_approvals_count"],
         "approved_today_count": approved_today_count,
-        "total_log_entries": total_log_entries,
-        "hvac_validations_pending_count": hvac_validations_pending_count,
-        "active_alerts": active_alerts,
+        "total_log_entries": metrics["total_log_entries"],
+        "hvac_validations_pending_count": metrics["hvac_validations_pending_count"],
+        "active_alerts": metrics["active_alerts"],
         "compliance_score": compliance_score,
     })
 

@@ -13,7 +13,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useAuth } from '@/contexts/AuthContext';
 import { format } from 'date-fns';
-import { toast } from 'sonner';
+import { toast } from '@/lib/toast';
 import { Printer } from 'lucide-react';
 import { chillerLogAPI, boilerLogAPI, compressorLogAPI } from '@/lib/api';
 import {

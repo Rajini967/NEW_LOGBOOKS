@@ -90,17 +90,31 @@ def _resolve_equipment_for_filter_log_identifier(identifier: str):
     return None
 
 
+def normalize_equipment_identifier(equipment_identifier: Optional[str], log_type: Optional[str] = None) -> str:
+    """
+    Normalize identifier values used across log apps before lookup.
+    """
+    if not equipment_identifier or not isinstance(equipment_identifier, str):
+        return ""
+    normalized = equipment_identifier.strip()
+    if log_type == "chemical" and " – " in normalized:
+        normalized = normalized.split(" – ")[0].strip()
+    return normalized
+
+
 def _resolve_equipment_for_log_type(equipment_identifier: str, log_type: str):
     if not equipment_identifier or not isinstance(equipment_identifier, str):
         return None
-    identifier = equipment_identifier.strip()
+    identifier = normalize_equipment_identifier(equipment_identifier, log_type)
+    if not identifier:
+        return None
     equipment = None
     if log_type in ("chiller", "boiler"):
         equipment = Equipment.objects.filter(equipment_number=identifier).first()
     elif log_type == "filter":
         equipment = _resolve_equipment_for_filter_log_identifier(identifier)
     elif log_type == "chemical":
-        part_before_dash = identifier.split(" – ")[0].strip() if " – " in identifier else identifier
+        part_before_dash = normalize_equipment_identifier(identifier, "chemical")
         equipment = Equipment.objects.filter(equipment_number=part_before_dash).first()
         if not equipment:
             equipment = Equipment.objects.filter(equipment_number=identifier).first()
@@ -559,3 +573,23 @@ def compute_slot_status(
         "tolerance_end": tolerance_end if tol_minutes > 0 else None,
         "status": status,
     }
+
+
+def format_missing_slots_equipment_label(
+    equipment_number: str,
+    name: Optional[str] = None,
+    site_id: Optional[str] = None,
+) -> str:
+    """
+    Human-readable row title for missing-slot UIs: equipment number plus site tag or name
+    (e.g. "EN-E045 CH-001" when site_id is CH-001).
+    """
+    num = (equipment_number or "").strip()
+    nm = (name or "").strip()
+    sid_inner = (site_id or "").strip()
+    second = sid_inner or nm
+    if not num:
+        return second
+    if not second or second.casefold() == num.casefold():
+        return num
+    return f"{num} {second}"

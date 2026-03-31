@@ -38,8 +38,10 @@ describe("LoginPage", () => {
   }
 
   describe("Invalid email & invalid password", () => {
-    it("shows invalid credentials message when login returns false", async () => {
-      mockLogin.mockResolvedValue(false);
+    it("shows invalid credentials message when login rejects", async () => {
+      mockLogin.mockRejectedValue({
+        response: { data: { error: "Invalid credentials. Please check your email and password." } },
+      });
       render(<LoginPage />);
       fireEvent.change(getEmailInput(), { target: { value: "wrong@example.com" } });
       fireEvent.change(getPasswordInput(), { target: { value: "WrongPass" } });
@@ -72,8 +74,10 @@ describe("LoginPage", () => {
   });
 
   describe("Valid email & invalid password", () => {
-    it("shows invalid credentials when login returns false", async () => {
-      mockLogin.mockResolvedValue(false);
+    it("shows invalid credentials when login rejects", async () => {
+      mockLogin.mockRejectedValue({
+        response: { data: { error: "Invalid credentials. Please check your email and password." } },
+      });
       render(<LoginPage />);
       fireEvent.change(getEmailInput(), { target: { value: "user@example.com" } });
       fireEvent.change(getPasswordInput(), { target: { value: "WrongPass" } });
@@ -100,8 +104,10 @@ describe("LoginPage", () => {
   });
 
   describe("Invalid email & valid password", () => {
-    it("shows invalid credentials when login returns false", async () => {
-      mockLogin.mockResolvedValue(false);
+    it("shows invalid credentials when login rejects", async () => {
+      mockLogin.mockRejectedValue({
+        response: { data: { error: "Invalid credentials. Please check your email and password." } },
+      });
       render(<LoginPage />);
       fireEvent.change(getEmailInput(), { target: { value: "wrong@example.com" } });
       fireEvent.change(getPasswordInput(), { target: { value: "ValidPass123" } });

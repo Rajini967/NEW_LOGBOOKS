@@ -14,8 +14,8 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { useAuth } from "@/contexts/AuthContext";
-import { format } from "date-fns";
-import { toast } from "sonner";
+import { format, subDays } from "date-fns";
+import { toast } from "@/lib/toast";
 import { chemicalPrepAPI, chemicalMasterAPI, chemicalAssignmentAPI, chemicalStockAPI, equipmentAPI, equipmentCategoryAPI } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { firstRequiredFieldError } from "@/lib/requiredFields";
@@ -42,11 +42,17 @@ import {
 import { EntryIntervalBadge } from "@/components/logbook/EntryIntervalBadge";
 import { MissedReadingPopup } from "@/components/logbook/MissedReadingPopup";
 import {
-  getTotalMissingSlots,
   type EquipmentMissInfo,
 } from "@/lib/missed-reading";
 import { MaintenanceTimingsSection } from "@/components/logbook/MaintenanceTimingsSection";
 import type { MaintenanceTimingsValue } from "@/types/maintenance-timings";
+import { useChemicalLogsQuery, useChemicalMissingSlotsQuery } from "@/hooks/useLogbookQueries";
+import {
+  type ChemicalLikeLog,
+  mapChemicalPrepPayload,
+  mapChemicalPreviousReadingPayload,
+} from "@/lib/logbookPayloadMappers";
+import type { MissingSlotsEquipment, MissingSlotsRangeResponse, MissingSlotsResponse } from "@/lib/api/types";
 
 interface ChemicalPrepLog {
   id: string;
@@ -110,9 +116,16 @@ const ChemicalLogBookPage: React.FC = () => {
   const [showMissedReadingPopup, setShowMissedReadingPopup] = useState(false);
   const [missedReadingNextDue, setMissedReadingNextDue] = useState<Date | null>(null);
   const [missedEquipments, setMissedEquipments] = useState<EquipmentMissInfo[] | null>(null);
+  const [missingRangeFrom, setMissingRangeFrom] = useState(format(subDays(new Date(), 30), "yyyy-MM-dd"));
+  const [missingRangeTo, setMissingRangeTo] = useState(format(new Date(), "yyyy-MM-dd"));
+  const [missingRangeLoading, setMissingRangeLoading] = useState(false);
+  const [missingRangeRefreshKey, setMissingRangeRefreshKey] = useState(0);
+  const [missingRangeTotalSlots, setMissingRangeTotalSlots] = useState<number>(0);
+  const [missingRangeGroups, setMissingRangeGroups] = useState<
+    { date: string; totalMissingSlots: number; equipmentList: EquipmentMissInfo[] }[]
+  >([]);
   const [missingRefreshKey, setMissingRefreshKey] = useState(0);
   const [filteredLogs, setFilteredLogs] = useState<ChemicalPrepLog[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [approveConfirmOpen, setApproveConfirmOpen] = useState(false);
@@ -162,6 +175,10 @@ const ChemicalLogBookPage: React.FC = () => {
     fromTime: "",
     toTime: "",
   });
+  const selectedDate = filters.fromDate || format(new Date(), "yyyy-MM-dd");
+  const chemicalLogs = useChemicalLogsQuery();
+  const chemicalMissing = useChemicalMissingSlotsQuery(selectedDate, missingRefreshKey);
+  const isLoading = chemicalLogs.isLoading || chemicalLogs.isFetching;
 
   const [chemicalNames, setChemicalNames] = useState<string[]>([]);
   const [equipmentOptions, setEquipmentOptions] = useState<{ id: string; name: string }[]>([]);
@@ -196,51 +213,12 @@ const ChemicalLogBookPage: React.FC = () => {
 
   const refreshLogs = async () => {
     try {
-      setIsLoading(true);
-      const chemicalPreps = await chemicalPrepAPI.list().catch((err) => {
-        console.error("Error fetching chemical preps:", err);
-        return [];
-      });
+      const result = await chemicalLogs.refetch();
+      const chemicalPreps = result.data ?? [];
 
-      const allLogs: ChemicalPrepLog[] = [];
-      chemicalPreps.forEach((prep: any) => {
-        const timestamp = new Date(prep.timestamp);
-        allLogs.push({
-          id: prep.id,
-          equipmentName: prep.equipment_name,
-          chemicalName: prep.chemical_name,
-          chemicalPercent: prep.chemical_percent ?? undefined,
-          chemicalCategory: prep.chemical_category ?? null,
-          chemicalConcentration: prep.chemical_concentration ?? null,
-          solutionConcentration: prep.solution_concentration,
-          waterQty: prep.water_qty,
-          chemicalQty: prep.chemical_qty != null ? prep.chemical_qty / 1000 : 0,
-          batchNo: prep.batch_no || "",
-          doneBy: prep.done_by || prep.checked_by || prep.operator_name,
-          date: format(timestamp, "yyyy-MM-dd"),
-          time: format(timestamp, "HH:mm:ss"),
-          remarks: prep.remarks || "",
-          comment: prep.comment || "",
-          checkedBy: prep.checked_by || prep.operator_name,
-          approvedBy: prep.status === "approved" ? (prep.approved_by_name || "") : "",
-          rejectedBy:
-            prep.status === "rejected" || prep.status === "pending_secondary_approval"
-              ? (prep.approved_by_name || "")
-              : "",
-          timestamp,
-          status: prep.status as ChemicalPrepLog["status"],
-          operator_id: prep.operator_id,
-          approved_by_id: prep.approved_by_id,
-          corrects_id: prep.corrects_id,
-          has_corrections: prep.has_corrections,
-          tolerance_status: prep.tolerance_status as ChemicalPrepLog["tolerance_status"],
-          activity_type: prep.activity_type,
-          activity_from_date: prep.activity_from_date,
-          activity_to_date: prep.activity_to_date,
-          activity_from_time: prep.activity_from_time,
-          activity_to_time: prep.activity_to_time,
-        });
-      });
+      const allLogs: ChemicalPrepLog[] = chemicalPreps.map((prep: ChemicalLikeLog) =>
+        mapChemicalPrepPayload(prep),
+      );
 
       allLogs.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
       setLogs(allLogs);
@@ -249,8 +227,6 @@ const ChemicalLogBookPage: React.FC = () => {
     } catch (error) {
       console.error("Error refreshing chemical logs:", error);
       toast.error("Failed to refresh chemical preparation entries");
-    } finally {
-      setIsLoading(false);
     }
   };
 
@@ -270,43 +246,9 @@ const ChemicalLogBookPage: React.FC = () => {
       .list({ equipment_name: formData.equipmentName.trim() })
       .then((raw: any[]) => {
         if (cancelled) return;
-        const list: ChemicalPrepLog[] = (Array.isArray(raw) ? raw : []).slice(0, 10).map((prep: any) => {
-          const timestamp = new Date(prep.timestamp);
-          return {
-            id: prep.id,
-            equipmentName: prep.equipment_name,
-            chemicalName: prep.chemical_name,
-            chemicalPercent: prep.chemical_percent,
-            chemicalCategory: prep.chemical_category ?? null,
-            chemicalConcentration: prep.chemical_concentration,
-            solutionConcentration: prep.solution_concentration,
-            waterQty: prep.water_qty,
-            chemicalQty: prep.chemical_qty != null ? prep.chemical_qty / 1000 : 0,
-            batchNo: prep.batch_no,
-            doneBy: prep.done_by || prep.checked_by || prep.operator_name,
-            date: format(timestamp, "yyyy-MM-dd"),
-            time: format(timestamp, "HH:mm:ss"),
-            remarks: prep.remarks || "",
-            comment: prep.comment,
-            checkedBy: prep.checked_by || prep.operator_name,
-            approvedBy: prep.status === "approved" ? (prep.approved_by_name || "") : "",
-            rejectedBy:
-              prep.status === "rejected" || prep.status === "pending_secondary_approval"
-                ? (prep.approved_by_name || "")
-                : "",
-            timestamp,
-            status: prep.status,
-            operator_id: prep.operator_id,
-            approved_by_id: prep.approved_by_id,
-            corrects_id: prep.corrects_id,
-            has_corrections: prep.has_corrections,
-            activity_type: prep.activity_type,
-            activity_from_date: prep.activity_from_date,
-            activity_to_date: prep.activity_to_date,
-            activity_from_time: prep.activity_from_time,
-            activity_to_time: prep.activity_to_time,
-          };
-        });
+        const list: ChemicalPrepLog[] = (Array.isArray(raw) ? raw : [])
+          .slice(0, 10)
+          .map((prep: ChemicalLikeLog) => mapChemicalPreviousReadingPayload(prep));
         setPreviousReadingsForEquipment(list);
       })
       .catch(() => {
@@ -321,11 +263,15 @@ const ChemicalLogBookPage: React.FC = () => {
   }, [formData.equipmentName]);
 
   useEffect(() => {
-    const selectedDate = filters.fromDate || format(new Date(), "yyyy-MM-dd");
-    chemicalPrepAPI
-      .missingSlots({ date: selectedDate })
-      .then((payload) => {
-        const missedOnly: EquipmentMissInfo[] = (payload?.equipments || [])
+    if (!chemicalMissing.data && !chemicalMissing.error) return;
+    if (chemicalMissing.error) {
+      setMissedEquipments(null);
+      setShowMissedReadingPopup(false);
+      setMissedReadingNextDue(null);
+      return;
+    }
+    const payload = chemicalMissing.data;
+    const missedOnly: EquipmentMissInfo[] = (payload?.equipments || [])
           .filter((eq) => (eq.missing_slot_count || 0) > 0)
           .map((eq) => ({
             equipmentId: eq.equipment_id,
@@ -344,26 +290,85 @@ const ChemicalLogBookPage: React.FC = () => {
               label: slot.label,
             })),
           }));
-        if (missedOnly.length > 0) {
-          setMissedEquipments(missedOnly);
-          const firstNext =
-            missedOnly
-              .map((m) => m.nextDue)
-              .filter((d): d is Date => !!d)
-              .sort((a, b) => a.getTime() - b.getTime())[0] || null;
-          setMissedReadingNextDue(firstNext);
-          return;
-        }
-        setMissedEquipments(null);
-        setShowMissedReadingPopup(false);
-        setMissedReadingNextDue(null);
+    if (missedOnly.length > 0) {
+      setMissedEquipments(missedOnly);
+      const firstNext =
+        missedOnly
+          .map((m) => m.nextDue)
+          .filter((d): d is Date => !!d)
+          .sort((a, b) => a.getTime() - b.getTime())[0] || null;
+      setMissedReadingNextDue(firstNext);
+      return;
+    }
+    setMissedEquipments(null);
+    setShowMissedReadingPopup(false);
+    setMissedReadingNextDue(null);
+  }, [chemicalMissing.data, chemicalMissing.error]);
+
+  useEffect(() => {
+    if (!showMissedReadingPopup) return;
+    if (!missingRangeFrom || !missingRangeTo) return;
+    if (missingRangeFrom > missingRangeTo) {
+      setMissingRangeGroups([]);
+      setMissingRangeTotalSlots(0);
+      return;
+    }
+
+    const mapEquipment = (eq: MissingSlotsEquipment): EquipmentMissInfo => ({
+      equipmentId: eq.equipment_id,
+      equipmentName: eq.equipment_name,
+      lastTimestamp: eq.last_reading_timestamp ? new Date(eq.last_reading_timestamp) : null,
+      nextDue: eq.next_due ? new Date(eq.next_due) : null,
+      isMissed: (eq.missing_slot_count || 0) > 0,
+      interval: eq.interval,
+      shiftHours: eq.shift_duration_hours || 8,
+      expectedSlotCount: eq.expected_slot_count,
+      presentSlotCount: eq.present_slot_count,
+      missingSlotCount: eq.missing_slot_count,
+      missingSlotRanges: (eq.missing_slots || []).map((slot) => ({
+        slotStart: new Date(slot.slot_start),
+        slotEnd: new Date(slot.slot_end),
+        label: slot.label,
+      })),
+    });
+
+    setMissingRangeLoading(true);
+    chemicalPrepAPI
+      .missingSlots({ date_from: missingRangeFrom, date_to: missingRangeTo })
+      .then((payload) => {
+        const totalMissingSlots =
+          payload && typeof payload === "object" && "days" in payload
+            ? (payload as MissingSlotsRangeResponse).total_missing_slots || 0
+            : (payload as MissingSlotsResponse)?.total_missing_slots || 0;
+        const groups =
+          payload && typeof payload === "object" && "days" in payload
+            ? (payload as MissingSlotsRangeResponse).days
+                .map((day) => ({
+                  date: day.date,
+                  totalMissingSlots: day.total_missing_slots || 0,
+                  equipmentList: (day.equipments || [])
+                    .filter((eq) => (eq.missing_slot_count || 0) > 0)
+                    .map(mapEquipment),
+                }))
+                .filter((group) => group.equipmentList.length > 0)
+            : (() => {
+                const single = payload as MissingSlotsResponse;
+                const equipmentList = (single?.equipments || [])
+                  .filter((eq) => (eq.missing_slot_count || 0) > 0)
+                  .map(mapEquipment);
+                return equipmentList.length
+                  ? [{ date: single.date, totalMissingSlots: single.total_missing_slots || 0, equipmentList }]
+                  : [];
+              })();
+        setMissingRangeTotalSlots(totalMissingSlots);
+        setMissingRangeGroups(groups);
       })
       .catch(() => {
-        setMissedEquipments(null);
-        setShowMissedReadingPopup(false);
-        setMissedReadingNextDue(null);
-      });
-  }, [filters.fromDate, missingRefreshKey]);
+        setMissingRangeTotalSlots(0);
+        setMissingRangeGroups([]);
+      })
+      .finally(() => setMissingRangeLoading(false));
+  }, [showMissedReadingPopup, missingRangeFrom, missingRangeTo, missingRangeRefreshKey]);
 
   useEffect(() => {
     if (!isDialogOpen || !!editingLogId) return;
@@ -391,7 +396,6 @@ const ChemicalLogBookPage: React.FC = () => {
 
   const hasMissedReadings =
     !!missedReadingNextDue || (missedEquipments?.length ?? 0) > 0;
-  const missedReadingsCount = getTotalMissingSlots(missedEquipments);
 
   // Load chemical names and full master list (for resolving chemical ID when assignment has no link)
   useEffect(() => {
@@ -1190,6 +1194,14 @@ const ChemicalLogBookPage: React.FC = () => {
           logTypeLabel="Chemical"
           nextDue={missedReadingNextDue}
           equipmentList={missedEquipments ?? undefined}
+          isRangeLoading={missingRangeLoading}
+          dateFrom={missingRangeFrom}
+          dateTo={missingRangeTo}
+          onDateFromChange={setMissingRangeFrom}
+          onDateToChange={setMissingRangeTo}
+          onApplyRange={() => setMissingRangeRefreshKey((prev) => prev + 1)}
+          dayGroups={missingRangeGroups}
+          totalMissingSlotsInRange={missingRangeTotalSlots}
         />
       )}
       <main className="p-4 space-y-4">
@@ -1224,11 +1236,6 @@ const ChemicalLogBookPage: React.FC = () => {
             >
               <Clock className="w-4 h-4 mr-2" />
               Missing Readings
-              {missedReadingsCount > 0 && (
-                <span className="ml-2 px-1.5 py-0.5 text-xs font-semibold bg-primary text-primary-foreground rounded-full">
-                  {missedReadingsCount}
-                </span>
-              )}
             </Button>
             {/* Filter Button - dialog like Chiller */}
             <Dialog open={isFilterOpen} onOpenChange={setIsFilterOpen}>

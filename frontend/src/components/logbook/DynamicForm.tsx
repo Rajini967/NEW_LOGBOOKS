@@ -10,7 +10,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { format } from 'date-fns';
 import { Clock } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { toast } from 'sonner';
+import { toast } from '@/lib/toast';
 
 interface DynamicFormProps {
   schema: LogbookSchema;
@@ -182,8 +182,6 @@ export function DynamicForm({ schema, onSubmit, defaultValues, onCancel }: Dynam
 
     onSubmit(processedData);
   }, (errors) => {
-    // Log validation errors for debugging
-    console.log('Form validation errors:', errors);
     const firstError = Object.values(errors)[0];
     if (firstError) {
       toast.error(firstError.message as string || 'Please fix the validation errors before submitting');

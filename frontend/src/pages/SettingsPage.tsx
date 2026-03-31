@@ -27,7 +27,7 @@ import {
   Thermometer,
   Flame,
 } from 'lucide-react';
-import { toast } from 'sonner';
+import { toast } from '@/lib/toast';
 import { authAPI, equipmentCategoryAPI, equipmentAPI, chillerLimitsAPI, boilerLimitsAPI } from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
 import type { LogEntryIntervalType } from '@/types';

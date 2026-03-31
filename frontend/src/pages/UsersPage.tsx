@@ -20,7 +20,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 import { Plus, Users, Shield, Mail, User, Edit, Trash2, Lock, LockOpen, Eye, EyeOff } from 'lucide-react';
-import { toast } from 'sonner';
+import { toast } from '@/lib/toast';
 import { userAPI } from '@/lib/api';
 import { User as UserType } from '@/types';
 import { useAuth } from '@/contexts/AuthContext';

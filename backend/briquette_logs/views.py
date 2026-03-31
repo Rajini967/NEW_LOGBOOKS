@@ -16,6 +16,7 @@ from core.log_slot_utils import (
     get_slot_timezone,
 )
 from reports.utils import log_audit_event
+from reports.services import create_utility_report_for_log
 from .models import BriquetteLog
 from .serializers import BriquetteLogSerializer
 
@@ -294,22 +295,18 @@ class BriquetteLogViewSet(viewsets.ModelViewSet):
         log.save()
 
         if action_type == "approve" and log.status == "approved":
-            from reports.utils import create_report_entry
             from reports.models import Report
             title = f"Briquette Boiler Monitoring - {log.equipment_id or 'N/A'}"
             # Idempotent: avoid duplicates if approve called twice.
             exists = Report.objects.filter(source_id=log.id, source_table="briquette_logs").exists()
             if not exists:
-                create_report_entry(
-                    report_type="utility",
-                    source_id=str(log.id),
+                create_utility_report_for_log(
+                    log=log,
                     source_table="briquette_logs",
-                    title=title,
-                    site=log.equipment_id or "N/A",
-                    created_by=log.operator_name or "Unknown",
-                    created_at=log.created_at,
+                    title_prefix="Briquette Boiler Monitoring",
                     approved_by=request.user,
                     remarks=remarks,
+                    title_override=title,
                 )
         return Response(self.get_serializer(log).data)
 
@@ -320,7 +317,6 @@ class BriquetteLogViewSet(viewsets.ModelViewSet):
         Safe to run multiple times.
         """
         from reports.models import Report
-        from reports.utils import create_report_entry
 
         created = 0
         skipped = 0
@@ -330,14 +326,11 @@ class BriquetteLogViewSet(viewsets.ModelViewSet):
                 skipped += 1
                 continue
             title = f"Briquette Boiler Monitoring - {log.equipment_id or 'N/A'}"
-            r = create_report_entry(
-                report_type="utility",
-                source_id=str(log.id),
+            r = create_utility_report_for_log(
+                log=log,
                 source_table="briquette_logs",
-                title=title,
-                site=log.equipment_id or "N/A",
-                created_by=log.operator_name or "Unknown",
-                created_at=log.created_at,
+                title_prefix="Briquette Boiler Monitoring",
+                title_override=title,
                 approved_by=log.approved_by,
                 remarks=log.remarks,
             )

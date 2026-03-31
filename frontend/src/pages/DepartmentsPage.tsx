@@ -13,7 +13,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Plus, Building2, Edit, Trash2 } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { departmentAPI } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 

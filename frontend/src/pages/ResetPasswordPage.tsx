@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Lock, ArrowLeft } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { PasswordRequirementHints } from "@/components/PasswordRequirementHints";
 
 const schema = z

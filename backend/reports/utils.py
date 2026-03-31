@@ -3,7 +3,7 @@ Utility functions for creating reports when entries are approved
 and for logging configuration/audit events.
 """
 from django.conf import settings
-from .models import Report, AuditEvent
+from .models import Report, AuditEvent, MissingSlotsSnapshot
 
 
 def create_report_entry(
@@ -147,6 +147,56 @@ def log_audit_event(
         )
     except Exception as e:
         logger.error("Error logging audit event: %s", e)
+
+
+def save_missing_slots_snapshot(
+    *,
+    user,
+    log_type: str,
+    date_from,
+    date_to,
+    payload: dict,
+    filters: dict | None = None,
+):
+    """
+    Persist missing-slots report payload and emit an audit event.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    try:
+        total_missing_slots = int(payload.get("total_missing_slots") or 0)
+        day_count = int(payload.get("day_count") or (1 if payload.get("date") else 0) or 1)
+        snapshot = MissingSlotsSnapshot.objects.create(
+            log_type=log_type,
+            date_from=date_from,
+            date_to=date_to,
+            day_count=day_count,
+            total_missing_slots=total_missing_slots,
+            payload=payload or {},
+            filters=filters or {},
+            requested_by=user if user and getattr(user, "is_authenticated", False) else None,
+        )
+        log_audit_event(
+            user=user,
+            event_type="missing_slots_snapshot",
+            object_type="missing_slots",
+            object_id=str(snapshot.id),
+            field_name="snapshot_created",
+            new_value=str(total_missing_slots),
+            extra={
+                "snapshot_id": str(snapshot.id),
+                "log_type": log_type,
+                "date_from": str(date_from),
+                "date_to": str(date_to),
+                "day_count": day_count,
+                "total_missing_slots": total_missing_slots,
+                **(filters or {}),
+            },
+        )
+        return snapshot
+    except Exception as e:  # pragma: no cover - safety
+        logger.error("Error saving missing slots snapshot: %s", e)
+        return None
 
 
 def _format_audit_value(value):

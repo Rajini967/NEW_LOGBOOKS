@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo } from 'react';
 import { Header } from '@/components/layout/Header';
 import { MetricCard } from '@/components/dashboard/MetricCard';
 import { ChillerDashboardSection } from '@/components/dashboard/ChillerDashboardSection';
@@ -10,8 +10,8 @@ import { EquipmentStatus } from '@/components/dashboard/EquipmentStatus';
 import { Separator } from '@/components/ui/separator';
 import { ScheduledReadingsStatus } from '@/components/dashboard/ScheduledReadingsStatus';
 import { useMissedReadingsByType } from '@/hooks/useMissedReadingsByType';
+import { useDashboardSummaryQuery, useOverdueSummaryQuery } from '@/hooks/useDashboardQueries';
 import { useAuth } from '@/contexts/AuthContext';
-import { filterScheduleAPI, dashboardSummaryAPI } from '@/lib/api';
 import {
   Thermometer,
   Gauge,
@@ -29,21 +29,8 @@ export default function DashboardPage() {
   const isOperator = user?.role === 'operator';
   const isManagerRole = user?.role === 'manager';
 
-  const [overdueCounts, setOverdueCounts] = useState<{
-    replacement?: number;
-    cleaning?: number;
-    integrity?: number;
-  } | null>(null);
-  const [dashboardSummary, setDashboardSummary] = useState<{
-    active_chillers_count: number;
-    avg_pressure_bar?: number | null;
-    pending_approvals_count: number;
-    approved_today_count: number;
-    total_log_entries: number;
-    hvac_validations_pending_count?: number;
-    active_alerts: number;
-    compliance_score: number | null;
-  } | null>(null);
+  const { data: overdueCounts } = useOverdueSummaryQuery(!isManagerRole);
+  const { data: dashboardSummary } = useDashboardSummaryQuery(!isManagerRole);
 
   const overdueTotal = useMemo(() => {
     if (!overdueCounts) return 0;
@@ -53,40 +40,6 @@ export default function DashboardPage() {
       (overdueCounts.integrity || 0)
     );
   }, [overdueCounts]);
-
-  useEffect(() => {
-    if (isManagerRole) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const data = await filterScheduleAPI.overdueSummary();
-        if (cancelled) return;
-        setOverdueCounts(data);
-      } catch {
-        // Non-blocking: dashboard should still render
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [isManagerRole]);
-
-  useEffect(() => {
-    if (isManagerRole) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const data = await dashboardSummaryAPI.getSummary();
-        if (cancelled) return;
-        setDashboardSummary(data);
-      } catch {
-        // Non-blocking: dashboard should still render
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [isManagerRole]);
 
   return (
     <div className="min-h-screen">
