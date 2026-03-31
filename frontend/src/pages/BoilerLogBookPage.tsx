@@ -246,7 +246,8 @@ const BoilerLogBookPage: React.FC = () => {
   const isReadingsApplicable = maintenanceTimings.activityType === "operation";
 
   const [formData, setFormData] = useState({
-    equipmentType: "boiler" as "boiler" | "briquette",
+    equipmentType: "boiler" as const,
+    fuelType: "fo" as "fo" | "briquette",
     equipmentId: "",
     feedWaterTemp: "",
     oilTemp: "",
@@ -305,7 +306,7 @@ const BoilerLogBookPage: React.FC = () => {
   });
 
   useEffect(() => {
-    if (!isDialogOpen || editingLogId || formData.equipmentType !== "briquette") return;
+    if (!isDialogOpen || editingLogId || formData.fuelType !== "briquette") return;
     const actor = (user?.name || user?.email || "Unknown").trim();
     setFormData((prev) => {
       const next = { ...prev };
@@ -313,7 +314,7 @@ const BoilerLogBookPage: React.FC = () => {
       if (!next.verifiedSignDate) next.verifiedSignDate = buildAutoSignText(actor);
       return next;
     });
-  }, [isDialogOpen, editingLogId, formData.equipmentType, user?.name, user?.email]);
+  }, [isDialogOpen, editingLogId, formData.fuelType, user?.name, user?.email]);
 
   const isFormValueOutOfLimit = (field: BoilerLimitField, rawValue: string): boolean => {
     if (!rawValue) return false;
@@ -453,12 +454,11 @@ const BoilerLogBookPage: React.FC = () => {
     }
     let cancelled = false;
     setPreviousReadingsLoading(true);
-    const listApi =
-      formData.equipmentType === "briquette" ? briquetteLogAPI.list : boilerLogAPI.list;
+    const listApi = formData.fuelType === "briquette" ? briquetteLogAPI.list : boilerLogAPI.list;
     listApi({ equipment_id: formData.equipmentId })
       .then((raw: any[]) => {
         if (cancelled) return;
-        const currentType = formData.equipmentType === "briquette" ? "briquette" : "boiler";
+        const currentType = formData.fuelType === "briquette" ? "briquette" : "boiler";
         const list: BoilerLog[] = raw
           .slice(0, 10)
           .map((log: BoilerLikeLog) => mapBoilerPreviousReadingPayload(log, currentType));
@@ -473,7 +473,7 @@ const BoilerLogBookPage: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [formData.equipmentId, formData.equipmentType]);
+  }, [formData.equipmentId, formData.fuelType]);
 
   useEffect(() => {
     if (!boilerMissing.data && !briquetteMissing.data) return;
@@ -550,8 +550,11 @@ const BoilerLogBookPage: React.FC = () => {
       return;
     }
 
-    const mapEquipment = (eq: MissingSlotsEquipment): EquipmentMissInfo => ({
-      equipmentTypeLabel: "Boiler",
+    const mapEquipment = (
+      eq: MissingSlotsEquipment,
+      equipmentTypeLabel: "Boiler" | "Briquette",
+    ): EquipmentMissInfo => ({
+      equipmentTypeLabel,
       equipmentId: eq.equipment_id,
       equipmentName: eq.equipment_name,
       lastTimestamp: eq.last_reading_timestamp ? new Date(eq.last_reading_timestamp) : null,
@@ -569,35 +572,77 @@ const BoilerLogBookPage: React.FC = () => {
       })),
     });
 
-    setMissingRangeLoading(true);
-    boilerLogAPI
-      .missingSlots({ date_from: missingRangeFrom, date_to: missingRangeTo })
-      .then((payload) => {
-        const totalMissingSlots =
-          payload && typeof payload === "object" && "days" in payload
-            ? (payload as MissingSlotsRangeResponse).total_missing_slots || 0
-            : (payload as MissingSlotsResponse)?.total_missing_slots || 0;
-        const groups =
-          payload && typeof payload === "object" && "days" in payload
-            ? (payload as MissingSlotsRangeResponse).days
-                .map((day) => ({
-                  date: day.date,
-                  totalMissingSlots: day.total_missing_slots || 0,
-                  equipmentList: (day.equipments || [])
-                    .filter((eq) => (eq.missing_slot_count || 0) > 0)
-                    .map(mapEquipment),
-                }))
-                .filter((group) => group.equipmentList.length > 0)
-            : (() => {
-                const single = payload as MissingSlotsResponse;
-                const equipmentList = (single?.equipments || [])
+    const normalizeMissingPayload = (
+      payload: MissingSlotsRangeResponse | MissingSlotsResponse,
+      equipmentTypeLabel: "Boiler" | "Briquette",
+    ) => {
+      const groups =
+        payload && typeof payload === "object" && "days" in payload
+          ? (payload as MissingSlotsRangeResponse).days
+              .map((day) => ({
+                date: day.date,
+                totalMissingSlots: day.total_missing_slots || 0,
+                equipmentList: (day.equipments || [])
                   .filter((eq) => (eq.missing_slot_count || 0) > 0)
-                  .map(mapEquipment);
-                return equipmentList.length
-                  ? [{ date: single.date, totalMissingSlots: single.total_missing_slots || 0, equipmentList }]
-                  : [];
-              })();
-        setMissingRangeTotalSlots(totalMissingSlots);
+                  .map((eq) => mapEquipment(eq, equipmentTypeLabel)),
+              }))
+              .filter((group) => group.equipmentList.length > 0)
+          : (() => {
+              const single = payload as MissingSlotsResponse;
+              const equipmentList = (single?.equipments || [])
+                .filter((eq) => (eq.missing_slot_count || 0) > 0)
+                .map((eq) => mapEquipment(eq, equipmentTypeLabel));
+              return equipmentList.length
+                ? [{ date: single.date, totalMissingSlots: single.total_missing_slots || 0, equipmentList }]
+                : [];
+            })();
+
+      const totalMissingSlots =
+        payload && typeof payload === "object" && "days" in payload
+          ? (payload as MissingSlotsRangeResponse).total_missing_slots || 0
+          : (payload as MissingSlotsResponse)?.total_missing_slots || 0;
+
+      return { totalMissingSlots, groups };
+    };
+
+    setMissingRangeLoading(true);
+    Promise.all([
+      boilerLogAPI.missingSlots({ date_from: missingRangeFrom, date_to: missingRangeTo }),
+      briquetteLogAPI.missingSlots({ date_from: missingRangeFrom, date_to: missingRangeTo }),
+    ])
+      .then(([boilerPayload, briquettePayload]) => {
+        const boilerData = normalizeMissingPayload(
+          boilerPayload as MissingSlotsRangeResponse | MissingSlotsResponse,
+          "Boiler",
+        );
+        const briquetteData = normalizeMissingPayload(
+          briquettePayload as MissingSlotsRangeResponse | MissingSlotsResponse,
+          "Briquette",
+        );
+
+        const mergedByDate = new Map<
+          string,
+          { date: string; totalMissingSlots: number; equipmentList: EquipmentMissInfo[] }
+        >();
+
+        [...boilerData.groups, ...briquetteData.groups].forEach((group) => {
+          const existing = mergedByDate.get(group.date);
+          if (existing) {
+            existing.totalMissingSlots += group.totalMissingSlots;
+            existing.equipmentList.push(...group.equipmentList);
+          } else {
+            mergedByDate.set(group.date, {
+              date: group.date,
+              totalMissingSlots: group.totalMissingSlots,
+              equipmentList: [...group.equipmentList],
+            });
+          }
+        });
+
+        const groups = Array.from(mergedByDate.values()).sort((a, b) =>
+          a.date < b.date ? 1 : a.date > b.date ? -1 : 0,
+        );
+        setMissingRangeTotalSlots(boilerData.totalMissingSlots + briquetteData.totalMissingSlots);
         setMissingRangeGroups(groups);
       })
       .catch(() => {
@@ -772,7 +817,7 @@ const BoilerLogBookPage: React.FC = () => {
         return;
       }
 
-      if (formData.equipmentType === "briquette") {
+      if (formData.fuelType === "briquette") {
         const briquetteData: Record<string, unknown> = {
           equipment_id: formData.equipmentId,
           activity_type: maintenanceTimings.activityType,
@@ -844,6 +889,7 @@ const BoilerLogBookPage: React.FC = () => {
         setFormData((prev) => ({
           ...prev,
           equipmentType: "boiler",
+          fuelType: "fo",
           equipmentId: "",
           remarks: "",
           date: "",
@@ -1202,7 +1248,8 @@ const BoilerLogBookPage: React.FC = () => {
     }
     setEditingLogId(log.id);
     setFormData({
-      equipmentType: (log.equipmentType || "boiler") as "boiler" | "briquette",
+      equipmentType: "boiler",
+      fuelType: log.equipmentType === "briquette" ? "briquette" : "fo",
       equipmentId: log.equipmentId ?? "",
       feedWaterTemp: log.feedWaterTemp != null ? String(log.feedWaterTemp) : "",
       oilTemp: log.oilTemp != null ? String(log.oilTemp) : "",
@@ -1589,6 +1636,7 @@ const BoilerLogBookPage: React.FC = () => {
                   variant="accent"
                   onClick={() => {
                     setEditingLogId(null);
+                    setFormData((prev) => ({ ...prev, equipmentType: "boiler", fuelType: "fo", equipmentId: "" }));
                     setEntryLogInterval("");
                     setEntryShiftDurationHours("");
                     setEntryToleranceMinutes("");
@@ -1616,23 +1664,40 @@ const BoilerLogBookPage: React.FC = () => {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-3 gap-4">
                     <div className="space-y-2">
                       <Label>Equipment Type *</Label>
-                      <Select
-                        value={formData.equipmentType}
-                        onValueChange={(v) =>
-                          setFormData((prev) => ({
-                            ...prev,
-                            equipmentType: v as "boiler" | "briquette",
-                          }))
-                        }
-                      >
+                      <Select value={formData.equipmentType} disabled>
                         <SelectTrigger>
-                          <SelectValue placeholder="Select type" />
+                          <SelectValue placeholder="Boiler" />
                         </SelectTrigger>
                         <SelectContent>
                           <SelectItem value="boiler">Boiler</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Fuel Type *</Label>
+                      <Select
+                        value={formData.fuelType}
+                        onValueChange={(v) =>
+                          {
+                            setFormData((prev) => ({
+                              ...prev,
+                              fuelType: v as "fo" | "briquette",
+                              equipmentId: "",
+                            }));
+                            setEntryLogInterval("");
+                            setEntryShiftDurationHours("");
+                            setEntryToleranceMinutes("");
+                          }
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select fuel type" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="fo">FO</SelectItem>
                           <SelectItem value="briquette">Briquette</SelectItem>
                         </SelectContent>
                       </Select>
@@ -1773,7 +1838,7 @@ const BoilerLogBookPage: React.FC = () => {
                     );
                   })()}
 
-                  {formData.equipmentType === "briquette" && (
+                  {formData.fuelType === "briquette" && (
                     <fieldset disabled={!isReadingsApplicable} className={cn(!isReadingsApplicable && "opacity-60")}>
                       <div className="space-y-3">
                         <h3 className="text-sm font-semibold border-b pb-2">Briquette Parameters</h3>
@@ -1859,7 +1924,7 @@ const BoilerLogBookPage: React.FC = () => {
                   )}
 
                   {/* Hourly Parameters */}
-                  {formData.equipmentType === "boiler" && (
+                  {formData.fuelType === "fo" && (
                   <fieldset disabled={!isReadingsApplicable} className={cn(!isReadingsApplicable && "opacity-60")}>
                   <div className="space-y-3">
                     <h3 className="text-sm font-semibold border-b pb-2">Hourly Parameters</h3>
@@ -2089,7 +2154,7 @@ const BoilerLogBookPage: React.FC = () => {
 
                   {/* Remarks */}
                   <div className="space-y-3 pt-4 mt-2 border-t">
-                    {formData.equipmentType === "briquette" && (
+                    {formData.fuelType === "briquette" && (
                       <div className="space-y-2">
                         <Label>Verified Sign & Date</Label>
                         <Input

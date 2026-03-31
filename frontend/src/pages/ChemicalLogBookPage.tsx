@@ -1176,6 +1176,20 @@ const ChemicalLogBookPage: React.FC = () => {
     }
   };
 
+  const stockValidationApplies =
+    !!(
+      chemicalIdForStock ||
+      (currentAssignment && normalizeLocationForApi(currentAssignment.location ?? undefined))
+    );
+  const enteredChemicalQty = parseFloat(formData.chemicalQty);
+  const isChemicalQtyOverStock =
+    stockValidationApplies &&
+    formData.chemicalQty !== "" &&
+    Number.isFinite(enteredChemicalQty) &&
+    !!selectedStockInfo &&
+    selectedStockInfo.availableQtyKg != null &&
+    enteredChemicalQty > selectedStockInfo.availableQtyKg;
+
   return (
     <>
       <Header
@@ -1759,6 +1773,10 @@ const ChemicalLogBookPage: React.FC = () => {
                             })
                           }
                           placeholder="e.g., 0.32"
+                          className={cn(
+                            isChemicalQtyOverStock &&
+                              "border-destructive bg-destructive/5 text-destructive font-semibold",
+                          )}
                           disabled={
                             !!(
                               chemicalIdForStock ||
@@ -1794,6 +1812,12 @@ const ChemicalLogBookPage: React.FC = () => {
                               )}
                             </div>
                           )}
+                        {isChemicalQtyOverStock && selectedStockInfo?.availableQtyKg != null && (
+                          <p className="text-xs text-destructive">
+                            Entered quantity exceeds available stock ({selectedStockInfo.availableQtyKg}{" "}
+                            {selectedStockInfo.unit ?? "kg"}).
+                          </p>
+                        )}
                       </div>
                     </div>
                   </div>

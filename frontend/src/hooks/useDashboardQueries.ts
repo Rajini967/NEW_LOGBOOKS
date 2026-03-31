@@ -9,6 +9,13 @@ type OverdueSummary = {
 
 type DashboardSummary = {
   active_chillers_count: number;
+  active_boilers_count: number;
+  active_chemicals_count: number;
+  active_filters_count: number;
+  power_today_kwh: number;
+  water_today_liters: number;
+  fuel_today_liters: number;
+  diesel_today_liters: number;
   avg_pressure_bar?: number | null;
   pending_approvals_count: number;
   approved_today_count: number;

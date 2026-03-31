@@ -42,6 +42,13 @@ def dashboard_summary(request):
 
     return Response({
         "active_chillers_count": metrics["active_chillers_count"],
+        "active_boilers_count": metrics["active_boilers_count"],
+        "active_chemicals_count": metrics["active_chemicals_count"],
+        "active_filters_count": metrics["active_filters_count"],
+        "power_today_kwh": metrics["power_today_kwh"],
+        "water_today_liters": metrics["water_today_liters"],
+        "fuel_today_liters": metrics["fuel_today_liters"],
+        "diesel_today_liters": metrics["diesel_today_liters"],
         "avg_pressure_bar": metrics["avg_pressure_bar"],
         "pending_approvals_count": metrics["pending_approvals_count"],
         "approved_today_count": approved_today_count,

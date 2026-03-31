@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React from 'react';
 import { Header } from '@/components/layout/Header';
 import { MetricCard } from '@/components/dashboard/MetricCard';
 import { ChillerDashboardSection } from '@/components/dashboard/ChillerDashboardSection';
@@ -7,19 +7,17 @@ import { ChemicalDashboardSection } from '@/components/dashboard/ChemicalDashboa
 import { FiltersDashboardSection } from '@/components/dashboard/FiltersDashboardSection';
 import { DashboardSectionShell } from '@/components/dashboard/DashboardSectionShell';
 import { EquipmentStatus } from '@/components/dashboard/EquipmentStatus';
-import { Separator } from '@/components/ui/separator';
 import { ScheduledReadingsStatus } from '@/components/dashboard/ScheduledReadingsStatus';
 import { useMissedReadingsByType } from '@/hooks/useMissedReadingsByType';
-import { useDashboardSummaryQuery, useOverdueSummaryQuery } from '@/hooks/useDashboardQueries';
+import { useDashboardSummaryQuery } from '@/hooks/useDashboardQueries';
 import { useAuth } from '@/contexts/AuthContext';
 import {
   Thermometer,
-  Gauge,
-  Wind,
-  ClipboardCheck,
-  AlertTriangle,
-  CheckCircle2,
-  Clock,
+  FlaskConical,
+  Filter,
+  Zap,
+  Droplets,
+  Fuel,
 } from 'lucide-react';
 
 export default function DashboardPage() {
@@ -29,17 +27,7 @@ export default function DashboardPage() {
   const isOperator = user?.role === 'operator';
   const isManagerRole = user?.role === 'manager';
 
-  const { data: overdueCounts } = useOverdueSummaryQuery(!isManagerRole);
   const { data: dashboardSummary } = useDashboardSummaryQuery(!isManagerRole);
-
-  const overdueTotal = useMemo(() => {
-    if (!overdueCounts) return 0;
-    return (
-      (overdueCounts.replacement || 0) +
-      (overdueCounts.cleaning || 0) +
-      (overdueCounts.integrity || 0)
-    );
-  }, [overdueCounts]);
 
   return (
     <div className="min-h-screen">
@@ -50,9 +38,6 @@ export default function DashboardPage() {
 
       <div className="p-4 sm:p-6 space-y-8">
         <DashboardSectionShell title="Operations overview" accentHsl="220,60%,35%">
-          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            Fleet and readings
-          </p>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
             <MetricCard
               title="Active Chillers"
@@ -62,58 +47,56 @@ export default function DashboardPage() {
               status="normal"
             />
             <MetricCard
-              title="Avg Pressure"
+              title="Active Boilers"
               value={
-                dashboardSummary?.avg_pressure_bar != null
-                  ? dashboardSummary.avg_pressure_bar
+                dashboardSummary?.active_boilers_count != null
+                  ? dashboardSummary.active_boilers_count
                   : '—'
               }
-              unit="bar"
-              icon={Gauge}
+              unit="units"
+              icon={Zap}
               status="normal"
             />
             <MetricCard
-              title="E Log Book"
-              value={dashboardSummary?.total_log_entries ?? 0}
-              unit="entries"
-              icon={Thermometer}
+              title="Active Chemicals"
+              value={dashboardSummary?.active_chemicals_count ?? '—'}
+              unit="units"
+              icon={FlaskConical}
               status="normal"
             />
             <MetricCard
-              title="HVAC Validations"
-              value={dashboardSummary?.hvac_validations_pending_count ?? '—'}
-              unit="pending"
-              icon={Wind}
-              status="normal"
-            />
-          </div>
-          <Separator className="my-1" />
-          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            Workflow and compliance
-          </p>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
-            <MetricCard
-              title="Pending Approvals"
-              value={dashboardSummary?.pending_approvals_count ?? 0}
-              icon={Clock}
-              status="warning"
-            />
-            <MetricCard
-              title="Approved Today"
-              value={dashboardSummary?.approved_today_count ?? 0}
-              icon={CheckCircle2}
+              title="Active Filters"
+              value={dashboardSummary?.active_filters_count ?? '—'}
+              unit="units"
+              icon={Filter}
               status="normal"
             />
             <MetricCard
-              title="Active Alerts"
-              value={dashboardSummary?.active_alerts ?? overdueTotal ?? 0}
-              icon={AlertTriangle}
-              status={(dashboardSummary?.active_alerts ?? overdueTotal ?? 0) > 0 ? 'critical' : 'normal'}
+              title="Power"
+              value={dashboardSummary?.power_today_kwh ?? 0}
+              unit="kWh"
+              icon={Zap}
+              status="normal"
             />
             <MetricCard
-              title="Compliance Score"
-              value={dashboardSummary?.compliance_score != null ? `${dashboardSummary.compliance_score}%` : '—'}
-              icon={ClipboardCheck}
+              title="Water"
+              value={dashboardSummary?.water_today_liters ?? 0}
+              unit="L"
+              icon={Droplets}
+              status="normal"
+            />
+            <MetricCard
+              title="Fuel"
+              value={dashboardSummary?.fuel_today_liters ?? 0}
+              unit="L"
+              icon={Fuel}
+              status="normal"
+            />
+            <MetricCard
+              title="Diesel"
+              value={dashboardSummary?.diesel_today_liters ?? 0}
+              unit="L"
+              icon={Fuel}
               status="normal"
             />
           </div>

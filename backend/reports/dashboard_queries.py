@@ -15,6 +15,69 @@ def get_active_chillers_count() -> int:
     ).count()
 
 
+def get_active_boilers_count() -> int:
+    from equipment.models import Equipment
+
+    return Equipment.objects.filter(is_active=True).filter(
+        Q(category__name__iexact="boiler") | Q(category__name__iexact="boilers")
+    ).count()
+
+
+def get_active_chemicals_count() -> int:
+    from equipment.models import Equipment
+
+    return Equipment.objects.filter(is_active=True).filter(
+        Q(category__name__iexact="chemical") | Q(category__name__iexact="chemicals")
+    ).count()
+
+
+def get_active_filters_count() -> int:
+    from equipment.models import Equipment
+
+    return Equipment.objects.filter(is_active=True).filter(
+        Q(category__name__iexact="filter") | Q(category__name__iexact="filters")
+    ).count()
+
+
+def get_today_utilities_metrics(today) -> Dict[str, float]:
+    from reports.models import ManualBoilerConsumption, ManualChillerConsumption
+
+    chiller_agg = ManualChillerConsumption.objects.filter(date=today).aggregate(
+        power_kwh=Sum("power_kwh"),
+        water_ct1_l=Sum("water_ct1_l"),
+        water_ct2_l=Sum("water_ct2_l"),
+        water_ct3_l=Sum("water_ct3_l"),
+    )
+    boiler_agg = ManualBoilerConsumption.objects.filter(date=today).aggregate(
+        power_kwh=Sum("power_kwh"),
+        water_l=Sum("water_l"),
+        diesel_l=Sum("diesel_l"),
+        furnace_oil_l=Sum("furnace_oil_l"),
+        brigade_kg=Sum("brigade_kg"),
+    )
+
+    power_today_kwh = float(chiller_agg["power_kwh"] or 0) + float(boiler_agg["power_kwh"] or 0)
+    water_today_liters = (
+        float(chiller_agg["water_ct1_l"] or 0)
+        + float(chiller_agg["water_ct2_l"] or 0)
+        + float(chiller_agg["water_ct3_l"] or 0)
+        + float(boiler_agg["water_l"] or 0)
+    )
+    fuel_today_liters = (
+        float(boiler_agg["diesel_l"] or 0)
+        + float(boiler_agg["furnace_oil_l"] or 0)
+        + float(boiler_agg["brigade_kg"] or 0)
+    )
+    diesel_today_liters = float(boiler_agg["diesel_l"] or 0)
+
+    return {
+        "power_today_kwh": round(power_today_kwh, 2),
+        "water_today_liters": round(water_today_liters, 2),
+        "fuel_today_liters": round(fuel_today_liters, 2),
+        "diesel_today_liters": round(diesel_today_liters, 2),
+    }
+
+
 def get_pending_approvals_count(pending_statuses: Tuple[str, ...]) -> int:
     from boiler_logs.models import BoilerLog
     from chemical_prep.models import ChemicalPreparation
@@ -110,15 +173,25 @@ def get_dashboard_metrics() -> Dict[str, int | float | None]:
 
     metrics: Dict[str, int | float | None] = {
         "active_chillers_count": 0,
+        "active_boilers_count": 0,
+        "active_chemicals_count": 0,
+        "active_filters_count": 0,
         "pending_approvals_count": 0,
         "hvac_validations_pending_count": 0,
         "total_log_entries": 0,
         "active_alerts": 0,
         "avg_pressure_bar": None,
+        "power_today_kwh": 0.0,
+        "water_today_liters": 0.0,
+        "fuel_today_liters": 0.0,
+        "diesel_today_liters": 0.0,
     }
 
     query_steps = (
         ("active_chillers_count", lambda: get_active_chillers_count()),
+        ("active_boilers_count", lambda: get_active_boilers_count()),
+        ("active_chemicals_count", lambda: get_active_chemicals_count()),
+        ("active_filters_count", lambda: get_active_filters_count()),
         ("pending_approvals_count", lambda: get_pending_approvals_count(pending_statuses)),
         ("hvac_validations_pending_count", lambda: get_hvac_pending_count(pending_statuses)),
         ("total_log_entries", get_total_log_entries),
@@ -131,4 +204,10 @@ def get_dashboard_metrics() -> Dict[str, int | float | None]:
         except Exception:
             # Keep per-metric fallback explicit; endpoint still returns partial dashboard data.
             continue
+
+    try:
+        metrics.update(get_today_utilities_metrics(today))
+    except Exception:
+        pass
+
     return metrics
