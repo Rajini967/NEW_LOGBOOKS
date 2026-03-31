@@ -55,7 +55,7 @@ export function DashboardSectionShell({
     >
       <div
         className={cn(
-          'flex flex-col gap-3 border-b px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4',
+          'flex flex-col gap-2 border-b px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3',
           variant === 'rail' && 'bg-muted/25',
           variant === 'framed' && 'bg-card'
         )}
@@ -73,15 +73,15 @@ export function DashboardSectionShell({
         <h3
           className={cn(
             'text-foreground tracking-tight',
-            variant === 'plain' && 'text-lg font-bold',
-            variant !== 'plain' && 'text-base font-semibold'
+            variant === 'plain' && 'text-base font-semibold',
+            variant !== 'plain' && 'text-sm font-semibold'
           )}
         >
           {title}
         </h3>
         {toolbar ? <div className="flex flex-wrap items-center gap-2">{toolbar}</div> : null}
       </div>
-      <div className="space-y-5 p-4 sm:p-5">{children}</div>
+      <div className="space-y-3 p-3">{children}</div>
     </div>
   );
 }

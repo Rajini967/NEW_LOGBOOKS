@@ -15,8 +15,22 @@ import { Loader2 } from 'lucide-react';
 import { DashboardSectionShell } from './DashboardSectionShell';
 import { DashboardInsightRow } from './DashboardInsightRow';
 import { formatDiffPct, rowStatus } from './dashboard-status';
+import { cn } from '@/lib/utils';
 
 type PeriodType = 'week' | 'month';
+export type FiltersPeriodType = PeriodType;
+
+interface FiltersDashboardSectionProps {
+  periodType?: FiltersPeriodType;
+  onPeriodTypeChange?: (value: FiltersPeriodType) => void;
+  date?: string;
+  onDateChange?: (value: string) => void;
+  selectedEquipmentId?: string;
+  onSelectedEquipmentIdChange?: (value: string) => void;
+  showToolbar?: boolean;
+  className?: string;
+  onEquipmentOptionsChange?: (options: { value: string; label: string }[]) => void;
+}
 
 const ACCENT = '262,60%,45%';
 
@@ -44,10 +58,26 @@ function costDonutPct(actual: number, projected: number): number | null {
   return Math.min(100, Math.max(0, (actual / projected) * 100));
 }
 
-export function FiltersDashboardSection() {
-  const [periodType, setPeriodType] = useState<PeriodType>('month');
-  const [date, setDate] = useState<string>(getDefaultDate());
-  const [selectedEquipmentId, setSelectedEquipmentId] = useState<string>('');
+export function FiltersDashboardSection({
+  periodType: periodTypeProp,
+  onPeriodTypeChange,
+  date: dateProp,
+  onDateChange,
+  selectedEquipmentId: selectedEquipmentIdProp,
+  onSelectedEquipmentIdChange,
+  showToolbar = true,
+  className,
+  onEquipmentOptionsChange,
+}: FiltersDashboardSectionProps = {}) {
+  const [periodTypeState, setPeriodTypeState] = useState<PeriodType>('month');
+  const [dateState, setDateState] = useState<string>(getDefaultDate());
+  const [selectedEquipmentIdState, setSelectedEquipmentIdState] = useState<string>('');
+  const periodType = periodTypeProp ?? periodTypeState;
+  const setPeriodType = onPeriodTypeChange ?? setPeriodTypeState;
+  const date = dateProp ?? dateState;
+  const setDate = onDateChange ?? setDateState;
+  const selectedEquipmentId = selectedEquipmentIdProp ?? selectedEquipmentIdState;
+  const setSelectedEquipmentId = onSelectedEquipmentIdChange ?? setSelectedEquipmentIdState;
   const [equipmentOptions, setEquipmentOptions] = useState<{ value: string; label: string }[]>([]);
   const [summary, setSummary] = useState<FiltersDashboardSummary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -73,15 +103,21 @@ export function FiltersDashboardSection() {
             value: info.equipment_id!,
             label: `${info.equipment_number ?? info.equipment_id}${info.equipment_name ? ` – ${info.equipment_name}` : ''}`,
           }));
-        if (!cancelled) setEquipmentOptions(opts);
+        if (!cancelled) {
+          setEquipmentOptions(opts);
+          onEquipmentOptionsChange?.(opts);
+        }
       } catch {
-        if (!cancelled) setEquipmentOptions([]);
+        if (!cancelled) {
+          setEquipmentOptions([]);
+          onEquipmentOptionsChange?.([]);
+        }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [onEquipmentOptionsChange]);
 
   const fetchSummary = useCallback(
     async (background = false) => {
@@ -230,7 +266,8 @@ export function FiltersDashboardSection() {
       accentHsl={ACCENT}
       variant="framed"
       accentEdge="strong"
-      toolbar={toolbar}
+      className={cn('bg-muted/35', className)}
+      toolbar={showToolbar ? toolbar : undefined}
     >
       {loading && (
         <div className="flex items-center justify-center py-12 text-muted-foreground">
@@ -247,84 +284,88 @@ export function FiltersDashboardSection() {
         <>
           <p className="text-xs text-muted-foreground -mb-2">Period: {periodLabel(summary)}</p>
 
-          <DashboardInsightRow
-            subtitle="Maintenance activity (counts) — actual vs projected"
-            accentHsl={ACCENT}
-            donutCenterTitle="% of projected acts"
-            donutCenterValue={
-              hasProjectedConsumption && summary.projected_consumption! > 0
-                ? `${Math.round(costDonutPct(summary.total_consumption, summary.projected_consumption!)!)}%`
-                : '—'
-            }
-            donutFillPct={
-              hasProjectedConsumption ? costDonutPct(summary.total_consumption, summary.projected_consumption!) : null
-            }
-            metrics={[
-              { label: 'Actual (activities)', value: String(summary.total_consumption) },
-              ...(hasProjectedConsumption
-                ? [
-                    { label: 'Projected', value: String(summary.projected_consumption) },
-                    {
-                      label: 'Δ vs projected',
-                      value:
-                        summary.projected_consumption! !== 0
-                          ? formatDiffPct(summary.total_consumption, summary.projected_consumption!)
-                          : '—',
-                    },
-                  ]
-                : [{ label: 'Projected', value: 'Set in config' }]),
-            ]}
-            chartData={activityChartData}
-            barLabel="Actual count"
-            lineLabel="Projected count"
-            formatTooltip={(value) => [String(value), '']}
-            tableRows={activityTableRows}
-            emptyMessage="No activity data."
-            chartType="line-dual"
-            rowVariant="standard"
-            comparisonHsl="262, 38%, 38%"
-          />
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+            <DashboardInsightRow
+              subtitle="Maintenance activity (counts) — actual vs projected"
+              accentHsl={ACCENT}
+              donutCenterTitle="% of projected acts"
+              donutCenterValue={
+                hasProjectedConsumption && summary.projected_consumption! > 0
+                  ? `${Math.round(costDonutPct(summary.total_consumption, summary.projected_consumption!)!)}%`
+                  : '—'
+              }
+              donutFillPct={
+                hasProjectedConsumption ? costDonutPct(summary.total_consumption, summary.projected_consumption!) : null
+              }
+              metrics={[
+                { label: 'Actual (activities)', value: String(summary.total_consumption) },
+                ...(hasProjectedConsumption
+                  ? [
+                      { label: 'Projected', value: String(summary.projected_consumption) },
+                      {
+                        label: 'Δ vs projected',
+                        value:
+                          summary.projected_consumption! !== 0
+                            ? formatDiffPct(summary.total_consumption, summary.projected_consumption!)
+                            : '—',
+                      },
+                    ]
+                  : [{ label: 'Projected', value: 'Set in config' }]),
+              ]}
+              chartData={activityChartData}
+              barLabel="Actual count"
+              lineLabel="Projected count"
+              formatTooltip={(value) => [String(value), '']}
+              tableRows={activityTableRows}
+              emptyMessage="No activity data."
+              chartHeight={260}
+              chartType="line-dual"
+              rowVariant="standard"
+              comparisonHsl="262, 38%, 38%"
+            />
 
-          <DashboardInsightRow
-            subtitle="Maintenance cost (₹) — actual vs projected"
-            accentHsl={ACCENT}
-            donutCenterTitle="% of projected cost"
-            donutCenterValue={
-              hasProjectedCost && summary.projected_cost_rs! > 0
-                ? `${Math.round(costDonutPct(summary.total_cost_rs, summary.projected_cost_rs!)!)}%`
-                : '—'
-            }
-            donutFillPct={
-              hasProjectedCost ? costDonutPct(summary.total_cost_rs, summary.projected_cost_rs!) : null
-            }
-            metrics={[
-              { label: 'Actual (₹)', value: `₹${summary.total_cost_rs.toLocaleString('en-IN')}` },
-              ...(hasProjectedCost
-                ? [
-                    { label: 'Projected (₹)', value: `₹${summary.projected_cost_rs!.toLocaleString('en-IN')}` },
-                    {
-                      label: 'Δ vs projected',
-                      value:
-                        summary.projected_cost_rs! !== 0
-                          ? formatDiffPct(summary.total_cost_rs, summary.projected_cost_rs!)
-                          : '—',
-                    },
-                  ]
-                : [{ label: 'Projected (₹)', value: 'Set in config' }]),
-            ]}
-            chartData={costChartData}
-            barLabel="Actual cost (₹)"
-            lineLabel="Projected (₹)"
-            formatTooltip={(value) => [
-              `₹${Number(value).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`,
-              '',
-            ]}
-            tableRows={costTableRows}
-            emptyMessage="No cost data."
-            chartType="line-dual"
-            rowVariant="soft"
-            comparisonHsl="38, 58%, 42%"
-          />
+            <DashboardInsightRow
+              subtitle="Maintenance cost (₹) — actual vs projected"
+              accentHsl={ACCENT}
+              donutCenterTitle="% of projected cost"
+              donutCenterValue={
+                hasProjectedCost && summary.projected_cost_rs! > 0
+                  ? `${Math.round(costDonutPct(summary.total_cost_rs, summary.projected_cost_rs!)!)}%`
+                  : '—'
+              }
+              donutFillPct={
+                hasProjectedCost ? costDonutPct(summary.total_cost_rs, summary.projected_cost_rs!) : null
+              }
+              metrics={[
+                { label: 'Actual (₹)', value: `₹${summary.total_cost_rs.toLocaleString('en-IN')}` },
+                ...(hasProjectedCost
+                  ? [
+                      { label: 'Projected (₹)', value: `₹${summary.projected_cost_rs!.toLocaleString('en-IN')}` },
+                      {
+                        label: 'Δ vs projected',
+                        value:
+                          summary.projected_cost_rs! !== 0
+                            ? formatDiffPct(summary.total_cost_rs, summary.projected_cost_rs!)
+                            : '—',
+                      },
+                    ]
+                  : [{ label: 'Projected (₹)', value: 'Set in config' }]),
+              ]}
+              chartData={costChartData}
+              barLabel="Actual cost (₹)"
+              lineLabel="Projected (₹)"
+              formatTooltip={(value) => [
+                `₹${Number(value).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`,
+                '',
+              ]}
+              tableRows={costTableRows}
+              emptyMessage="No cost data."
+              chartHeight={260}
+              chartType="line-dual"
+              rowVariant="soft"
+              comparisonHsl="38, 58%, 42%"
+            />
+          </div>
         </>
       )}
     </DashboardSectionShell>

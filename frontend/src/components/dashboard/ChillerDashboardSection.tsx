@@ -19,6 +19,19 @@ import { formatDiffPct, rowStatus, utilizationDonutPct } from './dashboard-statu
 import { cn } from '@/lib/utils';
 
 type PeriodType = 'day' | 'month' | 'year';
+export type ChillerPeriodType = PeriodType;
+
+interface ChillerDashboardSectionProps {
+  periodType?: ChillerPeriodType;
+  onPeriodTypeChange?: (value: ChillerPeriodType) => void;
+  date?: string;
+  onDateChange?: (value: string) => void;
+  selectedEquipmentId?: string;
+  onSelectedEquipmentIdChange?: (value: string) => void;
+  showToolbar?: boolean;
+  className?: string;
+  onEquipmentOptionsChange?: (options: { value: string; label: string }[]) => void;
+}
 
 /** Chiller section chrome + actual bars (~#26A69A) */
 const POWER_ACCENT_HSL = '174, 42%, 46%';
@@ -38,10 +51,26 @@ function costDonutPct(actual: number, projected: number): number | null {
   return Math.min(100, Math.max(0, (actual / projected) * 100));
 }
 
-export function ChillerDashboardSection() {
-  const [periodType, setPeriodType] = useState<PeriodType>('day');
-  const [date, setDate] = useState<string>(getDefaultDate());
-  const [selectedEquipmentId, setSelectedEquipmentId] = useState<string>('');
+export function ChillerDashboardSection({
+  periodType: periodTypeProp,
+  onPeriodTypeChange,
+  date: dateProp,
+  onDateChange,
+  selectedEquipmentId: selectedEquipmentIdProp,
+  onSelectedEquipmentIdChange,
+  showToolbar = true,
+  className,
+  onEquipmentOptionsChange,
+}: ChillerDashboardSectionProps = {}) {
+  const [periodTypeState, setPeriodTypeState] = useState<PeriodType>('day');
+  const [dateState, setDateState] = useState<string>(getDefaultDate());
+  const [selectedEquipmentIdState, setSelectedEquipmentIdState] = useState<string>('');
+  const periodType = periodTypeProp ?? periodTypeState;
+  const setPeriodType = onPeriodTypeChange ?? setPeriodTypeState;
+  const date = dateProp ?? dateState;
+  const setDate = onDateChange ?? setDateState;
+  const selectedEquipmentId = selectedEquipmentIdProp ?? selectedEquipmentIdState;
+  const setSelectedEquipmentId = onSelectedEquipmentIdChange ?? setSelectedEquipmentIdState;
   const [equipmentOptions, setEquipmentOptions] = useState<{ value: string; label: string }[]>([]);
   const [summary, setSummary] = useState<ChillerDashboardSummary | null>(null);
   const [series, setSeries] = useState<
@@ -65,15 +94,21 @@ export function ChillerDashboardSection() {
             value: e.equipment_number,
             label: `${e.equipment_number}${e.name ? ` – ${e.name}` : ''}`,
           }));
-        if (!cancelled) setEquipmentOptions(opts);
+        if (!cancelled) {
+          setEquipmentOptions(opts);
+          onEquipmentOptionsChange?.(opts);
+        }
       } catch {
-        if (!cancelled) setEquipmentOptions([]);
+        if (!cancelled) {
+          setEquipmentOptions([]);
+          onEquipmentOptionsChange?.([]);
+        }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [onEquipmentOptionsChange]);
 
   const fetchSummary = useCallback(
     async (background = false) => {
@@ -248,8 +283,8 @@ export function ChillerDashboardSection() {
       accentHsl={POWER_ACCENT_HSL}
       variant="gradient"
       accentEdge="subtle"
-      className="bg-muted/35"
-      toolbar={toolbar}
+      className={cn('bg-muted/35', className)}
+      toolbar={showToolbar ? toolbar : undefined}
     >
       {loading && (
         <div className="flex items-center justify-center py-12 text-muted-foreground">
@@ -270,118 +305,120 @@ export function ChillerDashboardSection() {
             </p>
           )}
 
-          <DashboardInsightRow
-            subtitle="Power consumption (kWh) — actual vs projected"
-            accentHsl={POWER_ACCENT_HSL}
-            donutCenterTitle="% of projected"
-            donutCenterValue={
-              utilizationDonutPct(
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+            <DashboardInsightRow
+              subtitle="Power consumption (kWh) — actual vs projected"
+              accentHsl={POWER_ACCENT_HSL}
+              donutCenterTitle="% of projected"
+              donutCenterValue={
+                utilizationDonutPct(
+                  hasProjected && summary.projected_power_kwh! > 0
+                    ? (summary.actual_power_kwh / summary.projected_power_kwh!) * 100
+                    : null,
+                  hasProjected && summary.projected_power_kwh! > 0
+                ) != null
+                  ? `${Math.round(
+                      utilizationDonutPct(
+                        hasProjected && summary.projected_power_kwh! > 0
+                          ? (summary.actual_power_kwh / summary.projected_power_kwh!) * 100
+                          : null,
+                        hasProjected && summary.projected_power_kwh! > 0
+                      )!
+                    )}%`
+                  : '—'
+              }
+              donutFillPct={utilizationDonutPct(
                 hasProjected && summary.projected_power_kwh! > 0
                   ? (summary.actual_power_kwh / summary.projected_power_kwh!) * 100
                   : null,
                 hasProjected && summary.projected_power_kwh! > 0
-              ) != null
-                ? `${Math.round(
-                    utilizationDonutPct(
-                      hasProjected && summary.projected_power_kwh! > 0
-                        ? (summary.actual_power_kwh / summary.projected_power_kwh!) * 100
-                        : null,
-                      hasProjected && summary.projected_power_kwh! > 0
-                    )!
-                  )}%`
-                : '—'
-            }
-            donutFillPct={utilizationDonutPct(
-              hasProjected && summary.projected_power_kwh! > 0
-                ? (summary.actual_power_kwh / summary.projected_power_kwh!) * 100
-                : null,
-              hasProjected && summary.projected_power_kwh! > 0
-            )}
-            metrics={[
-              { label: 'Actual (kWh)', value: summary.actual_power_kwh.toFixed(1) },
-              {
-                label: 'Projected (kWh)',
-                value:
-                  hasProjected
-                    ? summary.projected_power_kwh!.toFixed(1)
-                    : '—',
-              },
-              ...(hasProjected
-                ? [
-                    {
-                      label: 'Δ vs projected',
-                      value: formatDiffPct(summary.actual_power_kwh, summary.projected_power_kwh!),
-                    } as const,
-                  ]
-                : []),
-            ]}
-            chartData={energyChartData}
-            barLabel="Actual (kWh)"
-            lineLabel="Projected (kWh)"
-            formatTooltip={(value, name) => [`${Number(value).toFixed(1)} kWh`, name]}
-            tableRows={energyTableRows}
-            emptyMessage="No data for this period."
-            chartType="bar-line"
-            rowVariant="card"
-            comparisonHsl={POWER_LIMIT_BAR_HSL}
-            tableZebra
-            tableHeaderTone="neutral"
-            statusDisplay="pill"
-            leftKpiLayout="stat-box"
-          />
-
-          {hasCost && (
-            <DashboardInsightRow
-              subtitle="Operating cost (₹) — actual vs projected"
-              accentHsl={COST_ACCENT_HSL}
-              donutCenterTitle="% of projected opex"
-              donutCenterValue={
-                costDonutPct(summary.actual_cost_rs ?? 0, summary.projected_cost_rs ?? 0) != null
-                  ? `${Math.round(costDonutPct(summary.actual_cost_rs ?? 0, summary.projected_cost_rs ?? 0)!)}%`
-                  : '—'
-              }
-              donutFillPct={costDonutPct(summary.actual_cost_rs ?? 0, summary.projected_cost_rs ?? 0)}
+              )}
               metrics={[
+                { label: 'Actual (kWh)', value: summary.actual_power_kwh.toFixed(1) },
                 {
-                  label: 'Actual (₹)',
+                  label: 'Projected (kWh)',
                   value:
-                    summary.actual_cost_rs != null
-                      ? `₹${summary.actual_cost_rs.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
+                    hasProjected
+                      ? summary.projected_power_kwh!.toFixed(1)
                       : '—',
                 },
-                {
-                  label: 'Projected (₹)',
-                  value:
-                    summary.projected_cost_rs != null
-                      ? `₹${summary.projected_cost_rs.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
-                      : '—',
-                },
-                {
-                  label: 'Δ vs projected',
-                  value:
-                    summary.projected_cost_rs != null && summary.projected_cost_rs !== 0
-                      ? formatDiffPct(summary.actual_cost_rs ?? 0, summary.projected_cost_rs)
-                      : '—',
-                },
+                ...(hasProjected
+                  ? [
+                      {
+                        label: 'Δ vs projected',
+                        value: formatDiffPct(summary.actual_power_kwh, summary.projected_power_kwh!),
+                      } as const,
+                    ]
+                  : []),
               ]}
-              chartData={costChartData}
-              barLabel="Actual cost (₹)"
-              lineLabel="Projected opex (₹)"
-              formatTooltip={(value) => [
-                `₹${Number(value).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`,
-                '',
-              ]}
-              tableRows={costTableRows}
-              emptyMessage="No cost data for this period."
+              chartData={energyChartData}
+              barLabel="Actual (kWh)"
+              lineLabel="Projected (kWh)"
+              formatTooltip={(value, name) => [`${Number(value).toFixed(1)} kWh`, name]}
+              tableRows={energyTableRows}
+              emptyMessage="No data for this period."
               chartType="bar-line"
               rowVariant="card"
-              comparisonHsl={COST_PROJECTED_LINE_HSL}
+              comparisonHsl={POWER_LIMIT_BAR_HSL}
               tableZebra
               tableHeaderTone="neutral"
               statusDisplay="pill"
               leftKpiLayout="stat-box"
             />
-          )}
+
+            {hasCost && (
+              <DashboardInsightRow
+                subtitle="Operating cost (₹) — actual vs projected"
+                accentHsl={COST_ACCENT_HSL}
+                donutCenterTitle="% of projected opex"
+                donutCenterValue={
+                  costDonutPct(summary.actual_cost_rs ?? 0, summary.projected_cost_rs ?? 0) != null
+                    ? `${Math.round(costDonutPct(summary.actual_cost_rs ?? 0, summary.projected_cost_rs ?? 0)!)}%`
+                    : '—'
+                }
+                donutFillPct={costDonutPct(summary.actual_cost_rs ?? 0, summary.projected_cost_rs ?? 0)}
+                metrics={[
+                  {
+                    label: 'Actual (₹)',
+                    value:
+                      summary.actual_cost_rs != null
+                        ? `₹${summary.actual_cost_rs.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
+                        : '—',
+                  },
+                  {
+                    label: 'Projected (₹)',
+                    value:
+                      summary.projected_cost_rs != null
+                        ? `₹${summary.projected_cost_rs.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
+                        : '—',
+                  },
+                  {
+                    label: 'Δ vs projected',
+                    value:
+                      summary.projected_cost_rs != null && summary.projected_cost_rs !== 0
+                        ? formatDiffPct(summary.actual_cost_rs ?? 0, summary.projected_cost_rs)
+                        : '—',
+                  },
+                ]}
+                chartData={costChartData}
+                barLabel="Actual cost (₹)"
+                lineLabel="Projected opex (₹)"
+                formatTooltip={(value) => [
+                  `₹${Number(value).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`,
+                  '',
+                ]}
+                tableRows={costTableRows}
+                emptyMessage="No cost data for this period."
+                chartType="bar-line"
+                rowVariant="card"
+                comparisonHsl={COST_PROJECTED_LINE_HSL}
+                tableZebra
+                tableHeaderTone="neutral"
+                statusDisplay="pill"
+                leftKpiLayout="stat-box"
+              />
+            )}
+          </div>
 
           {!selectedEquipmentId && summary.by_equipment && summary.by_equipment.length > 0 && (
             <Collapsible defaultOpen className="rounded-lg border border-border bg-muted/10">

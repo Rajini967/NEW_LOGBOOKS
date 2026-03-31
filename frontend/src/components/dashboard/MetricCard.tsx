@@ -1,6 +1,7 @@
 import React from 'react';
 import { cn } from '@/lib/utils';
 import { LucideIcon, TrendingUp, TrendingDown } from 'lucide-react';
+import { ResponsiveContainer, LineChart, Line } from 'recharts';
 
 interface MetricCardProps {
   title: string;
@@ -13,6 +14,7 @@ interface MetricCardProps {
   };
   status?: 'normal' | 'warning' | 'critical';
   className?: string;
+  sparklineData?: Array<{ value: number }>;
 }
 
 export function MetricCard({
@@ -23,6 +25,7 @@ export function MetricCard({
   trend,
   status = 'normal',
   className,
+  sparklineData,
 }: MetricCardProps) {
   const statusColors = {
     normal: 'from-accent to-accent/70',
@@ -74,6 +77,22 @@ export function MetricCard({
             {trend.value}%
           </span>
           <span className="text-xs text-muted-foreground">vs last period</span>
+        </div>
+      )}
+      {sparklineData && sparklineData.length > 1 && (
+        <div className="mt-2 h-7">
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={sparklineData}>
+              <Line
+                type="monotone"
+                dataKey="value"
+                stroke="hsl(var(--accent))"
+                strokeWidth={1.6}
+                dot={false}
+                isAnimationActive={false}
+              />
+            </LineChart>
+          </ResponsiveContainer>
         </div>
       )}
     </div>

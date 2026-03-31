@@ -179,6 +179,42 @@ function hslPaletteFromTriplet(triplet: string, count: number): string[] {
   });
 }
 
+/** Recharts default tooltip is tall/padded; use a dense popover so hover/click feels compact */
+function makeCompactChartTooltip(
+  formatTooltip: (value: number, name: string) => [string, string]
+): React.FC<{
+  active?: boolean;
+  payload?: ReadonlyArray<{ name?: string; value?: unknown; dataKey?: string | number }>;
+  label?: string;
+}> {
+  return function CompactChartTooltip({ active, payload, label }) {
+    if (!active || !payload?.length) return null;
+    return (
+      <div
+        className="max-w-[220px] rounded-md border border-border bg-popover px-2 py-1 shadow-md"
+        style={{ pointerEvents: 'none' }}
+      >
+        {label != null && String(label) !== '' && (
+          <div className="text-[10px] font-semibold leading-tight text-foreground">{String(label)}</div>
+        )}
+        <div className={label != null && String(label) !== '' ? 'mt-0.5 space-y-0.5' : 'space-y-0.5'}>
+          {payload.map((entry, idx) => {
+            const v = entry.value;
+            if (typeof v !== 'number' || Number.isNaN(v)) return null;
+            const nameKey = String(entry.name ?? entry.dataKey ?? '');
+            const [text] = formatTooltip(v, nameKey);
+            return (
+              <div key={idx} className="text-[10px] leading-tight tabular-nums text-muted-foreground">
+                <span className="font-medium text-foreground/90">{entry.name ?? nameKey}:</span> {text}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+}
+
 function InsightChart({
   chartType,
   chartData,
@@ -221,6 +257,9 @@ function InsightChart({
         tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
         axisLine={false}
         tickLine={false}
+        interval={0}
+        tickMargin={6}
+        padding={{ left: 14, right: 12 }}
         angle={chartData.length > 1 ? -30 : 0}
         textAnchor={chartData.length > 1 ? ('end' as const) : ('middle' as const)}
         height={chartData.length > 1 ? 56 : 30}
@@ -237,25 +276,21 @@ function InsightChart({
     ),
   };
 
+  const CompactTooltip = makeCompactChartTooltip(formatTooltip);
   const tt = (
     <Tooltip
-      contentStyle={{
-        backgroundColor: 'hsl(var(--card))',
-        border: '1px solid hsl(var(--border))',
-        borderRadius: '8px',
-      }}
-      formatter={(value: number, name: string) => formatTooltip(value, name)}
+      content={CompactTooltip}
+      cursor={{ stroke: 'hsl(var(--muted-foreground) / 0.35)', strokeWidth: 1, strokeDasharray: '4 3' }}
+      wrapperStyle={{ outline: 'none', zIndex: 50 }}
+      allowEscapeViewBox={{ x: true, y: true }}
     />
   );
 
   const pieTooltip = (
     <Tooltip
-      contentStyle={{
-        backgroundColor: 'hsl(var(--card))',
-        border: '1px solid hsl(var(--border))',
-        borderRadius: '8px',
-      }}
-      formatter={(value: number, name: string) => formatTooltip(value, name)}
+      content={CompactTooltip}
+      wrapperStyle={{ outline: 'none', zIndex: 50 }}
+      allowEscapeViewBox={{ x: true, y: true }}
     />
   );
 
@@ -564,7 +599,7 @@ export function DashboardInsightRow({
   formatTooltip,
   tableRows,
   emptyMessage = 'No data for this period.',
-  chartHeight = 260,
+  chartHeight = 170,
   chartType = 'bar-line',
   rowVariant = 'standard',
   tableZebra = false,
@@ -576,14 +611,6 @@ export function DashboardInsightRow({
   const barColor = `hsl(${accentHsl})`;
   const comparisonColorCss = `hsl(${hslTriplet(comparisonHsl)})`;
 
-  const pieData =
-    donutFillPct != null
-      ? [
-          { name: 'used', value: donutFillPct },
-          { name: 'remaining', value: Math.max(0, 100 - donutFillPct) },
-        ]
-      : [{ name: 'empty', value: 100 }];
-
   const rowShell = cn(
     'rounded-lg border overflow-hidden',
     rowVariant === 'standard' && 'border-border bg-muted/20',
@@ -594,7 +621,7 @@ export function DashboardInsightRow({
   );
 
   const subtitleBar = cn(
-    'border-b border-border px-3 py-2 text-sm font-medium text-foreground',
+    'border-b border-border px-2.5 py-2 text-xs font-medium text-foreground',
     rowVariant === 'soft' && 'bg-muted/50',
     rowVariant === 'card' && 'bg-muted/50'
   );
@@ -613,74 +640,12 @@ export function DashboardInsightRow({
         {subtitle}
       </div>
 
-      <div className="grid grid-cols-1 gap-4 p-4 lg:grid-cols-12 lg:gap-5">
-        <div
-          className={cn(
-            'flex flex-col justify-start gap-4 lg:col-span-3',
-            leftKpiLayout === 'donut' ? 'items-center' : 'w-full items-stretch'
-          )}
-        >
-          {leftKpiLayout === 'stat-box' ? (
-            <KpiStatBox
-              title={donutCenterTitle}
-              value={donutCenterValue}
-              fillPct={donutFillPct}
-              barColor={barColor}
-            />
-          ) : (
-            <div className="relative h-[160px] w-[160px] shrink-0">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={pieData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={52}
-                    outerRadius={72}
-                    dataKey="value"
-                    startAngle={90}
-                    endAngle={-270}
-                    strokeWidth={0}
-                  >
-                    {donutFillPct != null ? (
-                      <>
-                        <Cell fill={barColor} />
-                        <Cell fill={NEUTRAL_SLICE} />
-                      </>
-                    ) : (
-                      <Cell fill={NEUTRAL_SLICE} />
-                    )}
-                  </Pie>
-                </PieChart>
-              </ResponsiveContainer>
-              <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center px-2">
-                <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground leading-tight">
-                  {donutCenterTitle}
-                </p>
-                <p className="text-lg font-bold tabular-nums text-foreground leading-tight mt-0.5">
-                  {donutCenterValue}
-                </p>
-              </div>
-            </div>
-          )}
-          <dl className="w-full space-y-2 text-sm">
-            {metrics.map((m) => (
-              <div
-                key={m.label}
-                className="flex justify-between gap-2 border-b border-border/60 pb-2 last:border-0 last:pb-0"
-              >
-                <dt className="text-muted-foreground">{m.label}</dt>
-                <dd className="font-medium tabular-nums text-foreground text-right">{m.value}</dd>
-              </div>
-            ))}
-          </dl>
-        </div>
-
-        <div className="lg:col-span-5 min-h-[220px]">
+      <div className="grid grid-cols-1 gap-2.5 p-2.5 lg:grid-cols-12 lg:gap-3">
+        <div className="lg:col-span-7 min-h-[180px]">
           <div
             style={{ height: chartHeight }}
             className={cn(
-              'w-full rounded-md p-2',
+              'w-full rounded-md p-1.5',
               rowVariant === 'elevated' && 'bg-muted/30',
               rowVariant === 'card' && 'border border-border/70 bg-card',
               rowVariant !== 'elevated' && rowVariant !== 'card' && 'bg-background/80'
@@ -704,110 +669,35 @@ export function DashboardInsightRow({
 
         <div
           className={cn(
-            'lg:col-span-4 overflow-x-auto rounded-lg border',
+            'lg:col-span-5 overflow-x-auto rounded-lg border',
             rowVariant === 'card' ? 'border-border/80 bg-card' : 'border-border bg-background/80'
           )}
         >
-          <table className="w-full text-xs sm:text-sm">
-            <thead>
-              <tr
-                className={cn(
-                  tableHeaderTone === 'neutral' && 'border-b border-border bg-muted/80'
-                )}
-                style={
-                  tableHeaderTone === 'accent'
-                    ? { backgroundColor: `hsl(${accentHsl} / 0.18)` }
-                    : undefined
-                }
-              >
-                <th
-                  className={cn(
-                    'px-2 py-2.5 text-left font-semibold',
-                    tableHeaderTone === 'neutral'
-                      ? 'text-[10px] uppercase tracking-wider text-muted-foreground'
-                      : 'text-foreground'
-                  )}
-                >
-                  Period
-                </th>
-                <th
-                  className={cn(
-                    'px-2 py-2.5 text-right font-semibold',
-                    tableHeaderTone === 'neutral'
-                      ? 'text-[10px] uppercase tracking-wider text-muted-foreground'
-                      : 'text-foreground'
-                  )}
-                >
-                  Actual
-                </th>
-                <th
-                  className={cn(
-                    'px-2 py-2.5 text-right font-semibold',
-                    tableHeaderTone === 'neutral'
-                      ? 'text-[10px] uppercase tracking-wider text-muted-foreground'
-                      : 'text-foreground'
-                  )}
-                >
-                  Target
-                </th>
-                <th
-                  className={cn(
-                    'px-2 py-2.5 text-right font-semibold',
-                    tableHeaderTone === 'neutral'
-                      ? 'text-[10px] uppercase tracking-wider text-muted-foreground'
-                      : 'text-foreground'
-                  )}
-                >
-                  Proj.
-                </th>
-                <th
-                  className={cn(
-                    'w-10 px-2 py-2.5 text-center font-semibold',
-                    tableHeaderTone === 'neutral'
-                      ? 'text-[10px] uppercase tracking-wider text-muted-foreground'
-                      : 'text-foreground'
-                  )}
-                >
-                  {' '}
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {tableRows.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="px-2 py-6 text-center text-muted-foreground">
-                    {emptyMessage}
-                  </td>
-                </tr>
-              ) : (
-                tableRows.map((row, i) => (
-                  <tr
-                    key={`${row.period}-${i}`}
-                    className={cn(
-                      rowVariant === 'card' ? 'border-b border-border/40 last:border-0' : 'border-t border-border/80',
-                      tableZebra && i % 2 === 1 && 'bg-muted/35'
-                    )}
-                  >
-                    <td className="px-2 py-2 font-medium text-foreground">{row.period}</td>
-                    <td className="px-2 py-2 text-right tabular-nums">{row.actual}</td>
-                    <td className="px-2 py-2 text-right tabular-nums text-muted-foreground">
-                      {row.target}
-                    </td>
-                    <td className="px-2 py-2 text-right tabular-nums text-muted-foreground">
-                      {row.forecast}
-                    </td>
-                    <td className="px-2 py-2 text-center">
-                      {statusDisplay === 'pill' ? (
-                        <StatusPill status={row.status} />
-                      ) : (
-                        <StatusDot status={row.status} />
-                      )}
-                    </td>
-                  </tr>
-                ))
+          <div className="border-b border-border/70 px-2 py-1.5">
+            <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{donutCenterTitle}</p>
+            <div className="mt-0.5 flex items-end justify-between gap-2">
+              <p className="text-lg font-semibold tabular-nums">{donutCenterValue}</p>
+              {donutFillPct != null && (
+                <span className="text-[10px] text-muted-foreground tabular-nums">{Math.round(donutFillPct)}%</span>
               )}
-            </tbody>
-          </table>
+            </div>
+            {donutFillPct != null && (
+              <div className="mt-1 h-1.5 w-full rounded-full bg-muted">
+                <div
+                  className="h-1.5 rounded-full"
+                  style={{ width: `${Math.max(0, Math.min(100, donutFillPct))}%`, backgroundColor: barColor }}
+                />
+              </div>
+            )}
+          </div>
+          <dl className="space-y-1 border-b border-border/60 px-2 py-1.5 text-[11px]">
+            {metrics.map((m) => (
+              <div key={m.label} className="flex justify-between gap-2">
+                <dt className="text-muted-foreground">{m.label}</dt>
+                <dd className="font-medium tabular-nums text-right">{m.value}</dd>
+              </div>
+            ))}
+          </dl>
         </div>
       </div>
     </div>

@@ -20,8 +20,22 @@ import { ChevronDown, Loader2 } from 'lucide-react';
 import { DashboardSectionShell } from './DashboardSectionShell';
 import { DashboardInsightRow } from './DashboardInsightRow';
 import { formatDiffPct, rowStatus } from './dashboard-status';
+import { cn } from '@/lib/utils';
 
 type PeriodType = 'day' | 'month' | 'year';
+export type ChemicalPeriodType = PeriodType;
+
+interface ChemicalDashboardSectionProps {
+  periodType?: ChemicalPeriodType;
+  onPeriodTypeChange?: (value: ChemicalPeriodType) => void;
+  date?: string;
+  onDateChange?: (value: string) => void;
+  selectedEquipmentName?: string;
+  onSelectedEquipmentNameChange?: (value: string) => void;
+  showToolbar?: boolean;
+  className?: string;
+  onEquipmentOptionsChange?: (options: { value: string; label: string }[]) => void;
+}
 
 const ACCENT = '265,55%,45%';
 
@@ -45,10 +59,26 @@ function periodLabel(summary: ChemicalDashboardSummary): string {
   return format(new Date(start), 'MMM yyyy');
 }
 
-export function ChemicalDashboardSection() {
-  const [periodType, setPeriodType] = useState<PeriodType>('month');
-  const [date, setDate] = useState<string>(getDefaultDate());
-  const [selectedEquipmentName, setSelectedEquipmentName] = useState<string>('');
+export function ChemicalDashboardSection({
+  periodType: periodTypeProp,
+  onPeriodTypeChange,
+  date: dateProp,
+  onDateChange,
+  selectedEquipmentName: selectedEquipmentNameProp,
+  onSelectedEquipmentNameChange,
+  showToolbar = true,
+  className,
+  onEquipmentOptionsChange,
+}: ChemicalDashboardSectionProps = {}) {
+  const [periodTypeState, setPeriodTypeState] = useState<PeriodType>('month');
+  const [dateState, setDateState] = useState<string>(getDefaultDate());
+  const [selectedEquipmentNameState, setSelectedEquipmentNameState] = useState<string>('');
+  const periodType = periodTypeProp ?? periodTypeState;
+  const setPeriodType = onPeriodTypeChange ?? setPeriodTypeState;
+  const date = dateProp ?? dateState;
+  const setDate = onDateChange ?? setDateState;
+  const selectedEquipmentName = selectedEquipmentNameProp ?? selectedEquipmentNameState;
+  const setSelectedEquipmentName = onSelectedEquipmentNameChange ?? setSelectedEquipmentNameState;
   const [equipmentOptions, setEquipmentOptions] = useState<{ value: string; label: string }[]>([]);
   const [summary, setSummary] = useState<ChemicalDashboardSummary | null>(null);
   const [series, setSeries] = useState<ChemicalDashboardSeriesPoint[]>([]);
@@ -61,16 +91,21 @@ export function ChemicalDashboardSection() {
       try {
         const { equipment_names } = await chemicalDashboardAPI.getEquipmentNames();
         if (!cancelled) {
-          setEquipmentOptions((equipment_names || []).map((name) => ({ value: name, label: name })));
+          const opts = (equipment_names || []).map((name) => ({ value: name, label: name }));
+          setEquipmentOptions(opts);
+          onEquipmentOptionsChange?.(opts);
         }
       } catch {
-        if (!cancelled) setEquipmentOptions([]);
+        if (!cancelled) {
+          setEquipmentOptions([]);
+          onEquipmentOptionsChange?.([]);
+        }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [onEquipmentOptionsChange]);
 
   const fetchSummary = useCallback(
     async (background = false) => {
@@ -241,7 +276,8 @@ export function ChemicalDashboardSection() {
       accentHsl={ACCENT}
       variant="plain"
       accentEdge="subtle"
-      toolbar={toolbar}
+      className={cn('bg-muted/35', className)}
+      toolbar={showToolbar ? toolbar : undefined}
     >
       {loading && (
         <div className="flex items-center justify-center py-12 text-muted-foreground">
@@ -260,95 +296,97 @@ export function ChemicalDashboardSection() {
             Period: {periodLabel(summary)} · Charts show {periodType === 'day' ? 'day' : periodType === 'month' ? 'month' : 'year'}-wise buckets.
           </p>
 
-          <DashboardInsightRow
-            subtitle="Consumption (kg) — actual vs projected"
-            accentHsl={ACCENT}
-            donutCenterTitle="% of projected (kg)"
-            donutCenterValue={
-              hasProjectedConsumption && summary.projected_consumption_kg != null && summary.projected_consumption_kg > 0
-                ? `${Math.round(costDonutPct(summary.total_consumption_kg, summary.projected_consumption_kg)!)}%`
-                : '—'
-            }
-            donutFillPct={
-              hasProjectedConsumption && summary.projected_consumption_kg != null
-                ? costDonutPct(summary.total_consumption_kg, summary.projected_consumption_kg)
-                : null
-            }
-            metrics={[
-              { label: 'Actual (kg)', value: summary.total_consumption_kg.toFixed(2) },
-              ...(hasProjectedConsumption
-                ? [
-                    { label: 'Projected (kg)', value: summary.projected_consumption_kg!.toFixed(2) },
-                    {
-                      label: 'Δ vs projected',
-                      value:
-                        summary.projected_consumption_kg! !== 0
-                          ? formatDiffPct(summary.total_consumption_kg, summary.projected_consumption_kg!)
-                          : '—',
-                    },
-                  ]
-                : [{ label: 'Projected (kg)', value: 'Set in config' }]),
-            ]}
-            chartData={consumptionChartData}
-            barLabel="Actual (kg)"
-            lineLabel="Projected (kg)"
-            formatTooltip={(value) => [`${Number(value).toFixed(2)} kg`, '']}
-            tableRows={consumptionTableRows}
-            emptyMessage="No consumption data for this period."
-            chartType="area-dual"
-            rowVariant="soft"
-            tableZebra
-            comparisonHsl="220, 48%, 40%"
-          />
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+            <DashboardInsightRow
+              subtitle="Consumption (kg) — actual vs projected"
+              accentHsl={ACCENT}
+              donutCenterTitle="% of projected (kg)"
+              donutCenterValue={
+                hasProjectedConsumption && summary.projected_consumption_kg != null && summary.projected_consumption_kg > 0
+                  ? `${Math.round(costDonutPct(summary.total_consumption_kg, summary.projected_consumption_kg)!)}%`
+                  : '—'
+              }
+              donutFillPct={
+                hasProjectedConsumption && summary.projected_consumption_kg != null
+                  ? costDonutPct(summary.total_consumption_kg, summary.projected_consumption_kg)
+                  : null
+              }
+              metrics={[
+                { label: 'Actual (kg)', value: summary.total_consumption_kg.toFixed(2) },
+                ...(hasProjectedConsumption
+                  ? [
+                      { label: 'Projected (kg)', value: summary.projected_consumption_kg!.toFixed(2) },
+                      {
+                        label: 'Δ vs projected',
+                        value:
+                          summary.projected_consumption_kg! !== 0
+                            ? formatDiffPct(summary.total_consumption_kg, summary.projected_consumption_kg!)
+                            : '—',
+                      },
+                    ]
+                  : [{ label: 'Projected (kg)', value: 'Set in config' }]),
+              ]}
+              chartData={consumptionChartData}
+              barLabel="Actual (kg)"
+              lineLabel="Projected (kg)"
+              formatTooltip={(value) => [`${Number(value).toFixed(2)} kg`, '']}
+              tableRows={consumptionTableRows}
+              emptyMessage="No consumption data for this period."
+              chartType="area-dual"
+              rowVariant="soft"
+              tableZebra
+              comparisonHsl="220, 48%, 40%"
+            />
 
-          <DashboardInsightRow
-            subtitle="Cost (₹) — actual vs projected opex"
-            accentHsl={ACCENT}
-            donutCenterTitle="% of projected opex"
-            donutCenterValue={
-              hasProjectedCost && summary.projected_cost_rs != null && summary.projected_cost_rs > 0
-                ? `${Math.round(costDonutPct(summary.total_cost_rs, summary.projected_cost_rs)!)}%`
-                : '—'
-            }
-            donutFillPct={
-              hasProjectedCost && summary.projected_cost_rs != null
-                ? costDonutPct(summary.total_cost_rs, summary.projected_cost_rs)
-                : null
-            }
-            metrics={[
-              {
-                label: 'Actual (₹)',
-                value: `₹${summary.total_cost_rs.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-              },
-              ...(hasProjectedCost
-                ? [
-                    {
-                      label: 'Projected (₹)',
-                      value: `₹${summary.projected_cost_rs!.toLocaleString('en-IN')}`,
-                    },
-                    {
-                      label: 'Δ vs projected',
-                      value:
-                        summary.projected_cost_rs! !== 0
-                          ? formatDiffPct(summary.total_cost_rs, summary.projected_cost_rs!)
-                          : '—',
-                    },
-                  ]
-                : [{ label: 'Projected (₹)', value: 'Set in config' }]),
-            ]}
-            chartData={costChartData}
-            barLabel="Actual cost (₹)"
-            lineLabel="Projected opex (₹)"
-            formatTooltip={(value) => [
-              `₹${Number(value).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`,
-              '',
-            ]}
-            tableRows={costTableRows}
-            emptyMessage="No cost data for this period."
-            chartType="area-dual"
-            rowVariant="elevated"
-            comparisonHsl="38, 62%, 44%"
-          />
+            <DashboardInsightRow
+              subtitle="Cost (₹) — actual vs projected opex"
+              accentHsl={ACCENT}
+              donutCenterTitle="% of projected opex"
+              donutCenterValue={
+                hasProjectedCost && summary.projected_cost_rs != null && summary.projected_cost_rs > 0
+                  ? `${Math.round(costDonutPct(summary.total_cost_rs, summary.projected_cost_rs)!)}%`
+                  : '—'
+              }
+              donutFillPct={
+                hasProjectedCost && summary.projected_cost_rs != null
+                  ? costDonutPct(summary.total_cost_rs, summary.projected_cost_rs)
+                  : null
+              }
+              metrics={[
+                {
+                  label: 'Actual (₹)',
+                  value: `₹${summary.total_cost_rs.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                },
+                ...(hasProjectedCost
+                  ? [
+                      {
+                        label: 'Projected (₹)',
+                        value: `₹${summary.projected_cost_rs!.toLocaleString('en-IN')}`,
+                      },
+                      {
+                        label: 'Δ vs projected',
+                        value:
+                          summary.projected_cost_rs! !== 0
+                            ? formatDiffPct(summary.total_cost_rs, summary.projected_cost_rs!)
+                            : '—',
+                      },
+                    ]
+                  : [{ label: 'Projected (₹)', value: 'Set in config' }]),
+              ]}
+              chartData={costChartData}
+              barLabel="Actual cost (₹)"
+              lineLabel="Projected opex (₹)"
+              formatTooltip={(value) => [
+                `₹${Number(value).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`,
+                '',
+              ]}
+              tableRows={costTableRows}
+              emptyMessage="No cost data for this period."
+              chartType="area-dual"
+              rowVariant="elevated"
+              comparisonHsl="38, 62%, 44%"
+            />
+          </div>
 
           {summary.by_chemical.length > 0 && (
             <Collapsible defaultOpen className="rounded-lg border border-border bg-muted/10">

@@ -22,9 +22,26 @@ import { ChevronDown, Loader2 } from 'lucide-react';
 import { DashboardSectionShell } from './DashboardSectionShell';
 import { DashboardInsightRow } from './DashboardInsightRow';
 import { formatDiffPct, rowStatus, utilizationDonutPct } from './dashboard-status';
+import { cn } from '@/lib/utils';
 
 type PeriodType = 'day' | 'month' | 'year';
 type FuelType = 'diesel' | 'furnace_oil' | 'brigade';
+export type BoilerPeriodType = PeriodType;
+export type BoilerFuelType = FuelType;
+
+interface BoilerDashboardSectionProps {
+  periodType?: BoilerPeriodType;
+  onPeriodTypeChange?: (value: BoilerPeriodType) => void;
+  date?: string;
+  onDateChange?: (value: string) => void;
+  fuelType?: BoilerFuelType;
+  onFuelTypeChange?: (value: BoilerFuelType) => void;
+  selectedEquipmentId?: string;
+  onSelectedEquipmentIdChange?: (value: string) => void;
+  showToolbar?: boolean;
+  className?: string;
+  onEquipmentOptionsChange?: (options: { value: string; label: string }[]) => void;
+}
 
 const ACCENT = '25,95%,45%';
 
@@ -42,11 +59,31 @@ function steamDonutPct(actual: number, limit: number): number | null {
   return Math.min(100, Math.max(0, (actual / limit) * 100));
 }
 
-export function BoilerDashboardSection() {
-  const [periodType, setPeriodType] = useState<PeriodType>('day');
-  const [date, setDate] = useState<string>(getDefaultDate());
-  const [fuelType, setFuelType] = useState<FuelType>('diesel');
-  const [selectedEquipmentId, setSelectedEquipmentId] = useState<string>('');
+export function BoilerDashboardSection({
+  periodType: periodTypeProp,
+  onPeriodTypeChange,
+  date: dateProp,
+  onDateChange,
+  fuelType: fuelTypeProp,
+  onFuelTypeChange,
+  selectedEquipmentId: selectedEquipmentIdProp,
+  onSelectedEquipmentIdChange,
+  showToolbar = true,
+  className,
+  onEquipmentOptionsChange,
+}: BoilerDashboardSectionProps = {}) {
+  const [periodTypeState, setPeriodTypeState] = useState<PeriodType>('day');
+  const [dateState, setDateState] = useState<string>(getDefaultDate());
+  const [fuelTypeState, setFuelTypeState] = useState<FuelType>('diesel');
+  const [selectedEquipmentIdState, setSelectedEquipmentIdState] = useState<string>('');
+  const periodType = periodTypeProp ?? periodTypeState;
+  const setPeriodType = onPeriodTypeChange ?? setPeriodTypeState;
+  const date = dateProp ?? dateState;
+  const setDate = onDateChange ?? setDateState;
+  const fuelType = fuelTypeProp ?? fuelTypeState;
+  const setFuelType = onFuelTypeChange ?? setFuelTypeState;
+  const selectedEquipmentId = selectedEquipmentIdProp ?? selectedEquipmentIdState;
+  const setSelectedEquipmentId = onSelectedEquipmentIdChange ?? setSelectedEquipmentIdState;
   const [equipmentOptions, setEquipmentOptions] = useState<{ value: string; label: string }[]>([]);
   const [summary, setSummary] = useState<BoilerDashboardSummary | null>(null);
   const [series, setSeries] = useState<BoilerDashboardSeriesPoint[]>([]);
@@ -68,15 +105,21 @@ export function BoilerDashboardSection() {
             value: e.equipment_number,
             label: `${e.equipment_number}${e.name ? ` – ${e.name}` : ''}`,
           }));
-        if (!cancelled) setEquipmentOptions(opts);
+        if (!cancelled) {
+          setEquipmentOptions(opts);
+          onEquipmentOptionsChange?.(opts);
+        }
       } catch {
-        if (!cancelled) setEquipmentOptions([]);
+        if (!cancelled) {
+          setEquipmentOptions([]);
+          onEquipmentOptionsChange?.([]);
+        }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [onEquipmentOptionsChange]);
 
   const fetchSummary = useCallback(
     async (background = false) => {
@@ -343,7 +386,8 @@ export function BoilerDashboardSection() {
       accentHsl={ACCENT}
       variant="rail"
       accentEdge="strong"
-      toolbar={toolbar}
+      className={cn('bg-muted/35', className)}
+      toolbar={showToolbar ? toolbar : undefined}
     >
       {loading && (
         <div className="flex items-center justify-center py-12 text-muted-foreground">
@@ -372,153 +416,157 @@ export function BoilerDashboardSection() {
             </p>
           )}
 
-          <DashboardInsightRow
-            subtitle="Power consumption (kWh) — actual vs projected"
-            accentHsl={ACCENT}
-            donutCenterTitle="% of power limit"
-            donutCenterValue={
-              utilizationDonutPct(summary.utilization_pct, (summary.limit_power_kwh ?? 0) > 0) != null
-                ? `${Math.round(utilizationDonutPct(summary.utilization_pct, (summary.limit_power_kwh ?? 0) > 0)!)}%`
-                : '—'
-            }
-            donutFillPct={utilizationDonutPct(summary.utilization_pct, (summary.limit_power_kwh ?? 0) > 0)}
-            metrics={[
-              { label: 'Actual (kWh)', value: summary.actual_power_kwh.toFixed(1) },
-              {
-                label: 'Limit (kWh)',
-                value: (summary.limit_power_kwh ?? 0) > 0 ? summary.limit_power_kwh!.toFixed(1) : '—',
-              },
-              {
-                label: 'Δ vs limit',
-                value:
-                  (summary.limit_power_kwh ?? 0) > 0
-                    ? formatDiffPct(summary.actual_power_kwh, summary.limit_power_kwh!)
-                    : '—',
-              },
-              ...(hasProjected
-                ? [{ label: 'Projected (kWh)', value: summary.projected_power_kwh!.toFixed(1) }]
-                : []),
-            ]}
-            chartData={consumptionChartData}
-            barLabel="Actual (kWh)"
-            lineLabel="Projected (kWh)"
-            formatTooltip={(value, name) => [`${Number(value).toFixed(1)} kWh`, name]}
-            tableRows={consumptionTableRows}
-            emptyMessage="No data for this period."
-            chartType="pie-split"
-            rowVariant="standard"
-            comparisonHsl="220, 45%, 36%"
-          />
-
-          {hasCost && (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
             <DashboardInsightRow
-              subtitle="Operating cost (₹) — actual vs projected"
+              subtitle="Power consumption (kWh) — actual vs projected"
               accentHsl={ACCENT}
-              donutCenterTitle="% of projected opex"
+              donutCenterTitle="% of power limit"
               donutCenterValue={
-                costDonutPct(summary.actual_cost_rs ?? 0, summary.projected_cost_rs ?? 0) != null
-                  ? `${Math.round(costDonutPct(summary.actual_cost_rs ?? 0, summary.projected_cost_rs ?? 0)!)}%`
+                utilizationDonutPct(summary.utilization_pct, (summary.limit_power_kwh ?? 0) > 0) != null
+                  ? `${Math.round(utilizationDonutPct(summary.utilization_pct, (summary.limit_power_kwh ?? 0) > 0)!)}%`
                   : '—'
               }
-              donutFillPct={costDonutPct(summary.actual_cost_rs ?? 0, summary.projected_cost_rs ?? 0)}
+              donutFillPct={utilizationDonutPct(summary.utilization_pct, (summary.limit_power_kwh ?? 0) > 0)}
               metrics={[
+                { label: 'Actual (kWh)', value: summary.actual_power_kwh.toFixed(1) },
                 {
-                  label: 'Actual (₹)',
-                  value:
-                    summary.actual_cost_rs != null
-                      ? `₹${summary.actual_cost_rs.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
-                      : '—',
+                  label: 'Limit (kWh)',
+                  value: (summary.limit_power_kwh ?? 0) > 0 ? summary.limit_power_kwh!.toFixed(1) : '—',
                 },
                 {
-                  label: 'Projected (₹)',
+                  label: 'Δ vs limit',
                   value:
-                    summary.projected_cost_rs != null
-                      ? `₹${summary.projected_cost_rs.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
+                    (summary.limit_power_kwh ?? 0) > 0
+                      ? formatDiffPct(summary.actual_power_kwh, summary.limit_power_kwh!)
                       : '—',
                 },
+                ...(hasProjected
+                  ? [{ label: 'Projected (kWh)', value: summary.projected_power_kwh!.toFixed(1) }]
+                  : []),
+              ]}
+              chartData={consumptionChartData}
+              barLabel="Actual (kWh)"
+              lineLabel="Projected (kWh)"
+              formatTooltip={(value, name) => [`${Number(value).toFixed(1)} kWh`, name]}
+              tableRows={consumptionTableRows}
+              emptyMessage="No data for this period."
+              chartType="pie-split"
+              rowVariant="standard"
+              comparisonHsl="220, 45%, 36%"
+            />
+
+            {hasCost && (
+              <DashboardInsightRow
+                subtitle="Operating cost (₹) — actual vs projected"
+                accentHsl={ACCENT}
+                donutCenterTitle="% of projected opex"
+                donutCenterValue={
+                  costDonutPct(summary.actual_cost_rs ?? 0, summary.projected_cost_rs ?? 0) != null
+                    ? `${Math.round(costDonutPct(summary.actual_cost_rs ?? 0, summary.projected_cost_rs ?? 0)!)}%`
+                    : '—'
+                }
+                donutFillPct={costDonutPct(summary.actual_cost_rs ?? 0, summary.projected_cost_rs ?? 0)}
+                metrics={[
+                  {
+                    label: 'Actual (₹)',
+                    value:
+                      summary.actual_cost_rs != null
+                        ? `₹${summary.actual_cost_rs.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
+                        : '—',
+                  },
+                  {
+                    label: 'Projected (₹)',
+                    value:
+                      summary.projected_cost_rs != null
+                        ? `₹${summary.projected_cost_rs.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
+                        : '—',
+                  },
+                  {
+                    label: 'Δ vs projected',
+                    value:
+                      summary.projected_cost_rs != null && summary.projected_cost_rs !== 0
+                        ? formatDiffPct(summary.actual_cost_rs ?? 0, summary.projected_cost_rs)
+                        : '—',
+                  },
+                ]}
+                chartData={costChartData}
+                barLabel="Actual cost (₹)"
+                lineLabel="Projected opex (₹)"
+                formatTooltip={(value) => [
+                  `₹${Number(value).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`,
+                  '',
+                ]}
+                tableRows={costTableRows}
+                emptyMessage="No cost data for this period."
+                chartType="pie-split"
+                rowVariant="elevated"
+                comparisonHsl="38, 55%, 45%"
+              />
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+            <DashboardInsightRow
+              subtitle={`Fuel (${fuelUnit}) — actual vs projected`}
+              accentHsl={ACCENT}
+              donutCenterTitle="% of projected fuel"
+              donutCenterValue={
+                costDonutPct(fuelActual, fuelProjected) != null
+                  ? `${Math.round(costDonutPct(fuelActual, fuelProjected)!)}%`
+                  : '—'
+              }
+              donutFillPct={costDonutPct(fuelActual, fuelProjected)}
+              metrics={[
+                { label: `Actual (${fuelUnit})`, value: fuelActual.toFixed(1) },
+                { label: `Projected (${fuelUnit})`, value: fuelProjected.toFixed(1) },
                 {
                   label: 'Δ vs projected',
+                  value: fuelProjected !== 0 ? formatDiffPct(fuelActual, fuelProjected) : '—',
+                },
+              ]}
+              chartData={fuelChartData}
+              barLabel={`Actual (${fuelUnit})`}
+              lineLabel={`Projected (${fuelUnit})`}
+              formatTooltip={(value) => [`${Number(value).toFixed(1)} ${fuelUnit}`, '']}
+              tableRows={fuelTableRows}
+              emptyMessage="No fuel data for this period."
+              chartType="pie-split"
+              rowVariant="soft"
+              comparisonHsl="220, 18%, 30%"
+            />
+
+            <DashboardInsightRow
+              subtitle="Steam (kg/hr) — actual vs projected"
+              accentHsl={ACCENT}
+              donutCenterTitle="% of steam limit"
+              donutCenterValue={
+                steamDonutPct(summary.actual_steam_kg_hr ?? 0, summary.limit_steam_kg_hr ?? 0) != null
+                  ? `${Math.round(steamDonutPct(summary.actual_steam_kg_hr ?? 0, summary.limit_steam_kg_hr ?? 0)!)}%`
+                  : '—'
+              }
+              donutFillPct={steamDonutPct(summary.actual_steam_kg_hr ?? 0, summary.limit_steam_kg_hr ?? 0)}
+              metrics={[
+                { label: 'Actual (kg/hr)', value: (summary.actual_steam_kg_hr ?? 0).toFixed(1) },
+                { label: 'Limit (kg/hr)', value: (summary.limit_steam_kg_hr ?? 0).toFixed(1) },
+                {
+                  label: 'Δ vs limit',
                   value:
-                    summary.projected_cost_rs != null && summary.projected_cost_rs !== 0
-                      ? formatDiffPct(summary.actual_cost_rs ?? 0, summary.projected_cost_rs)
+                    (summary.limit_steam_kg_hr ?? 0) !== 0
+                      ? formatDiffPct(summary.actual_steam_kg_hr ?? 0, summary.limit_steam_kg_hr ?? 0)
                       : '—',
                 },
               ]}
-              chartData={costChartData}
-              barLabel="Actual cost (₹)"
-              lineLabel="Projected opex (₹)"
-              formatTooltip={(value) => [
-                `₹${Number(value).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`,
-                '',
-              ]}
-              tableRows={costTableRows}
-              emptyMessage="No cost data for this period."
+              chartData={steamChartData}
+              barLabel="Actual (kg/hr)"
+              lineLabel="Projected (kg/hr)"
+              formatTooltip={(value) => [`${Number(value).toFixed(1)} kg/hr`, '']}
+              tableRows={steamTableRows}
+              emptyMessage="No steam data for this period."
               chartType="pie-split"
-              rowVariant="elevated"
-              comparisonHsl="38, 55%, 45%"
+              rowVariant="standard"
+              comparisonHsl="185, 50%, 36%"
             />
-          )}
-
-          <DashboardInsightRow
-            subtitle={`Fuel (${fuelUnit}) — actual vs projected`}
-            accentHsl={ACCENT}
-            donutCenterTitle="% of projected fuel"
-            donutCenterValue={
-              costDonutPct(fuelActual, fuelProjected) != null
-                ? `${Math.round(costDonutPct(fuelActual, fuelProjected)!)}%`
-                : '—'
-            }
-            donutFillPct={costDonutPct(fuelActual, fuelProjected)}
-            metrics={[
-              { label: `Actual (${fuelUnit})`, value: fuelActual.toFixed(1) },
-              { label: `Projected (${fuelUnit})`, value: fuelProjected.toFixed(1) },
-              {
-                label: 'Δ vs projected',
-                value: fuelProjected !== 0 ? formatDiffPct(fuelActual, fuelProjected) : '—',
-              },
-            ]}
-            chartData={fuelChartData}
-            barLabel={`Actual (${fuelUnit})`}
-            lineLabel={`Projected (${fuelUnit})`}
-            formatTooltip={(value) => [`${Number(value).toFixed(1)} ${fuelUnit}`, '']}
-            tableRows={fuelTableRows}
-            emptyMessage="No fuel data for this period."
-            chartType="pie-split"
-            rowVariant="soft"
-            comparisonHsl="220, 18%, 30%"
-          />
-
-          <DashboardInsightRow
-            subtitle="Steam (kg/hr) — actual vs projected"
-            accentHsl={ACCENT}
-            donutCenterTitle="% of steam limit"
-            donutCenterValue={
-              steamDonutPct(summary.actual_steam_kg_hr ?? 0, summary.limit_steam_kg_hr ?? 0) != null
-                ? `${Math.round(steamDonutPct(summary.actual_steam_kg_hr ?? 0, summary.limit_steam_kg_hr ?? 0)!)}%`
-                : '—'
-            }
-            donutFillPct={steamDonutPct(summary.actual_steam_kg_hr ?? 0, summary.limit_steam_kg_hr ?? 0)}
-            metrics={[
-              { label: 'Actual (kg/hr)', value: (summary.actual_steam_kg_hr ?? 0).toFixed(1) },
-              { label: 'Limit (kg/hr)', value: (summary.limit_steam_kg_hr ?? 0).toFixed(1) },
-              {
-                label: 'Δ vs limit',
-                value:
-                  (summary.limit_steam_kg_hr ?? 0) !== 0
-                    ? formatDiffPct(summary.actual_steam_kg_hr ?? 0, summary.limit_steam_kg_hr ?? 0)
-                    : '—',
-              },
-            ]}
-            chartData={steamChartData}
-            barLabel="Actual (kg/hr)"
-            lineLabel="Projected (kg/hr)"
-            formatTooltip={(value) => [`${Number(value).toFixed(1)} kg/hr`, '']}
-            tableRows={steamTableRows}
-            emptyMessage="No steam data for this period."
-            chartType="pie-split"
-            rowVariant="standard"
-            comparisonHsl="185, 50%, 36%"
-          />
+          </div>
 
           {!selectedEquipmentId && summary.by_equipment && summary.by_equipment.length > 0 && (
             <Collapsible defaultOpen className="rounded-lg border border-border bg-muted/10">
