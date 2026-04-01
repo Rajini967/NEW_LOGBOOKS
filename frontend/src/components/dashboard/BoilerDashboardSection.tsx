@@ -302,6 +302,11 @@ export function BoilerDashboardSection({
   );
 
   const hasProjected = summary?.projected_power_kwh != null;
+  const powerLimitSameAsProjected =
+    !!summary &&
+    hasProjected &&
+    summary.limit_power_kwh != null &&
+    Math.abs(summary.limit_power_kwh - summary.projected_power_kwh!) < 0.05;
   const hasCost =
     summary?.actual_cost_rs != null ||
     summary?.projected_cost_rs != null ||
@@ -420,29 +425,52 @@ export function BoilerDashboardSection({
             <DashboardInsightRow
               subtitle="Power consumption (kWh) — actual vs projected"
               accentHsl={ACCENT}
-              donutCenterTitle="% of power limit"
+              donutCenterTitle={hasProjected ? '% of projected' : '% of power limit'}
               donutCenterValue={
-                utilizationDonutPct(summary.utilization_pct, (summary.limit_power_kwh ?? 0) > 0) != null
-                  ? `${Math.round(utilizationDonutPct(summary.utilization_pct, (summary.limit_power_kwh ?? 0) > 0)!)}%`
+                (hasProjected && (summary.projected_power_kwh ?? 0) > 0
+                  ? costDonutPct(summary.actual_power_kwh, summary.projected_power_kwh!)
+                  : utilizationDonutPct(summary.utilization_pct, (summary.limit_power_kwh ?? 0) > 0)) != null
+                  ? `${Math.round(
+                      (hasProjected && (summary.projected_power_kwh ?? 0) > 0
+                        ? costDonutPct(summary.actual_power_kwh, summary.projected_power_kwh!)
+                        : utilizationDonutPct(summary.utilization_pct, (summary.limit_power_kwh ?? 0) > 0))!,
+                    )}%`
                   : '—'
               }
-              donutFillPct={utilizationDonutPct(summary.utilization_pct, (summary.limit_power_kwh ?? 0) > 0)}
+              donutFillPct={
+                hasProjected && (summary.projected_power_kwh ?? 0) > 0
+                  ? costDonutPct(summary.actual_power_kwh, summary.projected_power_kwh!)
+                  : utilizationDonutPct(summary.utilization_pct, (summary.limit_power_kwh ?? 0) > 0)
+              }
               metrics={[
                 { label: 'Actual (kWh)', value: summary.actual_power_kwh.toFixed(1) },
-                {
-                  label: 'Limit (kWh)',
-                  value: (summary.limit_power_kwh ?? 0) > 0 ? summary.limit_power_kwh!.toFixed(1) : '—',
-                },
-                {
-                  label: 'Δ vs limit',
-                  value:
-                    (summary.limit_power_kwh ?? 0) > 0
-                      ? formatDiffPct(summary.actual_power_kwh, summary.limit_power_kwh!)
-                      : '—',
-                },
                 ...(hasProjected
                   ? [{ label: 'Projected (kWh)', value: summary.projected_power_kwh!.toFixed(1) }]
                   : []),
+                ...(hasProjected && !powerLimitSameAsProjected
+                  ? [
+                      {
+                        label: 'Limit (kWh)',
+                        value: (summary.limit_power_kwh ?? 0) > 0 ? summary.limit_power_kwh!.toFixed(1) : '—',
+                      },
+                    ]
+                  : !hasProjected
+                    ? [
+                        {
+                          label: 'Limit (kWh)',
+                          value: (summary.limit_power_kwh ?? 0) > 0 ? summary.limit_power_kwh!.toFixed(1) : '—',
+                        },
+                      ]
+                    : []),
+                {
+                  label: hasProjected ? 'Δ vs projected' : 'Δ vs limit',
+                  value:
+                    hasProjected && (summary.projected_power_kwh ?? 0) > 0
+                      ? formatDiffPct(summary.actual_power_kwh, summary.projected_power_kwh!)
+                      : (summary.limit_power_kwh ?? 0) > 0
+                        ? formatDiffPct(summary.actual_power_kwh, summary.limit_power_kwh!)
+                        : '—',
+                },
               ]}
               chartData={consumptionChartData}
               barLabel="Actual (kWh)"
@@ -538,7 +566,7 @@ export function BoilerDashboardSection({
             <DashboardInsightRow
               subtitle="Steam (kg/hr) — actual vs projected"
               accentHsl={ACCENT}
-              donutCenterTitle="% of steam limit"
+              donutCenterTitle="% of projected"
               donutCenterValue={
                 steamDonutPct(summary.actual_steam_kg_hr ?? 0, summary.limit_steam_kg_hr ?? 0) != null
                   ? `${Math.round(steamDonutPct(summary.actual_steam_kg_hr ?? 0, summary.limit_steam_kg_hr ?? 0)!)}%`
@@ -547,9 +575,13 @@ export function BoilerDashboardSection({
               donutFillPct={steamDonutPct(summary.actual_steam_kg_hr ?? 0, summary.limit_steam_kg_hr ?? 0)}
               metrics={[
                 { label: 'Actual (kg/hr)', value: (summary.actual_steam_kg_hr ?? 0).toFixed(1) },
-                { label: 'Limit (kg/hr)', value: (summary.limit_steam_kg_hr ?? 0).toFixed(1) },
                 {
-                  label: 'Δ vs limit',
+                  label: 'Projected (kg/hr)',
+                  value:
+                    (summary.limit_steam_kg_hr ?? 0) > 0 ? (summary.limit_steam_kg_hr ?? 0).toFixed(1) : '—',
+                },
+                {
+                  label: 'Δ vs projected',
                   value:
                     (summary.limit_steam_kg_hr ?? 0) !== 0
                       ? formatDiffPct(summary.actual_steam_kg_hr ?? 0, summary.limit_steam_kg_hr ?? 0)

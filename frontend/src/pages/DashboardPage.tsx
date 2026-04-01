@@ -8,14 +8,24 @@ import { FiltersDashboardSection } from '@/components/dashboard/FiltersDashboard
 import { DashboardSectionShell } from '@/components/dashboard/DashboardSectionShell';
 import { ScheduledReadingsStatus } from '@/components/dashboard/ScheduledReadingsStatus';
 import { useMissedReadingsByType } from '@/hooks/useMissedReadingsByType';
-import { useDashboardSummaryQuery } from '@/hooks/useDashboardQueries';
+import { useDashboardSummaryQuery, useOverdueSummaryQuery } from '@/hooks/useDashboardQueries';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { chillerDashboardAPI, boilerDashboardAPI, chemicalDashboardAPI, filtersDashboardAPI } from '@/lib/api';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { chillerDashboardAPI, boilerDashboardAPI, chemicalDashboardAPI, filtersDashboardAPI, filterScheduleAPI } from '@/lib/api';
 import {
   Thermometer,
   FlaskConical,
@@ -56,6 +66,23 @@ interface OverviewData {
   filterSummary?: { total_cost_rs?: number; projected_cost_rs?: number };
 }
 type EquipmentPowerRow = { equipment_id: string; actual_power_kwh?: number; limit_power_kwh?: number };
+type OverdueScheduleRow = {
+  schedule_type?: string;
+  next_due_date?: string;
+  assignment_info?: {
+    equipment_id?: string;
+    equipment_number?: string;
+    equipment_name?: string;
+    area_category?: string;
+    tag_info?: string;
+  };
+};
+type OverdueFilterGroup = {
+  id: string;
+  label: string;
+  types: string[];
+  earliestDue?: string;
+};
 
 export default function DashboardPage() {
   const { user } = useAuth();
@@ -64,7 +91,10 @@ export default function DashboardPage() {
   const isOperator = user?.role === 'operator';
   const isManagerRole = user?.role === 'manager';
   const { data: dashboardSummary } = useDashboardSummaryQuery(!isManagerRole);
+  const { data: overdueSummary } = useOverdueSummaryQuery(true);
   const [activeTab, setActiveTab] = useState('overview');
+  const [showOverduePopup, setShowOverduePopup] = useState(false);
+  const [overduePopupAcknowledged, setOverduePopupAcknowledged] = useState(false);
   const [chillerDate, setChillerDate] = useState(new Date().toISOString().slice(0, 10));
   const [chillerPeriodType, setChillerPeriodType] = useState<'day' | 'month' | 'year'>('day');
   const [chillerEquipmentId, setChillerEquipmentId] = useState('');
@@ -83,6 +113,71 @@ export default function DashboardPage() {
   const [filtersEquipmentId, setFiltersEquipmentId] = useState('');
   const [filtersEquipmentOptions, setFiltersEquipmentOptions] = useState<{ value: string; label: string }[]>([]);
   const [overviewData, setOverviewData] = useState<OverviewData | null>(null);
+  const [overdueByFilter, setOverdueByFilter] = useState<OverdueFilterGroup[]>([]);
+  const overdueEntries = useMemo(
+    () =>
+      [
+        { key: 'replacement', label: 'Replacement', value: Number(overdueSummary?.replacement ?? 0) },
+        { key: 'cleaning', label: 'Cleaning', value: Number(overdueSummary?.cleaning ?? 0) },
+        { key: 'integrity', label: 'Integrity', value: Number(overdueSummary?.integrity ?? 0) },
+      ].filter((x) => x.value > 0),
+    [overdueSummary]
+  );
+  const totalOverdueCount = useMemo(
+    () => overdueEntries.reduce((sum, x) => sum + x.value, 0),
+    [overdueEntries]
+  );
+  const hasOverdueFilters = totalOverdueCount > 0;
+
+  useEffect(() => {
+    if (activeTab === 'maintenance' && hasOverdueFilters && !overduePopupAcknowledged) {
+      setShowOverduePopup(true);
+    }
+  }, [activeTab, hasOverdueFilters, overduePopupAcknowledged]);
+
+  useEffect(() => {
+    if (activeTab !== 'maintenance' || !hasOverdueFilters) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const rows = (await filterScheduleAPI.list({ overdue: true })) as OverdueScheduleRow[];
+        if (cancelled) return;
+        const groups = new Map<string, OverdueFilterGroup>();
+        for (const row of rows || []) {
+          const info = row.assignment_info ?? {};
+          const equipmentId = String(info.equipment_id ?? '').trim();
+          if (!equipmentId) continue;
+          const equipmentNum = String(info.equipment_number ?? equipmentId).trim();
+          const equipmentName = String(info.equipment_name ?? '').trim();
+          const area = String(info.area_category ?? '').trim();
+          const tag = String(info.tag_info ?? '').trim();
+          const id = `${equipmentId}|${area}|${tag}`;
+          const labelBase = equipmentName ? `${equipmentNum} - ${equipmentName}` : equipmentNum;
+          const suffix = area || tag ? ` (${[area, tag].filter(Boolean).join(' | ')})` : '';
+          if (!groups.has(id)) {
+            groups.set(id, {
+              id,
+              label: `${labelBase}${suffix}`,
+              types: [],
+              earliestDue: row.next_due_date,
+            });
+          }
+          const g = groups.get(id)!;
+          const type = String(row.schedule_type ?? '').trim();
+          if (type && !g.types.includes(type)) g.types.push(type);
+          if (row.next_due_date && (!g.earliestDue || row.next_due_date < g.earliestDue)) {
+            g.earliestDue = row.next_due_date;
+          }
+        }
+        setOverdueByFilter(Array.from(groups.values()).sort((a, b) => a.label.localeCompare(b.label)));
+      } catch {
+        if (!cancelled) setOverdueByFilter([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, hasOverdueFilters]);
 
   useEffect(() => {
     let cancelled = false;
@@ -222,7 +317,17 @@ export default function DashboardPage() {
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="energy">Energy</TabsTrigger>
             <TabsTrigger value="chemicals">Chemicals</TabsTrigger>
-            <TabsTrigger value="maintenance">Maintenance / Filters</TabsTrigger>
+            <TabsTrigger
+              value="maintenance"
+              className={hasOverdueFilters ? 'border border-destructive/50 bg-destructive/10 text-destructive' : undefined}
+            >
+              Maintenance / Filters
+              {hasOverdueFilters ? (
+                <span className="ml-2 inline-flex min-w-5 items-center justify-center rounded-full bg-destructive px-1.5 text-[10px] text-destructive-foreground">
+                  {totalOverdueCount}
+                </span>
+              ) : null}
+            </TabsTrigger>
           </TabsList>
           {activeTab !== 'overview' && topFilterBar}
           <TabsContent value="overview" className="space-y-3">
@@ -255,7 +360,17 @@ export default function DashboardPage() {
             <ChemicalDashboardSection periodType={chemicalPeriodType} onPeriodTypeChange={setChemicalPeriodType} date={chemicalDate} onDateChange={setChemicalDate} selectedEquipmentName={chemicalEquipmentName} onSelectedEquipmentNameChange={setChemicalEquipmentName} onEquipmentOptionsChange={setChemicalEquipmentOptions} showToolbar={false} />
           </TabsContent>
           <TabsContent value="maintenance" className="space-y-3">
-            <FiltersDashboardSection periodType={filtersPeriodType} onPeriodTypeChange={setFiltersPeriodType} date={filtersDate} onDateChange={setFiltersDate} selectedEquipmentId={filtersEquipmentId} onSelectedEquipmentIdChange={setFiltersEquipmentId} onEquipmentOptionsChange={setFiltersEquipmentOptions} showToolbar={false} />
+            <FiltersDashboardSection
+              periodType={filtersPeriodType}
+              onPeriodTypeChange={setFiltersPeriodType}
+              date={filtersDate}
+              onDateChange={setFiltersDate}
+              selectedEquipmentId={filtersEquipmentId}
+              onSelectedEquipmentIdChange={setFiltersEquipmentId}
+              onEquipmentOptionsChange={setFiltersEquipmentOptions}
+              showToolbar={false}
+              className={hasOverdueFilters ? 'ring-2 ring-destructive/45' : undefined}
+            />
           </TabsContent>
         </Tabs>
 
@@ -282,6 +397,47 @@ export default function DashboardPage() {
           </DashboardSectionShell>
         )}
       </div>
+
+      <AlertDialog open={showOverduePopup} onOpenChange={setShowOverduePopup}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Overdue Filter Maintenance Alert</AlertDialogTitle>
+            <AlertDialogDescription>
+              One or more due dates have been crossed. Please review Maintenance / Filters and take action.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2 text-sm">
+            {overdueByFilter.length > 0 ? overdueByFilter.map((entry) => (
+              <div key={entry.id} className="rounded border px-3 py-2">
+                <div className="font-medium">{entry.label}</div>
+                <div className="text-xs text-muted-foreground mt-1">
+                  Overdue: {entry.types.join(', ') || '—'}
+                  {entry.earliestDue ? ` | Due from: ${entry.earliestDue}` : ''}
+                </div>
+              </div>
+            )) : (
+              <div className="text-muted-foreground">No overdue items.</div>
+            )}
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              onClick={() => {
+                setOverduePopupAcknowledged(true);
+              }}
+            >
+              Dismiss
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                setActiveTab('maintenance');
+                setOverduePopupAcknowledged(true);
+              }}
+            >
+              Open Maintenance
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
