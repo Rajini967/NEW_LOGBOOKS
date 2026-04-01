@@ -16,6 +16,7 @@ from core.log_slot_utils import (
     get_slot_day_bounds,
     get_slot_timezone,
     format_missing_slots_equipment_label,
+    filter_missing_slots_before_earliest_downtime,
 )
 from equipment.models import Equipment
 from .models import BoilerLog, BoilerEquipmentLimit, BoilerDashboardConfig
@@ -53,21 +54,55 @@ def _get_boiler_limit_for_date(equipment_id: str, for_date):
 
 def _get_boiler_limit_for_display(equipment_id: str, for_date):
     """
-    Return the BoilerEquipmentLimit for dashboard display.
-
-    Dashboard should show the limit configured for the selected date only.
-    Fallback to null-effective_from default row when present.
+    Return the BoilerEquipmentLimit in effect for dashboard display.
+    Uses latest effective_from <= for_date, with null effective_from as fallback.
     """
-    limit = BoilerEquipmentLimit.objects.filter(
-        equipment_id=equipment_id,
-        effective_from=for_date,
-    ).order_by("-effective_from").first()
+    qs = BoilerEquipmentLimit.objects.filter(equipment_id=equipment_id)
+    limit = qs.filter(effective_from__isnull=False, effective_from__lte=for_date).order_by("-effective_from").first()
     if limit is not None:
         return limit
-    return BoilerEquipmentLimit.objects.filter(
-        equipment_id=equipment_id,
-        effective_from__isnull=True,
-    ).order_by("-effective_from").first()
+    return qs.filter(effective_from__isnull=True).first()
+
+
+def _projected_boiler_exact_dates(start_d, end_d, equipment_id=None):
+    """
+    Projected boiler metrics using only exact configured dates (no carry-forward).
+    Returns (power_kwh, diesel_liters, furnace_oil_liters, brigade_kg, steam_kg_hr_scaled).
+    """
+    qs = BoilerEquipmentLimit.objects.filter(
+        effective_from__isnull=False,
+        effective_from__gte=start_d,
+        effective_from__lte=end_d,
+    )
+    if equipment_id:
+        qs = qs.filter(equipment_id=equipment_id)
+    p = d = fo = br = st = 0.0
+    seen = set()
+    for row in qs.order_by("equipment_id", "effective_from", "-id"):
+        key = (row.equipment_id, row.effective_from)
+        if key in seen:
+            continue
+        seen.add(key)
+        p += float(row.daily_power_limit_kw or 0)
+        d += float(getattr(row, "daily_diesel_limit_liters", None) or 0)
+        fo += float(getattr(row, "daily_furnace_oil_limit_liters", None) or 0)
+        br += float(getattr(row, "daily_brigade_limit_kg", None) or 0)
+        st += float(getattr(row, "daily_steam_limit_kg_hr", None) or 0) * 24
+    return round(p, 2), round(d, 2), round(fo, 2), round(br, 2), round(st, 2)
+
+
+def _get_boiler_rate_row_for_scope(equipment_id, equipment_ids, lookup_date):
+    """
+    Resolve one rate row for dashboard cost calculations.
+    Prefer selected equipment row; otherwise first configured equipment row available for lookup_date.
+    """
+    if equipment_id:
+        return _get_boiler_limit_for_display(equipment_id, lookup_date)
+    for eid in equipment_ids or []:
+        row = _get_boiler_limit_for_display(eid, lookup_date)
+        if row is not None:
+            return row
+    return BoilerEquipmentLimit.objects.order_by("-effective_from", "-id").first()
 
 
 def _actual_boiler_for_date(d, equipment_id=None):
@@ -193,7 +228,7 @@ def _actual_boiler_for_date_range(start_d, end_d, equipment_id=None):
         round(total_diesel, 2),
         round(total_furnace_oil, 2),
         round(total_brigade, 2),
-        round(avg_steam, 2),
+        avg_steam,
         dict(by_equipment_power),
     )
 
@@ -457,18 +492,49 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
             if prev is None or ts > prev:
                 daily_last_reading[(day_key, equipment_id)] = ts
 
-        suppressed_by_day = defaultdict(set)
-        suppressed_qs = range_qs.filter(
+        downtime_timestamps_by_day = defaultdict(lambda: defaultdict(list))
+        downtime_qs = range_qs.filter(
             activity_type__in=["maintenance", "shutdown"],
-            status__in=["draft", "pending", "pending_secondary_approval"],
-        )
-        for row in suppressed_qs.values("equipment_id", "timestamp"):
+        ).exclude(status="rejected")
+        for row in downtime_qs.values("equipment_id", "timestamp"):
             equipment_id = (row.get("equipment_id") or "").strip()
             ts = row.get("timestamp")
             if not equipment_id or ts is None:
                 continue
-            day_key = timezone.localtime(ts, slot_tz).date().isoformat()
-            suppressed_by_day[day_key].add(equipment_id)
+            local_ts = timezone.localtime(ts, slot_tz)
+            day_key = local_ts.date().isoformat()
+            downtime_timestamps_by_day[day_key][equipment_id].append(ts)
+
+        open_downtime_timestamps_by_day = defaultdict(lambda: defaultdict(list))
+        open_dt_qs = range_qs.filter(
+            activity_type__in=["maintenance", "shutdown"],
+            status__in=["draft", "pending", "pending_secondary_approval"],
+        )
+        for row in open_dt_qs.values("equipment_id", "timestamp"):
+            equipment_id = (row.get("equipment_id") or "").strip()
+            ts = row.get("timestamp")
+            if not equipment_id or ts is None:
+                continue
+            local_ts = timezone.localtime(ts, slot_tz)
+            day_key = local_ts.date().isoformat()
+            open_downtime_timestamps_by_day[day_key][equipment_id].append(ts)
+
+        open_maintenance_suppress_from = {}
+        open_ms_qs = BoilerLog.objects.filter(
+            activity_type__in=["maintenance", "shutdown"],
+            status__in=["draft", "pending", "pending_secondary_approval"],
+        )
+        if equipment_id_filter:
+            open_ms_qs = open_ms_qs.filter(equipment_id=equipment_id_filter)
+        for row in open_ms_qs.values("equipment_id", "timestamp"):
+            eid = (row.get("equipment_id") or "").strip()
+            ts = row.get("timestamp")
+            if not eid or ts is None:
+                continue
+            start_d = timezone.localtime(ts, slot_tz).date()
+            prev = open_maintenance_suppress_from.get(eid)
+            if prev is None or start_d < prev:
+                open_maintenance_suppress_from[eid] = start_d
 
         equipment_name_map = {}
         boiler_equipment_rows = Equipment.objects.filter(
@@ -513,15 +579,19 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
             total_expected_slots = 0
             total_present_slots = 0
             total_missing_slots = 0
-            suppressed_for_day = suppressed_by_day.get(day_key, set())
 
             for equipment_id in sorted(equipment_ids):
-                if not equipment_id_filter and equipment_id in suppressed_for_day:
+                eid = (equipment_id or "").strip()
+                suppress_from = open_maintenance_suppress_from.get(eid)
+                if suppress_from is not None and day_value > suppress_from:
                     continue
                 interval, shift_hours = get_interval_for_equipment(equipment_id, "boiler")
+                op_ts = timestamps_by_day_equipment.get(day_key, {}).get(eid, []) or []
+                down_ts = downtime_timestamps_by_day.get(day_key, {}).get(eid, []) or []
+                merged_ts = op_ts + down_ts
                 stats = compute_missing_slots_for_day(
                     day_value=day_value,
-                    timestamps=timestamps_by_day_equipment.get(day_key, {}).get(equipment_id, []),
+                    timestamps=merged_ts,
                     interval=interval,
                     shift_duration_hours=shift_hours,
                     equipment_identifier=equipment_id,
@@ -529,7 +599,17 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
                 )
                 expected_count = stats["expected_slot_count"]
                 present_count = stats["present_slot_count"]
-                missing_count = stats["missing_slot_count"]
+                open_down_ts = open_downtime_timestamps_by_day.get(day_key, {}).get(eid, []) or []
+                if open_down_ts:
+                    missing_for_display = filter_missing_slots_before_earliest_downtime(
+                        stats["missing_slots"],
+                        down_ts,
+                        interval,
+                        shift_hours,
+                    )
+                else:
+                    missing_for_display = stats["missing_slots"]
+                missing_count = len(missing_for_display)
                 total_expected_slots += expected_count
                 total_present_slots += present_count
                 total_missing_slots += missing_count
@@ -542,7 +622,7 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
                             f' - {timezone.localtime(slot["slot_end"], slot_tz).strftime("%H:%M")}'
                         ),
                     }
-                    for slot in stats["missing_slots"]
+                    for slot in missing_for_display
                 ]
 
                 _, day_end = get_slot_day_bounds(day_value)
@@ -551,6 +631,13 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
                 if last_reading_ts is None and global_last is not None and global_last < day_end:
                     # Prevent showing a future reading (relative to this day) in historical day rows.
                     last_reading_ts = global_last
+
+                next_due_display = None
+                if missing_for_display:
+                    next_due_display = timezone.localtime(
+                        missing_for_display[0]["slot_start"], slot_tz
+                    ).isoformat()
+
                 equipments_payload.append(
                     {
                         "equipment_id": equipment_id,
@@ -560,11 +647,7 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
                         "expected_slot_count": expected_count,
                         "present_slot_count": present_count,
                         "missing_slot_count": missing_count,
-                        "next_due": (
-                            timezone.localtime(stats["next_due"]).isoformat()
-                            if stats["next_due"] is not None
-                            else None
-                        ),
+                        "next_due": next_due_display,
                         "last_reading_timestamp": (
                             timezone.localtime(last_reading_ts).isoformat()
                             if last_reading_ts is not None
@@ -844,24 +927,19 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
         efficiency_ratio = (actual_steam_kg_hr / total_oil_liters) if total_oil_liters and total_oil_liters > 0 else None
         actual_steam_scaled = round(actual_steam_kg_hr * days_in_period * 24, 2)
 
-        config = BoilerDashboardConfig.objects.first()
         projected_power_kwh = None
         actual_cost_rs = 0.0
         projected_cost_rs = None
-        if config and config.projected_power_kwh_month is not None and limit_power_kwh > 0:
-            if period_type == 'month':
-                projected_power_kwh = config.projected_power_kwh_month
-            elif period_type == 'day':
-                _, month_days = calendar.monthrange(ref_date.year, ref_date.month)
-                projected_power_kwh = config.projected_power_kwh_month / month_days
-            else:
-                projected_power_kwh = config.projected_power_kwh_month * 12
-            projected_power_kwh = round(projected_power_kwh, 2)
-        if projected_power_kwh is None and limit_power_kwh > 0:
-            projected_power_kwh = limit_power_kwh
+        # Projected uses only exact configured dates in selected period (no carry-forward).
+        (
+            projected_power_kwh,
+            projected_diesel_liters,
+            projected_furnace_oil_liters,
+            projected_brigade_kg,
+            _projected_steam_scaled,
+        ) = _projected_boiler_exact_dates(period_start.date(), period_end.date(), equipment_id)
 
-        first_eid = limit_equipment_ids[0] if limit_equipment_ids else None
-        rate_limit = _get_boiler_limit_for_display(first_eid, limit_lookup_date) if first_eid else BoilerEquipmentLimit.objects.first()
+        rate_limit = _get_boiler_rate_row_for_scope(equipment_id, limit_equipment_ids, limit_lookup_date)
         if rate_limit:
             power_rate = getattr(rate_limit, 'electricity_rate_rs_per_kwh', None) or 0
             diesel_rate = getattr(rate_limit, 'diesel_rate_rs_per_liter', None) or 0
@@ -880,25 +958,14 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
                 diesel_rate = getattr(rate_limit, 'diesel_rate_rs_per_liter', None) or 0
                 fo_rate = getattr(rate_limit, 'furnace_oil_rate_rs_per_liter', None) or 0
                 brigade_rate = getattr(rate_limit, 'brigade_rate_rs_per_kg', None) or 0
-                if config and config.projected_oil_cost_rs_month is not None:
-                    proj_power_cost = projected_power_kwh * power_rate
-                    if period_type == 'month':
-                        proj_oil = config.projected_oil_cost_rs_month
-                    elif period_type == 'day':
-                        _, month_days = calendar.monthrange(ref_date.year, ref_date.month)
-                        proj_oil = config.projected_oil_cost_rs_month / month_days
-                    else:
-                        proj_oil = config.projected_oil_cost_rs_month * 12
-                    projected_cost_rs = round(proj_power_cost + proj_oil, 2)
-                else:
-                    # Same formula as dashboard_series: limits × rates so card matches graph
-                    projected_cost_rs = round(
-                        projected_power_kwh * power_rate
-                        + limit_diesel * diesel_rate
-                        + limit_furnace_oil * fo_rate
-                        + limit_brigade * brigade_rate,
-                        2,
-                    )
+                # Same formula as dashboard_series: limits × rates so card matches graph
+                projected_cost_rs = round(
+                    projected_power_kwh * power_rate
+                    + projected_diesel_liters * diesel_rate
+                    + projected_furnace_oil_liters * fo_rate
+                    + projected_brigade_kg * brigade_rate,
+                    2,
+                )
             else:
                 projected_cost_rs = 0.0
 
@@ -914,12 +981,16 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
             'limit_oil_liters': limit_oil_liters,
             'actual_diesel_liters': round(actual_diesel, 2),
             'limit_diesel_liters': limit_diesel,
+            'projected_diesel_liters': projected_diesel_liters,
             'actual_furnace_oil_liters': round(actual_furnace_oil, 2),
             'limit_furnace_oil_liters': limit_furnace_oil,
+            'projected_furnace_oil_liters': projected_furnace_oil_liters,
             'actual_brigade_kg': round(actual_brigade, 2),
             'limit_brigade_kg': limit_brigade,
+            'projected_brigade_kg': projected_brigade_kg,
             'actual_steam_kg_hr': actual_steam_scaled,
             'limit_steam_kg_hr': limit_steam_kg_hr,
+            'projected_steam_kg_hr': _projected_steam_scaled,
             'efficiency_ratio': round(efficiency_ratio, 4) if efficiency_ratio is not None else None,
             'by_equipment': by_equipment,
         }
@@ -955,50 +1026,36 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
         series_days = int(days_param) if days_param and str(days_param).isdigit() else 1
         series_days = max(1, min(31, series_days))
 
-        config = BoilerDashboardConfig.objects.first()
         limit_eids = list(BoilerEquipmentLimit.objects.values_list('equipment_id', flat=True).distinct())
-        first_eid = None
-        if equipment_id:
-            first_eid = equipment_id
-        elif limit_eids:
-            first_eid = limit_eids[0]
-        rate_limit = _get_boiler_limit_for_date(first_eid, ref_date) if first_eid else None
-        power_rate = float(rate_limit.electricity_rate_rs_per_kwh or 0) if rate_limit else 0
-        diesel_rate = float(getattr(rate_limit, 'diesel_rate_rs_per_liter', None) or 0) if rate_limit else 0
-        fo_rate = float(getattr(rate_limit, 'furnace_oil_rate_rs_per_liter', None) or 0) if rate_limit else 0
-        brigade_rate = float(getattr(rate_limit, 'brigade_rate_rs_per_kg', None) or 0) if rate_limit else 0
-
-        projected_kwh_month = float(config.projected_power_kwh_month) if config and config.projected_power_kwh_month is not None else None
 
         series = []
         try:
             if period_type == 'day':
-                eids_day = [equipment_id] if equipment_id else limit_eids
                 for i in range(series_days - 1, -1, -1):
                     d = ref_date - timedelta(days=i)
                     label = d.strftime('%d %b')
                     p, di, fo, br, st = _actual_boiler_for_date(d, equipment_id)
-                    daily_kw = 0.0
-                    limit_d = 0.0
-                    limit_fo = 0.0
-                    limit_br = 0.0
-                    limit_st = 0.0
-                    for eid in eids_day:
-                        limit_row = _get_boiler_limit_for_display(eid, d)
-                        if limit_row:
-                            daily_kw += (limit_row.daily_power_limit_kw or 0)
-                            limit_d += (getattr(limit_row, 'daily_diesel_limit_liters', None) or 0)
-                            limit_fo += (getattr(limit_row, 'daily_furnace_oil_limit_liters', None) or 0)
-                            limit_br += (getattr(limit_row, 'daily_brigade_limit_kg', None) or 0)
-                            limit_st += (getattr(limit_row, 'daily_steam_limit_kg_hr', None) or 0) * 24
-                    if daily_kw == 0:
+                    rate_limit = _get_boiler_rate_row_for_scope(equipment_id, limit_eids, d)
+                    power_rate = float(rate_limit.electricity_rate_rs_per_kwh or 0) if rate_limit else 0
+                    diesel_rate = float(getattr(rate_limit, 'diesel_rate_rs_per_liter', None) or 0) if rate_limit else 0
+                    fo_rate = float(getattr(rate_limit, 'furnace_oil_rate_rs_per_liter', None) or 0) if rate_limit else 0
+                    brigade_rate = float(getattr(rate_limit, 'brigade_rate_rs_per_kg', None) or 0) if rate_limit else 0
+                    proj_power, proj_diesel, proj_fo, proj_br, proj_steam = _projected_boiler_exact_dates(
+                        d, d, equipment_id
+                    )
+                    if proj_power == 0:
                         proj_power = 0.0
                         actual_cost = 0.0 if power_rate or diesel_rate or fo_rate or brigade_rate else 0.0
                         proj_cost = 0.0
                     else:
-                        proj_power = (projected_kwh_month / calendar.monthrange(d.year, d.month)[1]) if projected_kwh_month is not None else daily_kw
                         actual_cost = round(p * power_rate + di * diesel_rate + fo * fo_rate + br * brigade_rate, 2)
-                        proj_cost = round(proj_power * power_rate + limit_d * diesel_rate + limit_fo * fo_rate + limit_br * brigade_rate, 2)
+                        proj_cost = round(
+                            proj_power * power_rate
+                            + proj_diesel * diesel_rate
+                            + proj_fo * fo_rate
+                            + proj_br * brigade_rate,
+                            2,
+                        )
                     series.append({
                         'date': d.isoformat(),
                         'label': label,
@@ -1007,13 +1064,13 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
                         'actual_cost_rs': actual_cost,
                         'projected_cost_rs': proj_cost,
                         'actual_diesel_liters': round(di, 2),
-                        'projected_diesel_liters': round(limit_d, 2),
+                        'projected_diesel_liters': round(proj_diesel, 2),
                         'actual_furnace_oil_liters': round(fo, 2),
-                        'projected_furnace_oil_liters': round(limit_fo, 2),
+                        'projected_furnace_oil_liters': round(proj_fo, 2),
                         'actual_brigade_kg': round(br, 2),
-                        'projected_brigade_kg': round(limit_br, 2),
+                        'projected_brigade_kg': round(proj_br, 2),
                         'actual_steam_kg_hr': round(st * 24, 2),
-                        'projected_steam_kg_hr': round(limit_st, 2),
+                        'projected_steam_kg_hr': round(proj_steam, 2),
                     })
             elif period_type == 'month':
                 _, last_day_m = calendar.monthrange(ref_date.year, ref_date.month)
@@ -1027,27 +1084,19 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
                     actual_steam_kg_hr,
                     _,
                 ) = _actual_boiler_for_date_range(start_d_m, end_d_m, equipment_id)
-                limit_lookup = end_d_m
-                limit_power = 0.0
-                limit_diesel = 0.0
-                limit_fo = 0.0
-                limit_br = 0.0
-                limit_steam = 0.0
-                eids = [equipment_id] if equipment_id else limit_eids
-                for eid in eids:
-                    limit_row = _get_boiler_limit_for_display(eid, limit_lookup)
-                    if limit_row:
-                        limit_power += (limit_row.daily_power_limit_kw or 0) * last_day_m
-                        limit_diesel += (getattr(limit_row, 'daily_diesel_limit_liters', None) or 0) * last_day_m
-                        limit_fo += (getattr(limit_row, 'daily_furnace_oil_limit_liters', None) or 0) * last_day_m
-                        limit_br += (getattr(limit_row, 'daily_brigade_limit_kg', None) or 0) * last_day_m
-                        limit_steam += (getattr(limit_row, 'daily_steam_limit_kg_hr', None) or 0) * last_day_m * 24
-                if limit_power == 0:
+                rate_limit = _get_boiler_rate_row_for_scope(equipment_id, limit_eids, end_d_m)
+                power_rate = float(rate_limit.electricity_rate_rs_per_kwh or 0) if rate_limit else 0
+                diesel_rate = float(getattr(rate_limit, 'diesel_rate_rs_per_liter', None) or 0) if rate_limit else 0
+                fo_rate = float(getattr(rate_limit, 'furnace_oil_rate_rs_per_liter', None) or 0) if rate_limit else 0
+                brigade_rate = float(getattr(rate_limit, 'brigade_rate_rs_per_kg', None) or 0) if rate_limit else 0
+                proj_power, proj_diesel, proj_fo, proj_br, proj_steam = _projected_boiler_exact_dates(
+                    start_d_m, end_d_m, equipment_id
+                )
+                if proj_power == 0:
                     proj_power = 0.0
                     actual_cost = 0.0
                     proj_cost = 0.0
                 else:
-                    proj_power = projected_kwh_month if projected_kwh_month is not None else limit_power
                     actual_cost = round(
                         actual_power_kwh * power_rate
                         + actual_diesel * diesel_rate
@@ -1057,9 +1106,9 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
                     )
                     proj_cost = round(
                         proj_power * power_rate
-                        + limit_diesel * diesel_rate
-                        + limit_fo * fo_rate
-                        + limit_br * brigade_rate,
+                        + proj_diesel * diesel_rate
+                        + proj_fo * fo_rate
+                        + proj_br * brigade_rate,
                         2,
                     )
                 series.append({
@@ -1070,13 +1119,13 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
                     'actual_cost_rs': actual_cost,
                     'projected_cost_rs': proj_cost,
                     'actual_diesel_liters': round(actual_diesel, 2),
-                    'projected_diesel_liters': round(limit_diesel, 2),
+                    'projected_diesel_liters': round(proj_diesel, 2),
                     'actual_furnace_oil_liters': round(actual_furnace_oil, 2),
-                    'projected_furnace_oil_liters': round(limit_fo, 2),
+                    'projected_furnace_oil_liters': round(proj_fo, 2),
                     'actual_brigade_kg': round(actual_brigade, 2),
-                    'projected_brigade_kg': round(limit_br, 2),
+                    'projected_brigade_kg': round(proj_br, 2),
                     'actual_steam_kg_hr': round(actual_steam_kg_hr * last_day_m * 24, 2),
-                    'projected_steam_kg_hr': round(limit_steam, 2),
+                    'projected_steam_kg_hr': round(proj_steam, 2),
                 })
             else:
                 period_start_d = date(ref_date.year, 1, 1)
@@ -1090,27 +1139,19 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
                     actual_steam_kg_hr,
                     _,
                 ) = _actual_boiler_for_date_range(period_start_d, period_end_d, equipment_id)
-                limit_lookup = period_end_d
-                limit_power = 0.0
-                limit_diesel = 0.0
-                limit_fo = 0.0
-                limit_br = 0.0
-                limit_steam = 0.0
-                eids = [equipment_id] if equipment_id else limit_eids
-                for eid in eids:
-                    limit_row = _get_boiler_limit_for_display(eid, limit_lookup)
-                    if limit_row:
-                        limit_power += (limit_row.daily_power_limit_kw or 0) * days_in_year
-                        limit_diesel += (getattr(limit_row, 'daily_diesel_limit_liters', None) or 0) * days_in_year
-                        limit_fo += (getattr(limit_row, 'daily_furnace_oil_limit_liters', None) or 0) * days_in_year
-                        limit_br += (getattr(limit_row, 'daily_brigade_limit_kg', None) or 0) * days_in_year
-                        limit_steam += (getattr(limit_row, 'daily_steam_limit_kg_hr', None) or 0) * days_in_year * 24
-                if limit_power == 0:
+                rate_limit = _get_boiler_rate_row_for_scope(equipment_id, limit_eids, period_end_d)
+                power_rate = float(rate_limit.electricity_rate_rs_per_kwh or 0) if rate_limit else 0
+                diesel_rate = float(getattr(rate_limit, 'diesel_rate_rs_per_liter', None) or 0) if rate_limit else 0
+                fo_rate = float(getattr(rate_limit, 'furnace_oil_rate_rs_per_liter', None) or 0) if rate_limit else 0
+                brigade_rate = float(getattr(rate_limit, 'brigade_rate_rs_per_kg', None) or 0) if rate_limit else 0
+                proj_power, proj_diesel, proj_fo, proj_br, proj_steam = _projected_boiler_exact_dates(
+                    period_start_d, period_end_d, equipment_id
+                )
+                if proj_power == 0:
                     proj_power = 0.0
                     actual_cost = 0.0
                     proj_cost = 0.0
                 else:
-                    proj_power = (projected_kwh_month * 12) if projected_kwh_month is not None else limit_power
                     actual_cost = round(
                         actual_power_kwh * power_rate
                         + actual_diesel * diesel_rate
@@ -1120,9 +1161,9 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
                     )
                     proj_cost = round(
                         proj_power * power_rate
-                        + limit_diesel * diesel_rate
-                        + limit_fo * fo_rate
-                        + limit_br * brigade_rate,
+                        + proj_diesel * diesel_rate
+                        + proj_fo * fo_rate
+                        + proj_br * brigade_rate,
                         2,
                     )
                 series.append({
@@ -1133,13 +1174,13 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
                     'actual_cost_rs': actual_cost,
                     'projected_cost_rs': proj_cost,
                     'actual_diesel_liters': round(actual_diesel, 2),
-                    'projected_diesel_liters': round(limit_diesel, 2),
+                    'projected_diesel_liters': round(proj_diesel, 2),
                     'actual_furnace_oil_liters': round(actual_furnace_oil, 2),
-                    'projected_furnace_oil_liters': round(limit_fo, 2),
+                    'projected_furnace_oil_liters': round(proj_fo, 2),
                     'actual_brigade_kg': round(actual_brigade, 2),
-                    'projected_brigade_kg': round(limit_br, 2),
+                    'projected_brigade_kg': round(proj_br, 2),
                     'actual_steam_kg_hr': round(actual_steam_kg_hr * days_in_year * 24, 2),
-                    'projected_steam_kg_hr': round(limit_steam, 2),
+                    'projected_steam_kg_hr': round(proj_steam, 2),
                 })
         except Exception:
             series = []

@@ -1,7 +1,7 @@
 import calendar
 from datetime import date, datetime, timedelta
 
-from django.db.models import Count
+from django.db.models import Count, Q
 from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -369,29 +369,29 @@ class FilterScheduleViewSet(viewsets.ModelViewSet):
             )
         filter_ids = [f for f in filter_ids if f]
 
-        # Counts from approved filter log entries (maintenance done in period)
+        # Counts from approved filter log entries (maintenance done in period).
+        # NOTE: current FilterLog stores filter identifier in `filter_no` (FMT-xxxx),
+        # while `equipment_id` is equipment UUID/identifier. Keep legacy support where
+        # older rows may have filter id in equipment_id.
         replacement_count = 0
         cleaning_count = 0
         integrity_count = 0
         if filter_ids:
-            replacement_count = FilterLog.objects.filter(
+            base_logs_qs = FilterLog.objects.filter(
                 status="approved",
-                equipment_id__in=filter_ids,
+            ).filter(
+                Q(filter_no__in=filter_ids) | Q(equipment_id__in=filter_ids)
+            )
+            replacement_count = base_logs_qs.filter(
                 installed_date__gte=period_start_date,
                 installed_date__lte=period_end_date,
             ).count()
-            cleaning_count = FilterLog.objects.filter(
-                status="approved",
-                equipment_id__in=filter_ids,
-            ).filter(
+            cleaning_count = base_logs_qs.filter(
                 cleaning_done_date__isnull=False,
                 cleaning_done_date__gte=period_start_date,
                 cleaning_done_date__lte=period_end_date,
             ).count()
-            integrity_count = FilterLog.objects.filter(
-                status="approved",
-                equipment_id__in=filter_ids,
-            ).filter(
+            integrity_count = base_logs_qs.filter(
                 integrity_done_date__isnull=False,
                 integrity_done_date__gte=period_start_date,
                 integrity_done_date__lte=period_end_date,

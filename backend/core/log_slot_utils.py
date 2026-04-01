@@ -335,6 +335,47 @@ def compute_missing_slots_for_day(
     }
 
 
+def filter_missing_slots_before_earliest_downtime(
+    missing_slots: List[Dict[str, Any]],
+    downtime_timestamps: List,
+    interval: str,
+    shift_duration_hours: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """
+    On a day with maintenance/shutdown, only show operation gaps *before* the downtime window.
+
+    The earliest downtime log defines the start of the maintenance slot (hourly/shift/daily).
+    Any missing slot whose window ends after that start is omitted (rest of day treated as
+    covered by downtime, not missing operation readings).
+    """
+    if not downtime_timestamps or not missing_slots:
+        return missing_slots
+    slot_tz = get_slot_timezone()
+    earliest_local: Optional[datetime] = None
+    for raw_ts in downtime_timestamps:
+        if raw_ts is None:
+            continue
+        ts = raw_ts
+        if timezone.is_naive(ts):
+            ts = timezone.make_aware(ts, slot_tz)
+        ts = timezone.localtime(ts, slot_tz)
+        if earliest_local is None or ts < earliest_local:
+            earliest_local = ts
+    if earliest_local is None:
+        return missing_slots
+    downtime_slot_start, _ = get_slot_range(earliest_local, interval, shift_duration_hours)
+    cutoff = timezone.localtime(downtime_slot_start, slot_tz)
+    out: List[Dict[str, Any]] = []
+    for s in missing_slots:
+        se = s["slot_end"]
+        if timezone.is_naive(se):
+            se = timezone.make_aware(se, slot_tz)
+        se = timezone.localtime(se, slot_tz)
+        if se <= cutoff:
+            out.append(s)
+    return out
+
+
 def get_interval_for_equipment(equipment_identifier: str, log_type: str) -> Tuple[str, int]:
     """
     Resolve (interval, shift_hours) for a given equipment identifier.

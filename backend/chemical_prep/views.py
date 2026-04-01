@@ -15,6 +15,7 @@ from core.log_slot_utils import (
     compute_missing_slots_for_day,
     get_slot_day_bounds,
     get_slot_timezone,
+    filter_missing_slots_before_earliest_downtime,
 )
 from equipment.models import EquipmentCategory
 from .models import Chemical, ChemicalStock, ChemicalPreparation, ChemicalAssignment, ChemicalDashboardConfig
@@ -727,18 +728,47 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
             if prev is None or ts > prev:
                 daily_last_reading[(day_key, equipment_name)] = ts
 
-        suppressed_by_day = defaultdict(set)
-        suppressed_qs = range_qs.filter(
+        downtime_timestamps_by_day = defaultdict(lambda: defaultdict(list))
+        downtime_qs = range_qs.filter(
             activity_type__in=["maintenance", "shutdown"],
-            status__in=["draft", "pending", "pending_secondary_approval"],
-        )
-        for row in suppressed_qs.values("equipment_name", "timestamp"):
+        ).exclude(status="rejected")
+        for row in downtime_qs.values("equipment_name", "timestamp"):
             equipment_name = (row.get("equipment_name") or "").strip()
             ts = row.get("timestamp")
             if not equipment_name or ts is None:
                 continue
             day_key = timezone.localtime(ts, slot_tz).date().isoformat()
-            suppressed_by_day[day_key].add(equipment_name)
+            downtime_timestamps_by_day[day_key][equipment_name].append(ts)
+
+        open_downtime_timestamps_by_day = defaultdict(lambda: defaultdict(list))
+        open_dt_qs = range_qs.filter(
+            activity_type__in=["maintenance", "shutdown"],
+            status__in=["draft", "pending", "pending_secondary_approval"],
+        )
+        for row in open_dt_qs.values("equipment_name", "timestamp"):
+            equipment_name = (row.get("equipment_name") or "").strip()
+            ts = row.get("timestamp")
+            if not equipment_name or ts is None:
+                continue
+            day_key = timezone.localtime(ts, slot_tz).date().isoformat()
+            open_downtime_timestamps_by_day[day_key][equipment_name].append(ts)
+
+        open_maintenance_suppress_from = {}
+        open_ms_qs = ChemicalPreparation.objects.filter(
+            activity_type__in=["maintenance", "shutdown"],
+            status__in=["draft", "pending", "pending_secondary_approval"],
+        )
+        if equipment_name_filter:
+            open_ms_qs = open_ms_qs.filter(equipment_name=equipment_name_filter)
+        for row in open_ms_qs.values("equipment_name", "timestamp"):
+            equipment_name = (row.get("equipment_name") or "").strip()
+            ts = row.get("timestamp")
+            if not equipment_name or ts is None:
+                continue
+            start_d = timezone.localtime(ts, slot_tz).date()
+            prev = open_maintenance_suppress_from.get(equipment_name)
+            if prev is None or start_d < prev:
+                open_maintenance_suppress_from[equipment_name] = start_d
 
         equipment_names = set()
         historical_names = set(
@@ -768,15 +798,19 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
             total_expected_slots = 0
             total_present_slots = 0
             total_missing_slots = 0
-            suppressed_for_day = suppressed_by_day.get(day_key, set())
 
             for equipment_name in sorted(equipment_names):
-                if not equipment_name_filter and equipment_name in suppressed_for_day:
+                en = (equipment_name or "").strip()
+                suppress_from = open_maintenance_suppress_from.get(en)
+                if suppress_from is not None and day_value > suppress_from:
                     continue
                 interval, shift_hours = get_interval_for_equipment(equipment_name, "chemical")
+                op_ts = timestamps_by_day_equipment.get(day_key, {}).get(en, []) or []
+                down_ts = downtime_timestamps_by_day.get(day_key, {}).get(en, []) or []
+                merged_ts = op_ts + down_ts
                 stats = compute_missing_slots_for_day(
                     day_value=day_value,
-                    timestamps=timestamps_by_day_equipment.get(day_key, {}).get(equipment_name, []),
+                    timestamps=merged_ts,
                     interval=interval,
                     shift_duration_hours=shift_hours,
                     equipment_identifier=equipment_name,
@@ -784,7 +818,17 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
                 )
                 expected_count = stats["expected_slot_count"]
                 present_count = stats["present_slot_count"]
-                missing_count = stats["missing_slot_count"]
+                open_down_ts = open_downtime_timestamps_by_day.get(day_key, {}).get(en, []) or []
+                if open_down_ts:
+                    missing_for_display = filter_missing_slots_before_earliest_downtime(
+                        stats["missing_slots"],
+                        down_ts,
+                        interval,
+                        shift_hours,
+                    )
+                else:
+                    missing_for_display = stats["missing_slots"]
+                missing_count = len(missing_for_display)
                 total_expected_slots += expected_count
                 total_present_slots += present_count
                 total_missing_slots += missing_count
@@ -797,8 +841,13 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
                             f' - {timezone.localtime(slot["slot_end"], slot_tz).strftime("%H:%M")}'
                         ),
                     }
-                    for slot in stats["missing_slots"]
+                    for slot in missing_for_display
                 ]
+                next_due_display = None
+                if missing_for_display:
+                    next_due_display = timezone.localtime(
+                        missing_for_display[0]["slot_start"], slot_tz
+                    ).isoformat()
                 _, day_end = get_slot_day_bounds(day_value)
                 global_last = global_last_reading.get(equipment_name)
                 last_reading_ts = daily_last_reading.get((day_key, equipment_name))
@@ -813,11 +862,7 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
                         "expected_slot_count": expected_count,
                         "present_slot_count": present_count,
                         "missing_slot_count": missing_count,
-                        "next_due": (
-                            timezone.localtime(stats["next_due"]).isoformat()
-                            if stats["next_due"] is not None
-                            else None
-                        ),
+                        "next_due": next_due_display,
                         "last_reading_timestamp": (
                             timezone.localtime(last_reading_ts).isoformat()
                             if last_reading_ts is not None

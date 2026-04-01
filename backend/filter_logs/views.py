@@ -17,6 +17,7 @@ from core.log_slot_utils import (
     compute_missing_slots_for_day,
     get_slot_day_bounds,
     get_slot_timezone,
+    filter_missing_slots_before_earliest_downtime,
 )
 from reports.utils import log_limit_change, log_audit_event, delete_report_entry, save_missing_slots_snapshot
 from reports.services import create_utility_report_for_log
@@ -346,19 +347,53 @@ class FilterLogViewSet(viewsets.ModelViewSet):
             if prev is None or ts > prev:
                 daily_last_reading[(day_key, key)] = ts
 
-        suppressed_by_day = defaultdict(set)
-        suppressed_qs = range_qs.filter(
+        downtime_timestamps_by_day = defaultdict(lambda: defaultdict(list))
+        downtime_qs = range_qs.filter(
             activity_type__in=["maintenance", "shutdown"],
-            status__in=["draft", "pending", "pending_secondary_approval"],
-        )
-        for row in suppressed_qs.values("equipment_id", "filter_no", "timestamp"):
+        ).exclude(status="rejected")
+        for row in downtime_qs.values("equipment_id", "filter_no", "timestamp"):
             equipment_id = (row.get("equipment_id") or "").strip()
             filter_no = (row.get("filter_no") or "").strip()
             ts = row.get("timestamp")
             if not equipment_id or ts is None:
                 continue
+            key = bucket_key(equipment_id, filter_no)
             day_key = timezone.localtime(ts, slot_tz).date().isoformat()
-            suppressed_by_day[day_key].add(bucket_key(equipment_id, filter_no))
+            downtime_timestamps_by_day[day_key][key].append(ts)
+
+        open_downtime_timestamps_by_day = defaultdict(lambda: defaultdict(list))
+        open_dt_qs = range_qs.filter(
+            activity_type__in=["maintenance", "shutdown"],
+            status__in=["draft", "pending", "pending_secondary_approval"],
+        )
+        for row in open_dt_qs.values("equipment_id", "filter_no", "timestamp"):
+            equipment_id = (row.get("equipment_id") or "").strip()
+            filter_no = (row.get("filter_no") or "").strip()
+            ts = row.get("timestamp")
+            if not equipment_id or ts is None:
+                continue
+            key = bucket_key(equipment_id, filter_no)
+            day_key = timezone.localtime(ts, slot_tz).date().isoformat()
+            open_downtime_timestamps_by_day[day_key][key].append(ts)
+
+        open_maintenance_suppress_from = {}
+        open_ms_qs = FilterLog.objects.filter(
+            activity_type__in=["maintenance", "shutdown"],
+            status__in=["draft", "pending", "pending_secondary_approval"],
+        )
+        if equipment_id_filter:
+            open_ms_qs = open_ms_qs.filter(equipment_id=equipment_id_filter)
+        for row in open_ms_qs.values("equipment_id", "filter_no", "timestamp"):
+            equipment_id = (row.get("equipment_id") or "").strip()
+            filter_no = (row.get("filter_no") or "").strip()
+            ts = row.get("timestamp")
+            if not equipment_id or ts is None:
+                continue
+            key = bucket_key(equipment_id, filter_no)
+            start_d = timezone.localtime(ts, slot_tz).date()
+            prev = open_maintenance_suppress_from.get(key)
+            if prev is None or start_d < prev:
+                open_maintenance_suppress_from[key] = start_d
 
         bucket_keys = set(bucket_meta.keys())
         historical_rows = (
@@ -428,7 +463,6 @@ class FilterLogViewSet(viewsets.ModelViewSet):
             total_expected_slots = 0
             total_present_slots = 0
             total_missing_slots = 0
-            suppressed_for_day = suppressed_by_day.get(day_key, set())
 
             for key in sorted(bucket_keys):
                 meta = bucket_meta.get(key) or {}
@@ -436,12 +470,16 @@ class FilterLogViewSet(viewsets.ModelViewSet):
                 filter_no = (meta.get("filter_no") or "").strip()
                 if not equipment_id:
                     continue
-                if not equipment_id_filter and key in suppressed_for_day:
+                suppress_from = open_maintenance_suppress_from.get(key)
+                if suppress_from is not None and day_value > suppress_from:
                     continue
                 interval, shift_hours = get_interval_for_equipment(equipment_id, "filter")
+                op_ts = timestamps_by_day_bucket.get(day_key, {}).get(key, []) or []
+                down_ts = downtime_timestamps_by_day.get(day_key, {}).get(key, []) or []
+                merged_ts = op_ts + down_ts
                 stats = compute_missing_slots_for_day(
                     day_value=day_value,
-                    timestamps=timestamps_by_day_bucket.get(day_key, {}).get(key, []),
+                    timestamps=merged_ts,
                     interval=interval,
                     shift_duration_hours=shift_hours,
                     equipment_identifier=equipment_id,
@@ -449,7 +487,17 @@ class FilterLogViewSet(viewsets.ModelViewSet):
                 )
                 expected_count = stats["expected_slot_count"]
                 present_count = stats["present_slot_count"]
-                missing_count = stats["missing_slot_count"]
+                open_down_ts = open_downtime_timestamps_by_day.get(day_key, {}).get(key, []) or []
+                if open_down_ts:
+                    missing_for_display = filter_missing_slots_before_earliest_downtime(
+                        stats["missing_slots"],
+                        down_ts,
+                        interval,
+                        shift_hours,
+                    )
+                else:
+                    missing_for_display = stats["missing_slots"]
+                missing_count = len(missing_for_display)
                 has_activity_today = key in timestamps_by_day_bucket.get(day_key, {})
                 if missing_count == 0 and not has_activity_today:
                     continue
@@ -465,8 +513,13 @@ class FilterLogViewSet(viewsets.ModelViewSet):
                             f' - {timezone.localtime(slot["slot_end"], slot_tz).strftime("%H:%M")}'
                         ),
                     }
-                    for slot in stats["missing_slots"]
+                    for slot in missing_for_display
                 ]
+                next_due_display = None
+                if missing_for_display:
+                    next_due_display = timezone.localtime(
+                        missing_for_display[0]["slot_start"], slot_tz
+                    ).isoformat()
                 _, day_end = get_slot_day_bounds(day_value)
                 global_last = global_last_reading.get(key)
                 last_reading_ts = daily_last_reading.get((day_key, key))
@@ -484,11 +537,7 @@ class FilterLogViewSet(viewsets.ModelViewSet):
                         "expected_slot_count": expected_count,
                         "present_slot_count": present_count,
                         "missing_slot_count": missing_count,
-                        "next_due": (
-                            timezone.localtime(stats["next_due"]).isoformat()
-                            if stats["next_due"] is not None
-                            else None
-                        ),
+                        "next_due": next_due_display,
                         "last_reading_timestamp": (
                             timezone.localtime(last_reading_ts).isoformat()
                             if last_reading_ts is not None

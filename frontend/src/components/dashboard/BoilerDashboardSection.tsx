@@ -302,11 +302,6 @@ export function BoilerDashboardSection({
   );
 
   const hasProjected = summary?.projected_power_kwh != null;
-  const powerLimitSameAsProjected =
-    !!summary &&
-    hasProjected &&
-    summary.limit_power_kwh != null &&
-    Math.abs(summary.limit_power_kwh - summary.projected_power_kwh!) < 0.05;
   const hasCost =
     summary?.actual_cost_rs != null ||
     summary?.projected_cost_rs != null ||
@@ -320,10 +315,10 @@ export function BoilerDashboardSection({
         : (summary?.actual_brigade_kg ?? 0);
   const fuelProjected =
     fuelType === 'diesel'
-      ? (summary?.limit_diesel_liters ?? summary?.limit_oil_liters ?? 0)
+      ? (summary?.projected_diesel_liters ?? summary?.limit_diesel_liters ?? summary?.limit_oil_liters ?? 0)
       : fuelType === 'furnace_oil'
-        ? (summary?.limit_furnace_oil_liters ?? 0)
-        : (summary?.limit_brigade_kg ?? 0);
+        ? (summary?.projected_furnace_oil_liters ?? summary?.limit_furnace_oil_liters ?? 0)
+        : (summary?.projected_brigade_kg ?? summary?.limit_brigade_kg ?? 0);
   const fuelUnit = fuelType === 'brigade' ? 'kg' : 'L';
 
   const toolbar = (
@@ -447,21 +442,6 @@ export function BoilerDashboardSection({
                 ...(hasProjected
                   ? [{ label: 'Projected (kWh)', value: summary.projected_power_kwh!.toFixed(1) }]
                   : []),
-                ...(hasProjected && !powerLimitSameAsProjected
-                  ? [
-                      {
-                        label: 'Limit (kWh)',
-                        value: (summary.limit_power_kwh ?? 0) > 0 ? summary.limit_power_kwh!.toFixed(1) : '—',
-                      },
-                    ]
-                  : !hasProjected
-                    ? [
-                        {
-                          label: 'Limit (kWh)',
-                          value: (summary.limit_power_kwh ?? 0) > 0 ? summary.limit_power_kwh!.toFixed(1) : '—',
-                        },
-                      ]
-                    : []),
                 {
                   label: hasProjected ? 'Δ vs projected' : 'Δ vs limit',
                   value:
@@ -564,34 +544,50 @@ export function BoilerDashboardSection({
             />
 
             <DashboardInsightRow
-              subtitle="Steam (kg/hr) — actual vs projected"
+              subtitle="Steam (kg) — actual vs projected"
               accentHsl={ACCENT}
               donutCenterTitle="% of projected"
               donutCenterValue={
-                steamDonutPct(summary.actual_steam_kg_hr ?? 0, summary.limit_steam_kg_hr ?? 0) != null
-                  ? `${Math.round(steamDonutPct(summary.actual_steam_kg_hr ?? 0, summary.limit_steam_kg_hr ?? 0)!)}%`
+                steamDonutPct(
+                  summary.actual_steam_kg_hr ?? 0,
+                  summary.projected_steam_kg_hr ?? summary.limit_steam_kg_hr ?? 0,
+                ) != null
+                  ? `${Math.round(
+                      steamDonutPct(
+                        summary.actual_steam_kg_hr ?? 0,
+                        summary.projected_steam_kg_hr ?? summary.limit_steam_kg_hr ?? 0,
+                      )!,
+                    )}%`
                   : '—'
               }
-              donutFillPct={steamDonutPct(summary.actual_steam_kg_hr ?? 0, summary.limit_steam_kg_hr ?? 0)}
+              donutFillPct={steamDonutPct(
+                summary.actual_steam_kg_hr ?? 0,
+                summary.projected_steam_kg_hr ?? summary.limit_steam_kg_hr ?? 0,
+              )}
               metrics={[
-                { label: 'Actual (kg/hr)', value: (summary.actual_steam_kg_hr ?? 0).toFixed(1) },
+                { label: 'Actual (kg)', value: (summary.actual_steam_kg_hr ?? 0).toFixed(1) },
                 {
-                  label: 'Projected (kg/hr)',
+                  label: 'Projected (kg)',
                   value:
-                    (summary.limit_steam_kg_hr ?? 0) > 0 ? (summary.limit_steam_kg_hr ?? 0).toFixed(1) : '—',
+                    (summary.projected_steam_kg_hr ?? summary.limit_steam_kg_hr ?? 0) > 0
+                      ? (summary.projected_steam_kg_hr ?? summary.limit_steam_kg_hr ?? 0).toFixed(1)
+                      : '—',
                 },
                 {
                   label: 'Δ vs projected',
                   value:
-                    (summary.limit_steam_kg_hr ?? 0) !== 0
-                      ? formatDiffPct(summary.actual_steam_kg_hr ?? 0, summary.limit_steam_kg_hr ?? 0)
+                    (summary.projected_steam_kg_hr ?? summary.limit_steam_kg_hr ?? 0) !== 0
+                      ? formatDiffPct(
+                          summary.actual_steam_kg_hr ?? 0,
+                          summary.projected_steam_kg_hr ?? summary.limit_steam_kg_hr ?? 0,
+                        )
                       : '—',
                 },
               ]}
               chartData={steamChartData}
-              barLabel="Actual (kg/hr)"
-              lineLabel="Projected (kg/hr)"
-              formatTooltip={(value) => [`${Number(value).toFixed(1)} kg/hr`, '']}
+              barLabel="Actual (kg)"
+              lineLabel="Projected (kg)"
+              formatTooltip={(value) => [`${Number(value).toFixed(1)} kg`, '']}
               tableRows={steamTableRows}
               emptyMessage="No steam data for this period."
               chartType="pie-split"

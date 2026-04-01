@@ -14,6 +14,7 @@ from core.log_slot_utils import (
     get_slot_day_bounds,
     get_slot_range,
     get_slot_timezone,
+    filter_missing_slots_before_earliest_downtime,
 )
 from reports.utils import log_audit_event
 from reports.services import create_utility_report_for_log
@@ -118,18 +119,41 @@ class BriquetteLogViewSet(viewsets.ModelViewSet):
         if equipment_id_filter:
             base_qs = base_qs.filter(equipment_id=equipment_id_filter)
 
-        suppressed_equipment_ids = set(
-            BriquetteLog.objects.filter(
-                timestamp__gte=day_start,
-                timestamp__lt=day_end,
-                activity_type__in=["maintenance", "shutdown"],
-                status__in=["draft", "pending", "pending_secondary_approval"],
-            )
-            .exclude(equipment_id__isnull=True)
-            .exclude(equipment_id="")
-            .values_list("equipment_id", flat=True)
-            .distinct()
+        open_maintenance_suppress_from = {}
+        open_ms_qs = BriquetteLog.objects.filter(
+            activity_type__in=["maintenance", "shutdown"],
+            status__in=["draft", "pending", "pending_secondary_approval"],
         )
+        if equipment_id_filter:
+            open_ms_qs = open_ms_qs.filter(equipment_id=equipment_id_filter)
+        for row in open_ms_qs.values("equipment_id", "timestamp"):
+            eid = (row.get("equipment_id") or "").strip()
+            ts = row.get("timestamp")
+            if not eid or ts is None:
+                continue
+            start_d = timezone.localtime(ts, slot_tz).date()
+            prev = open_maintenance_suppress_from.get(eid)
+            if prev is None or start_d < prev:
+                open_maintenance_suppress_from[eid] = start_d
+
+        downtime_by_equipment = defaultdict(list)
+        for row in base_qs.filter(
+            activity_type__in=["maintenance", "shutdown"],
+        ).exclude(status="rejected").values("equipment_id", "timestamp"):
+            eid = (row.get("equipment_id") or "").strip()
+            ts = row.get("timestamp")
+            if eid and ts is not None:
+                downtime_by_equipment[eid].append(ts)
+
+        open_downtime_by_equipment = defaultdict(list)
+        for row in base_qs.filter(
+            activity_type__in=["maintenance", "shutdown"],
+            status__in=["draft", "pending", "pending_secondary_approval"],
+        ).values("equipment_id", "timestamp"):
+            eid = (row.get("equipment_id") or "").strip()
+            ts = row.get("timestamp")
+            if eid and ts is not None:
+                open_downtime_by_equipment[eid].append(ts)
 
         timestamps_by_equipment = defaultdict(list)
         timestamps_qs = base_qs.exclude(activity_type__in=["maintenance", "shutdown"])
@@ -155,12 +179,17 @@ class BriquetteLogViewSet(viewsets.ModelViewSet):
         total_present_slots = 0
         total_missing_slots = 0
         for equipment_id in sorted(equipment_ids):
-            if not equipment_id_filter and equipment_id in suppressed_equipment_ids:
+            eid = (equipment_id or "").strip()
+            suppress_from = open_maintenance_suppress_from.get(eid)
+            if suppress_from is not None and day > suppress_from:
                 continue
             interval, shift_hours = get_interval_for_equipment(equipment_id, "boiler")
+            op_ts = timestamps_by_equipment.get(equipment_id, []) or []
+            down_ts = downtime_by_equipment.get(eid, []) or []
+            merged_ts = op_ts + down_ts
             stats = compute_missing_slots_for_day(
                 day_value=day,
-                timestamps=timestamps_by_equipment.get(equipment_id, []),
+                timestamps=merged_ts,
                 interval=interval,
                 shift_duration_hours=shift_hours,
                 equipment_identifier=equipment_id,
@@ -168,7 +197,17 @@ class BriquetteLogViewSet(viewsets.ModelViewSet):
             )
             expected_count = stats["expected_slot_count"]
             present_count = stats["present_slot_count"]
-            missing_count = stats["missing_slot_count"]
+            open_down_ts = open_downtime_by_equipment.get(eid, []) or []
+            if open_down_ts:
+                missing_for_display = filter_missing_slots_before_earliest_downtime(
+                    stats["missing_slots"],
+                    down_ts,
+                    interval,
+                    shift_hours,
+                )
+            else:
+                missing_for_display = stats["missing_slots"]
+            missing_count = len(missing_for_display)
             total_expected_slots += expected_count
             total_present_slots += present_count
             total_missing_slots += missing_count
@@ -181,8 +220,13 @@ class BriquetteLogViewSet(viewsets.ModelViewSet):
                         f' - {timezone.localtime(slot["slot_end"], slot_tz).strftime("%H:%M")}'
                     ),
                 }
-                for slot in stats["missing_slots"]
+                for slot in missing_for_display
             ]
+            next_due_display = None
+            if missing_for_display:
+                next_due_display = timezone.localtime(
+                    missing_for_display[0]["slot_start"], slot_tz
+                ).isoformat()
             equipments_payload.append(
                 {
                     "equipment_id": equipment_id,
@@ -192,7 +236,7 @@ class BriquetteLogViewSet(viewsets.ModelViewSet):
                     "expected_slot_count": expected_count,
                     "present_slot_count": present_count,
                     "missing_slot_count": missing_count,
-                    "next_due": timezone.localtime(stats["next_due"]).isoformat() if stats["next_due"] else None,
+                    "next_due": next_due_display,
                     "last_reading_timestamp": None,
                     "missing_slots": missing_ranges,
                 }
