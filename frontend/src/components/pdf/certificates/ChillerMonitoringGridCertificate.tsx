@@ -18,10 +18,6 @@ type ChillerGridPdfData = {
   reportDate?: string;
 };
 
-/** Wording aligned with physical chiller logbook (image 3). */
-const CHEMICAL_NOTE =
-  ': Cooling tower chemicals to be added & to be mentioned below & in √ below table column:';
-
 const styles = StyleSheet.create({
   page: {
     padding: 20,
@@ -46,13 +42,6 @@ const styles = StyleSheet.create({
     textAlign: 'right',
     marginBottom: 4,
     color: '#666',
-  },
-  chemicalNote: {
-    fontSize: 6,
-    marginTop: 5,
-    marginBottom: 2,
-    textAlign: 'left',
-    color: '#111',
   },
   logbookFooterRow: {
     flexDirection: 'row',
@@ -84,41 +73,6 @@ const styles = StyleSheet.create({
     textAlign: 'left',
   },
   statusFooterItemLast: {
-    borderRight: 'none',
-  },
-  chemicalStrip: {
-    marginTop: 2,
-    marginBottom: 2,
-    fontSize: 6,
-    borderLeft: '1 solid #000',
-    borderRight: '1 solid #000',
-    borderBottom: '1 solid #000',
-  },
-  chemicalStripRow: {
-    flexDirection: 'row',
-    flexWrap: 'nowrap',
-    alignItems: 'center',
-    width: '100%',
-    marginTop: 1,
-    borderTop: '1 solid #000',
-  },
-  chemicalStripLabel: {
-    width: '25%',
-    textAlign: 'left',
-    paddingVertical: 3,
-    paddingHorizontal: 4,
-    whiteSpace: 'nowrap',
-    borderRight: '1 solid #000',
-  },
-  chemicalStripCell: {
-    width: '18.75%',
-    textAlign: 'center',
-    paddingVertical: 3,
-    paddingHorizontal: 2,
-    whiteSpace: 'nowrap',
-    borderRight: '1 solid #000',
-  },
-  chemicalStripCellLast: {
     borderRight: 'none',
   },
   table: {
@@ -192,12 +146,6 @@ const styles = StyleSheet.create({
   footer: {
     marginTop: 8,
     fontSize: 8,
-  },
-  remarksBlock: {
-    marginTop: 6,
-    padding: 5,
-    border: '1 solid #000',
-    fontSize: 7,
   },
   /** One logical section (e.g. all 5 Evaporator rows): single merged-style label column */
   sectionGroupRow: {
@@ -405,8 +353,14 @@ export function ChillerMonitoringGridCertificate({ data }: Props) {
 
   const n = grid.columns.length;
   const chunks = chunkColumnIndices(n, CHILLER_GRID_MAX_COLS_PER_PAGE);
-  const remarks = logs.map((l) => (l.remarks || '').trim()).filter(Boolean);
-  const remarksText = remarks.length ? [...new Set(remarks)].join(' | ') : '—';
+  const remarksText = grid.columns.length
+    ? grid.columns
+        .map((col) => {
+          const r = (col.log.remarks || '').toString().trim();
+          return `${col.label}: ${r || '—'}`;
+        })
+        .join(' | ')
+    : '—';
 
   const verifiedSummary =
     grid.finalSignoffRows[0]?.values
@@ -537,50 +491,6 @@ export function ChillerMonitoringGridCertificate({ data }: Props) {
     </View>
   );
 
-  const renderHandwrittenChemicalTable = () => {
-    const hc = grid.handwrittenChemicalTable;
-    const to4 = (arr: string[]) =>
-      Array.from({ length: 4 }, (_, i) => {
-        const v = arr[i];
-        return v != null && String(v).trim() !== '' ? String(v).trim() : '—';
-      });
-    const names = to4(hc.productColumns);
-    const qtys = to4(hc.qtyCells);
-
-    return (
-      <View style={styles.chemicalStrip} wrap={false}>
-        <View style={styles.chemicalStripRow} wrap={false}>
-          <Text style={styles.chemicalStripLabel} wrap={false}>
-            Cooling Tower Chemical Name —
-          </Text>
-          {names.map((v, i) => (
-            <Text
-              key={`ct-chem-${i}`}
-              style={[styles.chemicalStripCell, i === names.length - 1 && styles.chemicalStripCellLast]}
-              wrap={false}
-            >
-              {v}
-            </Text>
-          ))}
-        </View>
-        <View style={styles.chemicalStripRow} wrap={false}>
-          <Text style={styles.chemicalStripLabel} wrap={false}>
-            Qty Added / Day: —
-          </Text>
-          {qtys.map((v, i) => (
-            <Text
-              key={`ct-qty-${i}`}
-              style={[styles.chemicalStripCell, i === qtys.length - 1 && styles.chemicalStripCellLast]}
-              wrap={false}
-            >
-              {v}
-            </Text>
-          ))}
-        </View>
-      </View>
-    );
-  };
-
   const renderSignoffTable = (slots: DisplaySlot[], dataColWidth: string) => (
     <View style={[styles.table, { marginTop: 6 }]} wrap>
       <View style={styles.tableDescriptionDivider} fixed />
@@ -602,6 +512,22 @@ export function ChillerMonitoringGridCertificate({ data }: Props) {
           </Text>
         ))}
       </View>
+      {renderGridRow(
+        {
+          sectionLabel: '',
+          description: 'Remarks',
+          values: slots.map((slot) => {
+            const ci = slot.ci;
+            if (ci == null) return '';
+            return (grid.columns[ci]?.log.remarks || '').toString().trim();
+          }),
+          flags: slots.map(() => false),
+        },
+        'sg-remarks',
+        slots,
+        dataColWidth,
+        true,
+      )}
       {grid.finalSignoffRows.map((row, ri) =>
         renderGridRow(row, `sg-${ri}`, slots, dataColWidth, true),
       )}
@@ -688,15 +614,8 @@ export function ChillerMonitoringGridCertificate({ data }: Props) {
               ))}
             </View>
 
-            <Text style={styles.chemicalNote}>{CHEMICAL_NOTE}</Text>
-            {renderHandwrittenChemicalTable()}
-
             {isLastChunkPage ? (
               <>
-                <View style={styles.remarksBlock}>
-                  <Text style={{ fontWeight: 'bold', marginBottom: 4 }}>Remarks</Text>
-                  <Text wrap>{remarksText}</Text>
-                </View>
                 {renderSignoffTable(slots, dataColWidth)}
                 <View style={styles.logbookFooterRow} wrap={false}>
                   <Text style={{ flexShrink: 0 }}>Recording Frequency: Once in 4 hours.</Text>
