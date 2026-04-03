@@ -221,15 +221,6 @@ class ChemicalPreparationSerializer(serializers.ModelSerializer):
         if not str(remarks).strip():
             raise serializers.ValidationError({"remarks": ["Remarks are required."]})
 
-        batch_no_raw = attrs.get("batch_no") if "batch_no" in attrs else getattr(self.instance, "batch_no", None)
-        batch_no = (batch_no_raw or "").strip()
-        if batch_no:
-            duplicate_qs = ChemicalPreparation.objects.filter(batch_no__iexact=batch_no)
-            if self.instance is not None:
-                duplicate_qs = duplicate_qs.exclude(pk=self.instance.pk)
-            if duplicate_qs.exists():
-                raise serializers.ValidationError({"batch_no": ["Batch No must be unique."]})
-
         return super().validate(attrs)
 
     def get_has_corrections(self, obj: ChemicalPreparation) -> bool:

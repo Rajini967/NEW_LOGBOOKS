@@ -274,7 +274,7 @@ const FilterLogBookPage: React.FC = () => {
         setFilterIdToEquipmentInterval(new Map());
         return;
       }
-      const allEquipment = (await equipmentAPI.list()) as any[];
+      const allEquipment = (await equipmentAPI.listAllPages()) as any[];
       const eqIntervalMap = new Map<
         string,
         {
@@ -615,9 +615,12 @@ const FilterLogBookPage: React.FC = () => {
 
   useEffect(() => {
     if (!isDialogOpen || !!editingLogId) return;
-    if (!formData.equipmentId) return;
+    if (!formData.equipmentId && !selectedEquipmentUuid) return;
     if (entryLogInterval !== "" || entryShiftDurationHours !== "" || entryToleranceMinutes !== "") return;
-    const timingMeta = filterIdToEquipmentInterval.get(formData.equipmentId);
+    const timingMeta =
+      (selectedEquipmentUuid
+        ? filterIdToEquipmentInterval.get(selectedEquipmentUuid)
+        : undefined) ?? filterIdToEquipmentInterval.get(formData.equipmentId);
     if (!timingMeta) return;
     setEntryLogInterval((timingMeta.log_entry_interval as LogEntryIntervalType) || "");
     setEntryShiftDurationHours(timingMeta.shift_duration_hours ?? "");
@@ -626,6 +629,7 @@ const FilterLogBookPage: React.FC = () => {
     isDialogOpen,
     editingLogId,
     formData.equipmentId,
+    selectedEquipmentUuid,
     filterIdToEquipmentInterval,
     entryLogInterval,
     entryShiftDurationHours,
@@ -766,12 +770,20 @@ const FilterLogBookPage: React.FC = () => {
     if (filters.equipmentId) {
       const fid = filters.equipmentId.toLowerCase();
       result = result.filter((log) => {
-        if (!log.equipmentId) return false;
-        if (log.equipmentId.toString().toLowerCase() === fid) return true;
-        const fromStored = filterIdToEquipmentInterval.get(log.equipmentId)?.equipment_id;
-        if (fromStored && fromStored.toLowerCase() === fid) return true;
-        const fromFilterNo = filterIdToEquipmentInterval.get(log.filterNo)?.equipment_id;
-        if (fromFilterNo && fromFilterNo.toLowerCase() === fid) return true;
+        const filterNo = (log.filterNo || "").toString().trim().toLowerCase();
+        if (filterNo && filterNo === fid) return true;
+        const eqRaw = log.equipmentId ? log.equipmentId.toString().trim() : "";
+        if (eqRaw && eqRaw.toLowerCase() === fid) return true;
+        if (
+          eqRaw &&
+          filterAssignmentsLookup.some(
+            (a) =>
+              a.equipment === eqRaw &&
+              (a.filter_id || "").toString().trim().toLowerCase() === fid,
+          )
+        ) {
+          return true;
+        }
         return false;
       });
     }

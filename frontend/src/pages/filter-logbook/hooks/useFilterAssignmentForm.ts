@@ -49,7 +49,12 @@ export function useFilterAssignmentForm<T extends AssignmentFormFields>(options:
         filterSize: formatFilterSize(active) || prev.filterSize,
         tagInfo: active.tag_info ?? prev.tagInfo,
       }));
-      const timingMeta = filterIdToEquipmentInterval.get(active.filter_id || "");
+      // Prefer equipment UUID: filter_id is omitted from the map when the same filter is on multiple assets.
+      const equipKey = (active.equipment || "").trim();
+      const filterKey = (active.filter_id || "").trim();
+      const timingMeta =
+        (equipKey ? filterIdToEquipmentInterval.get(equipKey) : undefined) ??
+        (filterKey ? filterIdToEquipmentInterval.get(filterKey) : undefined);
       if (timingMeta) {
         setEntryLogInterval((timingMeta.log_entry_interval as LogEntryIntervalType) || "");
         setEntryShiftDurationHours(timingMeta.shift_duration_hours ?? "");

@@ -89,6 +89,36 @@ interface ChemicalPrepLog {
 }
 type LogEntryIntervalType = "hourly" | "shift" | "daily";
 
+type EquipmentIntervalMeta = {
+  id: string;
+  equipment_number: string;
+  name: string;
+  log_entry_interval?: string | null;
+  shift_duration_hours?: number | null;
+  tolerance_minutes?: number | null;
+};
+
+/**
+ * Match chemical assignment equipment label to Equipment Master (B-007 - Boiler vs B-007 – Boiler).
+ */
+function findEquipmentMetaByAssignmentLabel<T extends EquipmentIntervalMeta>(
+  list: T[],
+  label: string,
+): T | undefined {
+  const trimmed = (label || "").trim();
+  if (!trimmed) return undefined;
+  const normalize = (s: string) =>
+    s.replace(/\u2013|\u2014/g, "-").replace(/\s+/g, " ").trim().toLowerCase();
+  const nt = normalize(trimmed);
+  return list.find((e) => {
+    const num = (e.equipment_number || "").trim();
+    const nam = (e.name || "").trim();
+    if (trimmed === num || trimmed === nam) return true;
+    if (num && nam) return nt === normalize(`${num} - ${nam}`);
+    return false;
+  });
+}
+
 const CREATOR_ONLY_REJECTED_EDIT_MESSAGE = "Only the original creator can edit/correct a rejected entry.";
 
 const getReadableApiError = (error: any, fallback: string): string => {
@@ -182,16 +212,7 @@ const ChemicalLogBookPage: React.FC = () => {
 
   const [chemicalNames, setChemicalNames] = useState<string[]>([]);
   const [equipmentOptions, setEquipmentOptions] = useState<{ id: string; name: string }[]>([]);
-  const [equipmentWithIntervals, setEquipmentWithIntervals] = useState<
-    {
-      id: string;
-      equipment_number: string;
-      name: string;
-      log_entry_interval?: string | null;
-      shift_duration_hours?: number | null;
-      tolerance_minutes?: number | null;
-    }[]
-  >([]);
+  const [equipmentWithIntervals, setEquipmentWithIntervals] = useState<EquipmentIntervalMeta[]>([]);
   const [entryLogInterval, setEntryLogInterval] = useState<"" | LogEntryIntervalType>("");
   const [entryShiftDurationHours, setEntryShiftDurationHours] = useState<number | "">("");
   const [entryToleranceMinutes, setEntryToleranceMinutes] = useState<number | "">("");
@@ -374,11 +395,9 @@ const ChemicalLogBookPage: React.FC = () => {
     if (!isDialogOpen || !!editingLogId) return;
     if (!formData.equipmentName) return;
     if (entryLogInterval !== "" || entryShiftDurationHours !== "" || entryToleranceMinutes !== "") return;
-    const selectedEquipmentMeta = equipmentWithIntervals.find(
-      (e) =>
-        e.name === formData.equipmentName ||
-        e.equipment_number === formData.equipmentName ||
-        `${e.equipment_number} – ${e.name}` === formData.equipmentName,
+    const selectedEquipmentMeta = findEquipmentMetaByAssignmentLabel(
+      equipmentWithIntervals,
+      formData.equipmentName,
     );
     if (!selectedEquipmentMeta) return;
     setEntryLogInterval((selectedEquipmentMeta.log_entry_interval as LogEntryIntervalType) || "");
@@ -462,29 +481,51 @@ const ChemicalLogBookPage: React.FC = () => {
     return map;
   }, [assignments]);
 
-  // Load chemical equipment with intervals for missed-reading resolution
+  // Load equipment with intervals from all logbook-related categories (assignments may tag boilers, chillers, etc.)
   useEffect(() => {
     (async () => {
       try {
         const categories = (await equipmentCategoryAPI.list()) as { id: string; name: string }[];
-        const chemicalCat = categories?.find((c) => {
-          const n = (c.name || "").toLowerCase().trim();
-          return n === "chemical" || n === "chemicals";
-        });
-        if (chemicalCat) {
-          const list = (await equipmentAPI.list({ category: chemicalCat.id })) as any[];
-          const withIntervals = (list || []).map((e: any) => ({
-            id: e.id,
-            equipment_number: e.equipment_number || "",
-            name: e.name || "",
-            log_entry_interval: e.log_entry_interval ?? null,
-            shift_duration_hours: e.shift_duration_hours ?? null,
-            tolerance_minutes: e.tolerance_minutes ?? null,
-          }));
-          setEquipmentWithIntervals(withIntervals);
-        } else {
-          setEquipmentWithIntervals([]);
+        const normToId = new Map<string, string>();
+        for (const c of categories) {
+          normToId.set((c.name || "").toLowerCase().trim(), c.id);
         }
+        const categoryKeys = [
+          "chemical",
+          "chemicals",
+          "boiler",
+          "boilers",
+          "chiller",
+          "chillers",
+          "compressor",
+          "compressors",
+          "filter",
+          "filters",
+        ];
+        const categoryIds = [
+          ...new Set(categoryKeys.map((k) => normToId.get(k)).filter(Boolean)),
+        ] as string[];
+        const lists = await Promise.all(
+          categoryIds.map((id) => equipmentAPI.list({ category: id }) as Promise<any[]>),
+        );
+        const seen = new Set<string>();
+        const merged: EquipmentIntervalMeta[] = [];
+        for (const list of lists) {
+          for (const e of list || []) {
+            if (!e?.id || seen.has(e.id)) continue;
+            if (e?.is_active === false || e?.status !== "approved") continue;
+            seen.add(e.id);
+            merged.push({
+              id: e.id,
+              equipment_number: e.equipment_number || "",
+              name: e.name || "",
+              log_entry_interval: e.log_entry_interval ?? null,
+              shift_duration_hours: e.shift_duration_hours ?? null,
+              tolerance_minutes: e.tolerance_minutes ?? null,
+            });
+          }
+        }
+        setEquipmentWithIntervals(merged);
       } catch {
         setEquipmentWithIntervals([]);
       }
@@ -776,11 +817,9 @@ const ChemicalLogBookPage: React.FC = () => {
         toast.error("Please select Equipment Name.");
         return;
       }
-      const selectedEquipmentMeta = equipmentWithIntervals.find(
-        (e) =>
-          e.name === formData.equipmentName ||
-          e.equipment_number === formData.equipmentName ||
-          `${e.equipment_number} – ${e.name}` === formData.equipmentName,
+      const selectedEquipmentMeta = findEquipmentMetaByAssignmentLabel(
+        equipmentWithIntervals,
+        formData.equipmentName,
       );
       if (selectedEquipmentMeta?.id) {
         if (
@@ -1471,11 +1510,9 @@ const ChemicalLogBookPage: React.FC = () => {
                             optionsForEquipment.length > 0
                               ? optionsForEquipment[0].category
                               : "major";
-                          const selectedEquipmentMeta = equipmentWithIntervals.find(
-                            (e) =>
-                              e.name === nextEquipmentName ||
-                              e.equipment_number === nextEquipmentName ||
-                              `${e.equipment_number} – ${e.name}` === nextEquipmentName,
+                          const selectedEquipmentMeta = findEquipmentMetaByAssignmentLabel(
+                            equipmentWithIntervals,
+                            nextEquipmentName,
                           );
                           setFormData({
                             ...formData,

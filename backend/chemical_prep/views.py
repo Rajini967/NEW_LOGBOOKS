@@ -367,9 +367,10 @@ class ChemicalAssignmentViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        if action_type in ("approve", "reject") and not remarks:
+            raise ValidationError({"remarks": ["Comment is required when approving or rejecting."]})
+
         if action_type == "reject":
-            if not remarks:
-                raise ValidationError({"remarks": ["Comment is required when rejecting."]})
             if assignment.status not in ("pending",):
                 return Response(
                     {"error": "Only pending assignments can be rejected."},
@@ -393,7 +394,7 @@ class ChemicalAssignmentViewSet(viewsets.ModelViewSet):
             assignment.approved_at = timezone.now()
             assignment.rejected_by = None
             assignment.rejected_at = None
-            assignment.rejection_comment = None
+            assignment.rejection_comment = remarks
             assignment.save(update_fields=["status", "approved_by", "approved_at", "rejected_by", "rejected_at", "rejection_comment"])
         else:
             return Response(

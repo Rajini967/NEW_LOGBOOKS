@@ -64,6 +64,7 @@ interface AssignmentRow {
   created_by_name?: string | null;
   approved_by_name?: string | null;
   rejected_by_name?: string | null;
+  rejection_comment?: string | null;
 }
 
 interface EquipmentOption {
@@ -83,8 +84,10 @@ const ChemicalAssignmentPage: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [approveConfirmOpen, setApproveConfirmOpen] = useState(false);
   const [rejectConfirmOpen, setRejectConfirmOpen] = useState(false);
+  const [approveCommentOpen, setApproveCommentOpen] = useState(false);
   const [rejectCommentOpen, setRejectCommentOpen] = useState(false);
   const [selectedAssignmentId, setSelectedAssignmentId] = useState<string | null>(null);
+  const [approveComment, setApproveComment] = useState("");
   const [rejectComment, setRejectComment] = useState("");
 
   const [form, setForm] = useState<{
@@ -378,17 +381,28 @@ const ChemicalAssignmentPage: React.FC = () => {
     setRejectConfirmOpen(true);
   };
 
-  const handleApproveConfirm = async () => {
-    if (!selectedAssignmentId) return;
+  const handleApproveConfirmToComment = () => {
     setApproveConfirmOpen(false);
+    setApproveCommentOpen(true);
+  };
+
+  const handleApproveSubmit = async () => {
+    if (!selectedAssignmentId) return;
+    const comment = approveComment.trim();
+    if (!comment) {
+      toast.error("Comment is required for approval.");
+      return;
+    }
     try {
-      await chemicalAssignmentAPI.approve(selectedAssignmentId, "approve");
+      await chemicalAssignmentAPI.approve(selectedAssignmentId, "approve", comment);
+      setApproveCommentOpen(false);
+      setApproveComment("");
+      setSelectedAssignmentId(null);
       toast.success("Assignment approved.");
       await loadAssignments();
     } catch (error: any) {
       toast.error(error?.response?.data?.error || error?.message || "Failed to approve assignment");
     }
-    setSelectedAssignmentId(null);
   };
 
   const handleRejectConfirmToComment = () => {
@@ -626,7 +640,7 @@ const ChemicalAssignmentPage: React.FC = () => {
               </Badge>
             </div>
             <div className="min-w-full overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full min-w-[1100px] text-sm">
                 <thead className="bg-muted/50">
                   <tr>
                     <th className="px-4 py-2 text-left font-medium text-muted-foreground">
@@ -647,6 +661,9 @@ const ChemicalAssignmentPage: React.FC = () => {
                     <th className="px-4 py-2 text-left font-medium text-muted-foreground">
                       Status
                     </th>
+                    <th className="px-4 py-2 text-left font-medium text-muted-foreground">
+                      Comment
+                    </th>
                     <th className="px-4 py-2 text-right font-medium text-muted-foreground">
                       Actions
                     </th>
@@ -656,7 +673,7 @@ const ChemicalAssignmentPage: React.FC = () => {
                   {isLoading ? (
                     <tr>
                       <td
-                        colSpan={7}
+                        colSpan={8}
                         className="px-4 py-6 text-center text-muted-foreground"
                       >
                         Loading assignments...
@@ -665,7 +682,7 @@ const ChemicalAssignmentPage: React.FC = () => {
                   ) : visibleRows.length === 0 ? (
                     <tr>
                       <td
-                        colSpan={7}
+                        colSpan={8}
                         className="px-4 py-6 text-center text-muted-foreground"
                       >
                         No assignments configured yet.
@@ -742,9 +759,14 @@ const ChemicalAssignmentPage: React.FC = () => {
                               : "Pending"}
                           </Badge>
                         </td>
+                        <td className="px-4 py-2 max-w-[280px]">
+                          <span className="line-clamp-2 break-words">
+                            {row.rejection_comment?.trim() || "-"}
+                          </span>
+                        </td>
                         <td className="px-4 py-2 text-right">
                           <div className="flex items-center justify-end gap-1">
-                            {row.status === "pending" && isAdmin && (
+                            {isAdmin && (
                               <>
                                 <Button
                                   size="icon"
@@ -752,6 +774,7 @@ const ChemicalAssignmentPage: React.FC = () => {
                                   className="h-8 w-8 text-green-600 hover:text-green-700 hover:bg-green-500/10"
                                   onClick={() => handleApproveClick(row)}
                                   title="Approve"
+                                  disabled={row.status !== "pending"}
                                 >
                                   <CheckCircle className="w-4 h-4" />
                                 </Button>
@@ -761,6 +784,7 @@ const ChemicalAssignmentPage: React.FC = () => {
                                   className="h-8 w-8 text-destructive hover:bg-destructive/10"
                                   onClick={() => handleRejectClick(row)}
                                   title="Reject"
+                                  disabled={row.status !== "pending"}
                                 >
                                   <XCircle className="w-4 h-4" />
                                 </Button>
@@ -777,7 +801,7 @@ const ChemicalAssignmentPage: React.FC = () => {
                                 <Trash2 className="w-4 h-4" />
                               </Button>
                             )}
-                            {!(row.status === "pending" && isAdmin) && !(user?.role === "super_admin") && (
+                            {!isAdmin && !(user?.role === "super_admin") && (
                               <span className="text-xs text-muted-foreground">—</span>
                             )}
                           </div>
@@ -806,13 +830,65 @@ const ChemicalAssignmentPage: React.FC = () => {
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               className="bg-green-600 hover:bg-green-700 text-white"
-              onClick={() => void handleApproveConfirm()}
+              onClick={handleApproveConfirmToComment}
             >
               Approve
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Approve comment (required) */}
+      <Dialog
+        open={approveCommentOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            setApproveCommentOpen(false);
+            setApproveComment("");
+            setSelectedAssignmentId(null);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Approval Comment (Required)</DialogTitle>
+            <DialogDescription>
+              Please enter a comment for this approval.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="approve-comment-assignment">Comment <span className="text-destructive">*</span></Label>
+              <Textarea
+                id="approve-comment-assignment"
+                value={approveComment}
+                onChange={(e) => setApproveComment(e.target.value)}
+                placeholder="Enter approval comment..."
+                rows={3}
+                className="resize-none"
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setApproveCommentOpen(false);
+                  setApproveComment("");
+                  setSelectedAssignmentId(null);
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                className="bg-green-600 hover:bg-green-700 text-white"
+                onClick={() => void handleApproveSubmit()}
+              >
+                Approve
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Reject confirmation */}
       <AlertDialog open={rejectConfirmOpen} onOpenChange={setRejectConfirmOpen}>
