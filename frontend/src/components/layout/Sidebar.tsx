@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
+import { normalizeUserRole } from '@/lib/auth/role';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -51,6 +52,7 @@ const roleColors: Record<string, 'default' | 'accent' | 'warning' | 'success'> =
 
 export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const { user, logout } = useAuth();
+  const role = user ? normalizeUserRole(user.role) : undefined;
   const location = useLocation();
   const [hvacExpanded, setHvacExpanded] = useState(false);
   const [eLogBookExpanded, setELogBookExpanded] = useState(false);
@@ -83,7 +85,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const navItems = [
     { path: '/dashboard', icon: LayoutDashboard, label: 'Dashboard', roles: ['operator', 'supervisor', 'manager', 'admin', 'super_admin'] },
     { path: '/logbook-builder', icon: Hammer, label: 'Logbook Builder', roles: ['super_admin', 'admin'] },
-    { path: '/e-log-book', icon: ClipboardList, label: 'E Log Book', roles: ['operator', 'supervisor', 'super_admin', 'admin'] },
+    { path: '/e-log-book', icon: ClipboardList, label: 'E Log Book', roles: ['operator', 'supervisor', 'manager', 'super_admin', 'admin'] },
     { path: '/instruments', icon: Wrench, label: 'Instruments', roles: ['supervisor', 'super_admin', 'admin'] },
     { path: '/reports', icon: FileText, label: 'Reports', roles: ['supervisor', 'manager', 'super_admin', 'admin'] },
     { path: '/trends', icon: TrendingUp, label: 'Trends', roles: ['operator', 'supervisor', 'manager', 'admin', 'super_admin'] },
@@ -92,31 +94,31 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   ];
 
   const hvacTestItems = [
-    { path: '/hvac-validation/air-velocity-test', icon: Activity, label: 'Air Velocity Test', roles: ['operator', 'supervisor', 'super_admin', 'admin'] },
-    { path: '/hvac-validation/filter-integrity-test', icon: Filter, label: 'Filter Integrity Test', roles: ['operator', 'supervisor', 'super_admin', 'admin'] },
-    { path: '/hvac-validation/recovery-test', icon: Clock, label: 'Recovery Test', roles: ['operator', 'supervisor', 'super_admin', 'admin'] },
-    { path: '/hvac-validation/differential-pressure-test', icon: Gauge, label: 'Differential Pressure Test', roles: ['operator', 'supervisor', 'super_admin', 'admin'] },
-    { path: '/hvac-validation/nvpc-test', icon: Activity, label: 'NVPC Test', roles: ['operator', 'supervisor', 'super_admin', 'admin'] },
+    { path: '/hvac-validation/air-velocity-test', icon: Activity, label: 'Air Velocity Test', roles: ['operator', 'supervisor', 'manager', 'super_admin', 'admin'] },
+    { path: '/hvac-validation/filter-integrity-test', icon: Filter, label: 'Filter Integrity Test', roles: ['operator', 'supervisor', 'manager', 'super_admin', 'admin'] },
+    { path: '/hvac-validation/recovery-test', icon: Clock, label: 'Recovery Test', roles: ['operator', 'supervisor', 'manager', 'super_admin', 'admin'] },
+    { path: '/hvac-validation/differential-pressure-test', icon: Gauge, label: 'Differential Pressure Test', roles: ['operator', 'supervisor', 'manager', 'super_admin', 'admin'] },
+    { path: '/hvac-validation/nvpc-test', icon: Activity, label: 'NVPC Test', roles: ['operator', 'supervisor', 'manager', 'super_admin', 'admin'] },
   ];
 
   const eLogBookItems = [
-    { id: 'chiller', path: '/e-log-book/chiller', icon: Thermometer, label: 'Chiller', roles: ['operator', 'supervisor', 'super_admin', 'admin'] },
-    { id: 'boiler', path: '/e-log-book/boiler', icon: Gauge, label: 'Boiler', roles: ['operator', 'supervisor', 'super_admin', 'admin'] },
-    { id: 'chemical', path: '/e-log-book/chemical', icon: Droplets, label: 'Chemical', roles: ['operator', 'supervisor', 'super_admin', 'admin'] },
-    { id: 'filter', path: '/e-log-book/filter', icon: Filter, label: 'Filter', roles: ['operator', 'supervisor', 'super_admin', 'admin'] },
-    { id: 'consumption', path: '/e-log-book/consumption', icon: BarChart3, label: 'Consumption', roles: ['operator', 'supervisor', 'super_admin', 'admin'] },
+    { id: 'chiller', path: '/e-log-book/chiller', icon: Thermometer, label: 'Chiller', roles: ['operator', 'supervisor', 'manager', 'super_admin', 'admin'] },
+    { id: 'boiler', path: '/e-log-book/boiler', icon: Gauge, label: 'Boiler', roles: ['operator', 'supervisor', 'manager', 'super_admin', 'admin'] },
+    { id: 'chemical', path: '/e-log-book/chemical', icon: Droplets, label: 'Chemical', roles: ['operator', 'supervisor', 'manager', 'super_admin', 'admin'] },
+    { id: 'filter', path: '/e-log-book/filter', icon: Filter, label: 'Filter', roles: ['supervisor', 'manager', 'super_admin', 'admin'] },
+    { id: 'consumption', path: '/e-log-book/consumption', icon: BarChart3, label: 'Consumption', roles: ['operator', 'supervisor', 'manager', 'super_admin', 'admin'] },
   ];
 
   const filteredItems = navItems.filter(
-    (item) => user && item.roles.includes(user.role)
+    (item) => role !== undefined && item.roles.includes(role)
   );
 
   const filteredHvacTests = hvacTestItems.filter(
-    (item) => user && item.roles.includes(user.role)
+    (item) => role !== undefined && item.roles.includes(role)
   );
 
   const filteredELogBookItems = eLogBookItems.filter(
-    (item) => user && item.roles.includes(user.role)
+    (item) => role !== undefined && item.roles.includes(role)
   );
 
   const isHvacActive = location.pathname === '/hvac-validation' || location.pathname.startsWith('/hvac-validation/');
@@ -165,8 +167,8 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
               <p className="text-sm font-medium text-sidebar-foreground truncate">
                 {user.name || user.email}
               </p>
-              <Badge variant={roleColors[user.role] || 'default'} className="mt-1 text-xs">
-                {roleLabels[user.role] || user.role}
+              <Badge variant={(role && roleColors[role]) || 'default'} className="mt-1 text-xs">
+                {(role && roleLabels[role]) || role || user.role}
               </Badge>
             </div>
           </div>
@@ -176,7 +178,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       {/* Navigation */}
       <nav className="flex-1 p-2 space-y-1 overflow-y-auto scrollbar-hide">
         {/* Dashboard */}
-        {user && navItems[0].roles.includes(user.role) && (() => {
+        {role !== undefined && navItems[0].roles.includes(role) && (() => {
           const Icon = navItems[0].icon;
           return (
             <Link
@@ -195,7 +197,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         })()}
 
         {/* Logbook Builder */}
-        {user && navItems[1].roles.includes(user.role) && (() => {
+        {role !== undefined && navItems[1].roles.includes(role) && (() => {
           const Icon = navItems[1].icon;
           return (
             <Link
@@ -214,7 +216,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         })()}
 
         {/* Equipment Master Section (collapsible, like E Log Book) */}
-        {user && ['super_admin', 'admin'].includes(user.role) && (
+        {role !== undefined && ['supervisor', 'manager', 'super_admin', 'admin'].includes(role) && (
           <div className="space-y-1">
             <div className="space-y-1">
               <div className="relative">
@@ -296,7 +298,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         )}
 
         {/* E Log Book Section */}
-        {user && navItems[2].roles.includes(user.role) && (
+        {role !== undefined && navItems[2].roles.includes(role) && (
           <div className="space-y-1">
             {/* E Log Book Parent */}
             <div className="space-y-1">
@@ -338,25 +340,30 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                 <div className="ml-4 space-y-1 border-l border-sidebar-border pl-2">
                   {filteredELogBookItems.map((item) => {
                     const isFilterItem = item.id === 'filter';
-                    const isFilterAdmin =
-                      user && (user.role === 'admin' || user.role === 'super_admin');
+                    const isChemicalItem = item.id === 'chemical';
+                    const filterHubEligible =
+                      role !== undefined && role !== 'operator';
 
                     const targetPath =
                       isFilterItem && user
-                        ? isFilterAdmin
+                        ? filterHubEligible
                           ? '/e-log-book/filter'
                           : '/e-log-book/filter/entry'
-                        : item.path;
+                        : isChemicalItem && role === 'operator'
+                          ? '/e-log-book/chemical/entry'
+                          : item.path;
 
                     const isActive = isFilterItem
                       ? location.pathname.startsWith('/e-log-book/filter')
-                      : item.id === 'consumption'
-                        ? location.pathname.startsWith('/e-log-book/consumption')
-                        : location.pathname === targetPath;
+                      : isChemicalItem
+                        ? location.pathname.startsWith('/e-log-book/chemical')
+                        : item.id === 'consumption'
+                          ? location.pathname.startsWith('/e-log-book/consumption')
+                          : location.pathname === targetPath;
 
                     return (
                       <Link
-                        key={item.path}
+                        key={item.id}
                         to={targetPath}
                         className={cn(
                           'flex items-center gap-3 px-3 py-2 rounded-lg transition-all duration-200 text-sm',
@@ -377,7 +384,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         )}
 
         {/* HVAC Validation Section */}
-        {user && ['operator', 'supervisor', 'super_admin', 'admin'].includes(user.role) && (
+        {role !== undefined && ['operator', 'supervisor', 'manager', 'super_admin', 'admin'].includes(role) && (
           <div className="space-y-1">
             {/* HVAC Validation Parent */}
             <div className="space-y-1">

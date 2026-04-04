@@ -19,6 +19,7 @@ import { toast } from "@/lib/toast";
 import { chemicalPrepAPI, chemicalMasterAPI, chemicalAssignmentAPI, chemicalStockAPI, equipmentAPI, equipmentCategoryAPI } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { firstRequiredFieldError } from "@/lib/requiredFields";
+import { canPatchEquipmentLogIntervalFromLogbook } from "@/lib/auth/role";
 import { Link } from "react-router-dom";
 import { Clock, Save, Filter, X, Plus, Trash2, CheckCircle, XCircle, Edit, History, Eye, Package } from "lucide-react";
 import {
@@ -172,6 +173,8 @@ const ChemicalLogBookPage: React.FC = () => {
   const [editingLogId, setEditingLogId] = useState<string | null>(null);
   const [viewedReadingsLogIds, setViewedReadingsLogIds] = useState<Set<string>>(new Set());
   const [editedMaintenanceLogIds, setEditedMaintenanceLogIds] = useState<Set<string>>(new Set());
+  const [deleteConfirmLogId, setDeleteConfirmLogId] = useState<string | null>(null);
+  const [isDeletingLog, setIsDeletingLog] = useState(false);
 
   const [formData, setFormData] = useState({
     equipmentName: "",
@@ -392,7 +395,7 @@ const ChemicalLogBookPage: React.FC = () => {
   }, [showMissedReadingPopup, missingRangeFrom, missingRangeTo, missingRangeRefreshKey]);
 
   useEffect(() => {
-    if (!isDialogOpen || !!editingLogId) return;
+    if (!isDialogOpen) return;
     if (!formData.equipmentName) return;
     if (entryLogInterval !== "" || entryShiftDurationHours !== "" || entryToleranceMinutes !== "") return;
     const selectedEquipmentMeta = findEquipmentMetaByAssignmentLabel(
@@ -831,15 +834,17 @@ const ChemicalLogBookPage: React.FC = () => {
           toast.error("Shift duration must be between 1 and 24 hours.");
           return;
         }
-        await equipmentAPI.patch(selectedEquipmentMeta.id, {
-          log_entry_interval: entryLogInterval || null,
-          shift_duration_hours:
-            entryLogInterval === "shift" && entryShiftDurationHours !== ""
-              ? Number(entryShiftDurationHours)
-              : null,
-          tolerance_minutes:
-            entryToleranceMinutes === "" ? null : Math.max(0, Number(entryToleranceMinutes) || 0),
-        });
+        if (canPatchEquipmentLogIntervalFromLogbook(user?.role)) {
+          await equipmentAPI.patch(selectedEquipmentMeta.id, {
+            log_entry_interval: entryLogInterval || null,
+            shift_duration_hours:
+              entryLogInterval === "shift" && entryShiftDurationHours !== ""
+                ? Number(entryShiftDurationHours)
+                : null,
+            tolerance_minutes:
+              entryToleranceMinutes === "" ? null : Math.max(0, Number(entryToleranceMinutes) || 0),
+          });
+        }
       }
       if (!formData.chemicalName) {
         toast.error("Please select Chemical Name.");
@@ -1201,10 +1206,7 @@ const ChemicalLogBookPage: React.FC = () => {
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm("Are you sure you want to delete this entry? This action cannot be undone.")) {
-      return;
-    }
+  const executeDeleteLog = async (id: string) => {
     try {
       await chemicalPrepAPI.delete(id);
       toast.success("Chemical entry deleted");
@@ -2250,7 +2252,7 @@ const ChemicalLogBookPage: React.FC = () => {
                             size="icon"
                             className="h-7 w-7 text-destructive hover:text-destructive hover:bg-destructive/10"
                             title="Delete entry"
-                            onClick={() => handleDelete(log.id)}
+                            onClick={() => setDeleteConfirmLogId(log.id)}
                           >
                             <Trash2 className="w-4 h-4" />
                           </Button>
@@ -2321,6 +2323,43 @@ const ChemicalLogBookPage: React.FC = () => {
           </div>
         </DialogContent>
       </Dialog>
+      {/* Delete chemical entry (centered modal) */}
+      <AlertDialog
+        open={!!deleteConfirmLogId}
+        onOpenChange={(open) => {
+          if (!open && !isDeletingLog) setDeleteConfirmLogId(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete chemical entry</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete this entry? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeletingLog}>Cancel</AlertDialogCancel>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={isDeletingLog}
+              onClick={async () => {
+                if (!deleteConfirmLogId) return;
+                setIsDeletingLog(true);
+                try {
+                  await executeDeleteLog(deleteConfirmLogId);
+                } finally {
+                  setIsDeletingLog(false);
+                  setDeleteConfirmLogId(null);
+                }
+              }}
+            >
+              {isDeletingLog ? "Deleting…" : "Delete"}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       {/* Step 1: Approve confirmation alert */}
       <AlertDialog open={approveConfirmOpen} onOpenChange={setApproveConfirmOpen}>
         <AlertDialogContent>

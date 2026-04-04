@@ -4,6 +4,7 @@ import { Header } from '@/components/layout/Header';
 import { Thermometer, Gauge, Droplets, Filter as FilterIcon, BarChart3 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
+import { normalizeUserRole } from '@/lib/auth/role';
 
 interface EquipmentModule {
   id: string;
@@ -61,8 +62,10 @@ export default function ELogBookLandingPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
 
-  const isFilterAdmin = user && (user.role === 'admin' || user.role === 'super_admin');
-  const isChemicalAdmin = user && (user.role === 'admin' || user.role === 'super_admin');
+  const showFilterHub =
+    user != null && normalizeUserRole(user.role) !== 'operator';
+  const showChemicalHub =
+    user != null && normalizeUserRole(user.role) !== 'operator';
 
   return (
     <div className="min-h-screen">
@@ -80,13 +83,13 @@ export default function ELogBookLandingPage() {
                 key={module.id}
                 onClick={() => {
                   if (module.id === 'filter') {
-                    if (isFilterAdmin) {
+                    if (showFilterHub) {
                       navigate('/e-log-book/filter');
                     } else {
                       navigate('/e-log-book/filter/entry');
                     }
                   } else if (module.id === 'chemical') {
-                    if (isChemicalAdmin) {
+                    if (showChemicalHub) {
                       navigate('/e-log-book/chemical');
                     } else {
                       navigate('/e-log-book/chemical/entry');

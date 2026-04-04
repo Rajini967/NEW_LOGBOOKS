@@ -33,8 +33,6 @@ import {
   Zap,
   Droplets,
   Fuel,
-  Wind,
-  ClipboardCheck,
 } from 'lucide-react';
 import {
   Bar,
@@ -88,9 +86,7 @@ export default function DashboardPage() {
   const { user } = useAuth();
   const { missedByLogType, loading: missedReadingsLoading } = useMissedReadingsByType();
 
-  const isOperator = user?.role === 'operator';
-  const isManagerRole = user?.role === 'manager';
-  const { data: dashboardSummary } = useDashboardSummaryQuery(!isManagerRole);
+  const { data: dashboardSummary } = useDashboardSummaryQuery(true);
   const { data: overdueSummary } = useOverdueSummaryQuery(true);
   const [activeTab, setActiveTab] = useState('overview');
   const [showOverduePopup, setShowOverduePopup] = useState(false);
@@ -344,11 +340,9 @@ export default function DashboardPage() {
               </div>
             </DashboardSectionShell>
 
-            {!isManagerRole && (
-              <div className="grid lg:grid-cols-1 gap-3">
-                <ScheduledReadingsStatus missedByLogType={missedByLogType} loading={missedReadingsLoading} />
-              </div>
-            )}
+            <div className="grid lg:grid-cols-1 gap-3">
+              <ScheduledReadingsStatus missedByLogType={missedByLogType} loading={missedReadingsLoading} />
+            </div>
           </TabsContent>
           <TabsContent value="energy" className="space-y-3">
             <div className="grid grid-cols-1 gap-3 items-start">
@@ -373,29 +367,6 @@ export default function DashboardPage() {
             />
           </TabsContent>
         </Tabs>
-
-        {isOperator && (
-          <DashboardSectionShell title="Quick actions" accentHsl="185,70%,40%">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              {[
-                { label: 'New E Log Book', path: '/e-log-book', icon: Thermometer },
-                { label: 'HVAC Validation', path: '/hvac-validation', icon: Wind },
-                { label: 'View Reports', path: '/reports', icon: ClipboardCheck },
-              ].map((action) => (
-                <a
-                  key={action.label}
-                  href={action.path}
-                  className="flex flex-col items-center gap-2 p-4 rounded-lg border border-border hover:bg-muted transition-colors group"
-                >
-                  <div className="w-12 h-12 rounded-lg bg-accent/10 flex items-center justify-center group-hover:bg-accent/20 transition-colors">
-                    <action.icon className="w-6 h-6 text-accent" />
-                  </div>
-                  <span className="text-sm font-medium text-foreground">{action.label}</span>
-                </a>
-              ))}
-            </div>
-          </DashboardSectionShell>
-        )}
       </div>
 
       <AlertDialog open={showOverduePopup} onOpenChange={setShowOverduePopup}>

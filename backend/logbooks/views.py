@@ -10,7 +10,7 @@ from .serializers import (
     LogbookRoleAssignmentSerializer,
     LogbookEntrySerializer
 )
-from accounts.permissions import IsAdminOrSuperAdmin
+from accounts.permissions import IsAdminOrSuperAdmin, IsSuperAdmin
 from accounts.models import UserRole
 
 
@@ -95,7 +95,12 @@ class LogbookEntryViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     serializer_class = LogbookEntrySerializer
     queryset = LogbookEntry.objects.all()
-    
+
+    def get_permissions(self):
+        if self.action == "destroy":
+            return [IsAuthenticated(), IsSuperAdmin()]
+        return [IsAuthenticated()]
+
     def get_queryset(self):
         """Filter entries based on user's role and assigned logbooks."""
         user = self.request.user

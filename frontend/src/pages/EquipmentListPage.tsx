@@ -43,6 +43,7 @@ import {
 import { toast } from "@/lib/toast";
 import { departmentAPI, equipmentAPI, equipmentCategoryAPI } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
+import { normalizeUserRole } from "@/lib/auth/role";
 
 interface DepartmentOption {
   id: string;
@@ -120,9 +121,19 @@ export default function EquipmentListPage() {
     action: "approve" | "reject";
   } | null>(null);
   const [actionCommentText, setActionCommentText] = useState("");
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
-  const canApprove =
-    user?.role === "super_admin" || user?.role === "admin";
+  const role = user ? normalizeUserRole(user.role) : undefined;
+  const canManageEquipment =
+    role === "supervisor" ||
+    role === "manager" ||
+    role === "admin" ||
+    role === "super_admin";
+  /** Approve / reject — Manager, Admin, Super Admin only (not Supervisor). */
+  const canApproveEquipment =
+    role === "manager" || role === "admin" || role === "super_admin";
+  const canDeleteEquipment = role === "admin" || role === "super_admin";
 
   useEffect(() => {
     const loadLookups = async () => {
@@ -215,7 +226,17 @@ export default function EquipmentListPage() {
   const extractErrorMessage = (error: any, fallback: string) => {
     const data = error?.data || error?.response?.data;
     if (data) {
-      if (typeof data === "string") return data;
+      if (typeof data === "string") {
+        const t = data.trim();
+        if (
+          t.startsWith("<!") ||
+          t.includes("<html") ||
+          t.includes("DEBUG = True")
+        ) {
+          return fallback;
+        }
+        return data;
+      }
       if (data.detail) return data.detail;
       if (data.error) return data.error;
       if (data.equipment_number) {
@@ -344,8 +365,7 @@ export default function EquipmentListPage() {
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm("Are you sure you want to delete this equipment?")) return;
+  const executeDelete = async (id: string) => {
     try {
       await equipmentAPI.delete(id);
       setEquipment((prev) => prev.filter((e) => e.id !== id));
@@ -369,9 +389,6 @@ export default function EquipmentListPage() {
         toast.error(
           `Cannot delete equipment now.\n1) Delete related records first.\n2) Related: ${details}\n3) Then delete this equipment from Equipment List.`
         );
-        if (Array.isArray(relatedRecords) && relatedRecords.length > 0) {
-          // already included in single combined toast above
-        }
         return;
       }
       toast.error(message);
@@ -383,11 +400,11 @@ export default function EquipmentListPage() {
     id: string,
     remarks: string,
   ) => {
-    if (!canApprove) {
+    if (!canApproveEquipment) {
       toast.error(
         action === "approve"
-          ? "Only Manager / Super Admin can approve equipment."
-          : "Only Manager / Super Admin can reject equipment.",
+          ? "Only Manager, Admin, or Super Admin can approve equipment."
+          : "Only Manager, Admin, or Super Admin can reject equipment.",
       );
       return;
     }
@@ -489,12 +506,14 @@ export default function EquipmentListPage() {
                 if (!open) resetForm();
               }}
             >
+              {canManageEquipment && (
               <DialogTrigger asChild>
                 <Button variant="accent">
                   <Plus className="w-4 h-4 mr-2" />
                   Add Equipment
                 </Button>
               </DialogTrigger>
+              )}
               <DialogContent className="flex flex-col w-[95vw] sm:max-w-xl md:max-w-2xl lg:max-w-3xl max-h-[85vh] overflow-hidden">
                 <DialogHeader>
                   <DialogTitle className="flex items-center gap-2">
@@ -882,7 +901,7 @@ export default function EquipmentListPage() {
                               <Edit className="w-4 h-4" />
                             </Button>
                           )}
-                          {canApprove && (
+                          {canApproveEquipment && (
                             <>
                               {(() => {
                                 const statusNorm = item.status
@@ -972,11 +991,12 @@ export default function EquipmentListPage() {
                               })()}
                             </>
                           )}
-                          {user?.role === "super_admin" && (
+                          {canDeleteEquipment && (
                             <Button
                               variant="ghost"
                               size="icon"
-                              onClick={() => handleDelete(item.id)}
+                              onClick={() => setDeleteConfirmId(item.id)}
+                              title="Delete equipment"
                             >
                               <Trash2 className="w-4 h-4" />
                             </Button>
@@ -991,6 +1011,43 @@ export default function EquipmentListPage() {
           </div>
         </div>
       </div>
+      {/* Delete confirmation (centered modal, same pattern as approve/reject) */}
+      <AlertDialog
+        open={!!deleteConfirmId}
+        onOpenChange={(open) => {
+          if (!open && !isDeleting) setDeleteConfirmId(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete equipment</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete this equipment? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={isDeleting}
+              onClick={async () => {
+                if (!deleteConfirmId) return;
+                setIsDeleting(true);
+                try {
+                  await executeDelete(deleteConfirmId);
+                } finally {
+                  setIsDeleting(false);
+                  setDeleteConfirmId(null);
+                }
+              }}
+            >
+              {isDeleting ? "Deleting…" : "Delete"}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       {/* Step 1: Confirm (matches E Log Book — then comment dialog) */}
       <AlertDialog
         open={!!confirmAction}

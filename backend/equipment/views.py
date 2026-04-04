@@ -1,3 +1,5 @@
+from collections import Counter
+
 from django.db.models import Q
 from django.db.models.deletion import ProtectedError, Collector
 from django.db import transaction
@@ -8,7 +10,11 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.exceptions import ValidationError
 
-from accounts.permissions import IsAdminOrSuperAdmin
+from accounts.permissions import (
+    CanAccessEquipmentMasterData,
+    CanApproveEquipmentMaster,
+    CanDeleteEquipmentMaster,
+)
 from reports.utils import log_audit_event, log_entity_update_changes
 
 from .models import Department, EquipmentCategory, Equipment
@@ -29,8 +35,10 @@ class DepartmentViewSet(viewsets.ModelViewSet):
     queryset = Department.objects.all().order_by("name")
 
     def get_permissions(self):
-        if self.action in ["create", "update", "partial_update", "destroy"]:
-            return [IsAuthenticated(), IsAdminOrSuperAdmin()]
+        if self.action == "destroy":
+            return [IsAuthenticated(), CanDeleteEquipmentMaster()]
+        if self.action in ["create", "update", "partial_update"]:
+            return [IsAuthenticated(), CanAccessEquipmentMasterData()]
         return [IsAuthenticated()]
 
     def perform_create(self, serializer):
@@ -65,8 +73,10 @@ class EquipmentCategoryViewSet(viewsets.ModelViewSet):
     queryset = EquipmentCategory.objects.all().order_by("name")
 
     def get_permissions(self):
-        if self.action in ["create", "update", "partial_update", "destroy"]:
-            return [IsAuthenticated(), IsAdminOrSuperAdmin()]
+        if self.action == "destroy":
+            return [IsAuthenticated(), CanDeleteEquipmentMaster()]
+        if self.action in ["create", "update", "partial_update"]:
+            return [IsAuthenticated(), CanAccessEquipmentMasterData()]
         return [IsAuthenticated()]
 
     def destroy(self, request, *args, **kwargs):
@@ -142,8 +152,12 @@ class EquipmentViewSet(viewsets.ModelViewSet):
         return qs
 
     def get_permissions(self):
-        if self.action in ["create", "update", "partial_update", "destroy", "approve", "correct"]:
-            return [IsAuthenticated(), IsAdminOrSuperAdmin()]
+        if self.action == "destroy":
+            return [IsAuthenticated(), CanDeleteEquipmentMaster()]
+        if self.action == "approve":
+            return [IsAuthenticated(), CanApproveEquipmentMaster()]
+        if self.action in ["create", "update", "partial_update", "correct"]:
+            return [IsAuthenticated(), CanAccessEquipmentMasterData()]
         return [IsAuthenticated()]
 
     def destroy(self, request, *args, **kwargs):
@@ -232,9 +246,35 @@ class EquipmentViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Hard block if deleting this equipment would cascade into any dependent rows.
+        # Hard block if deleting this equipment would affect dependent rows.
+        # Note: Collector.collect() raises ProtectedError when PROTECT FKs block deletion;
+        # that must be caught here or Django returns 500 with an HTML debug page.
         collector = Collector(using=instance._state.db)
-        collector.collect([instance])
+        try:
+            collector.collect([instance])
+        except ProtectedError as e:
+            protected = list(e.protected_objects or [])
+            related_names = {type(obj).__name__ for obj in protected}
+            counts = Counter(type(o).__name__ for o in protected)
+            related_records = [
+                {"relation": name, "count": cnt}
+                for name, cnt in sorted(counts.items())
+            ]
+            if "FilterAssignment" in related_names:
+                msg = (
+                    "This equipment cannot be deleted because it is assigned to one or more filters. "
+                    "Remove the filter assignments first (E Log Book → Filter → settings/register or schedules), then try again."
+                )
+            else:
+                msg = (
+                    "This equipment cannot be deleted because foreign-key related records exist. "
+                    "Delete those related rows first, then delete equipment."
+                )
+            return Response(
+                {"detail": msg, "related_records": related_records},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         cascade_blockers = []
         for model, objs in collector.data.items():
             if model == instance.__class__:

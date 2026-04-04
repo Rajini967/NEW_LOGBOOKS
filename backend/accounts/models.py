@@ -73,7 +73,22 @@ class User(AbstractBaseUser, PermissionsMixin):
         choices=UserRole.choices,
         default=UserRole.OPERATOR,
     )
-    
+
+    assigned_department = models.ForeignKey(
+        'equipment.Department',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='assigned_users',
+    )
+    assigned_equipment = models.ForeignKey(
+        'equipment.Equipment',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='assigned_users',
+    )
+
     # Status flags
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)

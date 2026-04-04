@@ -25,7 +25,14 @@ from .serializers import (
     ChemicalAssignmentSerializer,
     ChemicalPreparationSerializer,
 )
-from accounts.permissions import CanLogEntries, CanApproveReports, IsSuperAdminOrAdmin
+from accounts.permissions import (
+    CanApproveChemicalAssignment,
+    CanLogEntries,
+    CanApproveReports,
+    CanManageChemicalInventory,
+    IsSuperAdmin,
+    forbid_manager_rejecting_reading,
+)
 from reports.utils import log_limit_change, log_audit_event, save_missing_slots_snapshot
 from reports.approval_workflow import (
     ensure_not_operator,
@@ -224,9 +231,9 @@ class ChemicalStockViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ("update", "partial_update", "destroy"):
-            return [IsAuthenticated(), IsSuperAdminOrAdmin()]
+            return [IsAuthenticated(), CanManageChemicalInventory()]
         if self.action == "create":
-            return [IsAuthenticated(), IsSuperAdminOrAdmin()]
+            return [IsAuthenticated(), CanManageChemicalInventory()]
         return [IsAuthenticated()]
 
     def create(self, request, *args, **kwargs):
@@ -263,7 +270,7 @@ class ChemicalStockViewSet(viewsets.ModelViewSet):
             "price_per_unit": price_per_unit,
         })
 
-    @action(detail=False, methods=["post"], permission_classes=[IsAuthenticated, IsSuperAdminOrAdmin])
+    @action(detail=False, methods=["post"], permission_classes=[IsAuthenticated, CanManageChemicalInventory])
     def create_entry(self, request):
         """
         Create a new chemical stock entry from manual fields.
@@ -336,9 +343,9 @@ class ChemicalAssignmentViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ("create", "update", "partial_update", "destroy"):
-            return [IsAuthenticated(), IsSuperAdminOrAdmin()]
+            return [IsAuthenticated(), CanManageChemicalInventory()]
         if self.action == "approve":
-            return [IsAuthenticated(), IsSuperAdminOrAdmin()]
+            return [IsAuthenticated(), CanApproveChemicalAssignment()]
         return [IsAuthenticated()]
 
     def perform_create(self, serializer):
@@ -447,6 +454,8 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
             return [IsAuthenticated(), CanLogEntries()]
         elif self.action == 'approve':
             return [IsAuthenticated(), CanApproveReports()]
+        elif self.action == 'destroy':
+            return [IsAuthenticated(), IsSuperAdmin()]
         return [IsAuthenticated()]
 
     def _chemical_scope_filter(self, chemical_id=None, chemical_name=None):
@@ -1350,7 +1359,8 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
         action_type = normalize_approval_action(request.data.get('action'))
         remarks = (request.data.get('remarks') or '').strip()
         require_rejection_comment(action_type, remarks)
-        
+        forbid_manager_rejecting_reading(request, action_type)
+
         if action_type == 'approve':
             # Primary/secondary approver must be different from the operator (Log Book Done By)
             ensure_not_operator(prep.operator_id, request.user.id, "approved")

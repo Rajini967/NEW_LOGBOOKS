@@ -33,6 +33,11 @@ import {
 } from "@/lib/api";
 import { toast } from "@/lib/toast";
 import { useAuth } from "@/contexts/AuthContext";
+import {
+  canApproveChemicalAssignment,
+  canManageChemicalInventory,
+  normalizeUserRole,
+} from "@/lib/auth/role";
 
 // Map display labels from stock API to backend filter keys
 const LOCATION_DISPLAY_TO_KEY: Record<string, string> = {
@@ -78,7 +83,9 @@ interface EquipmentOption {
 const ChemicalAssignmentPage: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const isAdmin = user?.role === "admin" || user?.role === "super_admin";
+  const canManageAssignments = canManageChemicalInventory(user?.role);
+  const canApproveAssignments = canApproveChemicalAssignment(user?.role);
+  const isSuperAdmin = normalizeUserRole(user?.role) === "super_admin";
 
   const [rows, setRows] = useState<AssignmentRow[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -446,16 +453,16 @@ const ChemicalAssignmentPage: React.FC = () => {
           Back
         </button>
 
-        {!isAdmin && (
+        {!canManageAssignments && (
           <Badge variant="outline" className="text-xs">
-            View only – assignments can be edited by managers.
+            View only – supervisors and above can manage assignments.
           </Badge>
         )}
       </div>
 
       <main className="p-6">
         <div className="max-w-5xl mx-auto space-y-8">
-          {isAdmin && (
+          {canManageAssignments && (
             <section className="bg-card border border-border rounded-lg p-4 space-y-4">
               <h2 className="text-lg font-semibold">New assignment</h2>
               <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -766,7 +773,7 @@ const ChemicalAssignmentPage: React.FC = () => {
                         </td>
                         <td className="px-4 py-2 text-right">
                           <div className="flex items-center justify-end gap-1">
-                            {isAdmin && (
+                            {canApproveAssignments && (
                               <>
                                 <Button
                                   size="icon"
@@ -790,7 +797,7 @@ const ChemicalAssignmentPage: React.FC = () => {
                                 </Button>
                               </>
                             )}
-                            {user?.role === "super_admin" && (
+                            {isSuperAdmin && (
                               <Button
                                 size="icon"
                                 variant="outline"
@@ -801,7 +808,7 @@ const ChemicalAssignmentPage: React.FC = () => {
                                 <Trash2 className="w-4 h-4" />
                               </Button>
                             )}
-                            {!isAdmin && !(user?.role === "super_admin") && (
+                            {!canApproveAssignments && !isSuperAdmin && (
                               <span className="text-xs text-muted-foreground">—</span>
                             )}
                           </div>

@@ -5,7 +5,7 @@ from rest_framework.permissions import IsAuthenticated
 from reports.utils import log_audit_event
 from .models import HVACValidation
 from .serializers import HVACValidationSerializer
-from accounts.permissions import CanLogEntries, CanApproveReports
+from accounts.permissions import CanLogEntries, CanApproveReports, IsSuperAdmin, forbid_manager_rejecting_reading
 
 
 class HVACValidationViewSet(viewsets.ModelViewSet):
@@ -20,6 +20,8 @@ class HVACValidationViewSet(viewsets.ModelViewSet):
             return [IsAuthenticated(), CanLogEntries()]
         elif self.action == 'approve':
             return [IsAuthenticated(), CanApproveReports()]
+        elif self.action == 'destroy':
+            return [IsAuthenticated(), IsSuperAdmin()]
         return [IsAuthenticated()]
     
     def perform_create(self, serializer):
@@ -42,7 +44,8 @@ class HVACValidationViewSet(viewsets.ModelViewSet):
         validation = self.get_object()
         action_type = request.data.get('action', 'approve')  # 'approve' or 'reject'
         remarks = request.data.get('remarks', '')
-        
+        forbid_manager_rejecting_reading(request, action_type)
+
         if action_type == 'approve':
             validation.status = 'approved'
         elif action_type == 'reject':

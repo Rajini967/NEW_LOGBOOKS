@@ -4,15 +4,15 @@ import { Header } from "@/components/layout/Header";
 import { Tags, FilePlus2, ArrowLeft, ClipboardCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
+import { canAccessFilterHub } from "@/lib/auth/role";
 
 const FilterLogBookSettingsPage: React.FC = () => {
   const { user, isLoading } = useAuth();
   const navigate = useNavigate();
 
-  const isFilterAdmin =
-    user && (user.role === "admin" || user.role === "super_admin");
+  const canOpenSettings = user != null && canAccessFilterHub(user.role);
 
-  if (!isLoading && !isFilterAdmin) {
+  if (!isLoading && !canOpenSettings) {
     return <Navigate to="/e-log-book/filter/entry" replace />;
   }
 

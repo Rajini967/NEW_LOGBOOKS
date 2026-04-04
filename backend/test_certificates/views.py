@@ -2,7 +2,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from accounts.permissions import CanLogEntries, CanApproveReports
+from accounts.permissions import CanLogEntries, CanApproveReports, IsSuperAdmin, forbid_manager_rejecting_reading
 from reports.utils import log_audit_event
 
 from .models import (
@@ -32,6 +32,8 @@ class BaseTestCertificateViewSet(viewsets.ModelViewSet):
             return [IsAuthenticated(), CanLogEntries()]
         elif self.action == 'approve':
             return [IsAuthenticated(), CanApproveReports()]
+        elif self.action == 'destroy':
+            return [IsAuthenticated(), IsSuperAdmin()]
         return [IsAuthenticated()]
     
     def perform_create(self, serializer):
@@ -54,7 +56,8 @@ class BaseTestCertificateViewSet(viewsets.ModelViewSet):
         test = self.get_object()
         action_type = request.data.get('action', 'approve')
         remarks = request.data.get('remarks', '')
-        
+        forbid_manager_rejecting_reading(request, action_type)
+
         if action_type == 'approve':
             test.status = 'approved'
         elif action_type == 'reject':

@@ -26,8 +26,13 @@ interface Department {
   updated_at?: string;
 }
 
+const equipmentMasterMutateRoles = ["supervisor", "manager", "admin", "super_admin"];
+const equipmentMasterDeleteRoles = ["admin", "super_admin"];
+
 export default function DepartmentsPage() {
   const { user } = useAuth();
+  const canMutate = equipmentMasterMutateRoles.includes(user?.role || "");
+  const canDeleteDept = equipmentMasterDeleteRoles.includes(user?.role || "");
   const [departments, setDepartments] = useState<Department[]>([]);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
@@ -167,12 +172,14 @@ export default function DepartmentsPage() {
               if (!open) resetForm();
             }}
           >
+            {canMutate && (
             <DialogTrigger asChild>
               <Button variant="accent">
                 <Plus className="w-4 h-4 mr-2" />
                 Add Department
               </Button>
             </DialogTrigger>
+            )}
             <DialogContent className="sm:max-w-[420px]">
               <DialogHeader>
                 <DialogTitle className="flex items-center gap-2">
@@ -286,6 +293,7 @@ export default function DepartmentsPage() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1">
+                          {canMutate && (
                           <Button
                             variant="ghost"
                             size="icon"
@@ -293,7 +301,8 @@ export default function DepartmentsPage() {
                           >
                             <Edit className="w-4 h-4" />
                           </Button>
-                          {user?.role === "super_admin" && (
+                          )}
+                          {canDeleteDept && (
                             <Button
                               variant="ghost"
                               size="icon"

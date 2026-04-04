@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import { User, UserRole, SessionSettings } from '@/types';
 import { authAPI } from '@/lib/api';
+import { normalizeUserRole } from '@/lib/auth/role';
 
 interface AuthContextType {
   user: User | null;
@@ -42,7 +43,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (token) {
         try {
           const userData = await authAPI.getCurrentUser();
-          setUser({ ...userData, role: userData.role as UserRole });
+          setUser({ ...userData, role: normalizeUserRole(userData.role) });
           await loadSessionSettings();
         } catch (error) {
           // Token invalid, clear it
@@ -62,7 +63,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       
       // Fetch user details after successful login
       const userData = await authAPI.getCurrentUser();
-      setUser({ ...userData, role: userData.role as UserRole });
+      setUser({ ...userData, role: normalizeUserRole(userData.role) });
       await loadSessionSettings();
       return true;
     } catch (error: any) {
@@ -84,7 +85,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const refreshUser = useCallback(async () => {
     try {
       const userData = await authAPI.getCurrentUser();
-      setUser({ ...userData, role: userData.role as UserRole });
+      setUser({ ...userData, role: normalizeUserRole(userData.role) });
     } catch (error) {
       console.error('Failed to refresh user:', error);
     }
@@ -138,7 +139,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const switchRole = useCallback((role: UserRole) => {
     if (user) {
-      setUser({ ...user, role });
+      setUser({ ...user, role: normalizeUserRole(role) });
     }
   }, [user]);
 

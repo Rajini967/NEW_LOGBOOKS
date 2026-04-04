@@ -36,6 +36,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Plus, Thermometer, Gauge, Droplets, Zap, Package, Save, Clock, Trash2, Filter, X, CheckCircle, XCircle, Edit, History, Eye } from 'lucide-react';
 import { format, subDays } from 'date-fns';
 import { toast } from '@/lib/toast';
+import { canPatchEquipmentLogIntervalFromLogbook } from '@/lib/auth/role';
 import { logbookAPI, chemicalPrepAPI, chillerLogAPI, boilerLogAPI, compressorLogAPI, chemicalMasterAPI, equipmentAPI, equipmentCategoryAPI, filterLogAPI } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import {
@@ -333,6 +334,8 @@ export default function ELogBookPage() {
   const [rejectConfirmOpen, setRejectConfirmOpen] = useState(false);
   const [rejectCommentOpen, setRejectCommentOpen] = useState(false);
   const [rejectComment, setRejectComment] = useState('');
+  const [deleteConfirmLogId, setDeleteConfirmLogId] = useState<string | null>(null);
+  const [isDeletingLog, setIsDeletingLog] = useState(false);
   const [showMissedReadingPopup, setShowMissedReadingPopup] = useState(false);
   const [missedReadingNextDue, setMissedReadingNextDue] = useState<Date | null>(null);
   const [missedEquipments, setMissedEquipments] = useState<EquipmentMissInfo[] | null>(null);
@@ -654,7 +657,7 @@ export default function ELogBookPage() {
   }, [showMissedReadingPopup, missingRangeFrom, missingRangeTo, missingRangeRefreshKey]);
 
   useEffect(() => {
-    if (!isDialogOpen || !!editingLogId) return;
+    if (!isDialogOpen) return;
     if (!formData.equipmentId) return;
     if (entryLogInterval !== '' || entryShiftDurationHours !== '' || entryToleranceMinutes !== '') return;
     const options = equipmentByType[formData.equipmentType as 'chiller' | 'boiler' | 'compressor'] || [];
@@ -1068,15 +1071,17 @@ export default function ELogBookPage() {
             toast.error('Shift duration must be between 1 and 24 hours.');
             return;
           }
-          await equipmentAPI.patch(selectedChiller.id, {
-            log_entry_interval: entryLogInterval || null,
-            shift_duration_hours:
-              entryLogInterval === 'shift' && entryShiftDurationHours !== ''
-                ? Number(entryShiftDurationHours)
-                : null,
-            tolerance_minutes:
-              entryToleranceMinutes === '' ? null : Math.max(0, Number(entryToleranceMinutes) || 0),
-          });
+          if (canPatchEquipmentLogIntervalFromLogbook(user?.role)) {
+            await equipmentAPI.patch(selectedChiller.id, {
+              log_entry_interval: entryLogInterval || null,
+              shift_duration_hours:
+                entryLogInterval === 'shift' && entryShiftDurationHours !== ''
+                  ? Number(entryShiftDurationHours)
+                  : null,
+              tolerance_minutes:
+                entryToleranceMinutes === '' ? null : Math.max(0, Number(entryToleranceMinutes) || 0),
+            });
+          }
         }
         // Validate all chiller fields with clear messages before saving
         if (isReadingsApplicable && !validateChillerForm()) {
@@ -1601,13 +1606,9 @@ export default function ELogBookPage() {
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this entry? This action cannot be undone.')) {
-      return;
-    }
-    
+  const executeDeleteLog = async (id: string) => {
     try {
-      const log = logs.find(l => l.id === id);
+      const log = logs.find((l) => l.id === id);
       if (!log) return;
 
       if (log.equipmentType === 'chemical') {
@@ -1619,7 +1620,7 @@ export default function ELogBookPage() {
       } else if (log.equipmentType === 'compressor') {
         await compressorLogAPI.delete(id);
       }
-      
+
       toast.success('Entry deleted successfully');
       await refreshLogs();
     } catch (error: any) {
@@ -3845,7 +3846,7 @@ export default function ELogBookPage() {
                             <Button
                               variant="ghost"
                               size="icon"
-                              onClick={() => handleDelete(log.id)}
+                              onClick={() => setDeleteConfirmLogId(log.id)}
                               className="h-7 w-7 text-destructive hover:text-destructive hover:bg-destructive/10"
                               title="Delete Entry"
                             >
@@ -3862,6 +3863,43 @@ export default function ELogBookPage() {
           </div>
         </div>
       </div>
+
+      {/* Delete log entry (centered modal, same pattern as Chemical) */}
+      <AlertDialog
+        open={!!deleteConfirmLogId}
+        onOpenChange={(open) => {
+          if (!open && !isDeletingLog) setDeleteConfirmLogId(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete log entry</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete this entry? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeletingLog}>Cancel</AlertDialogCancel>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={isDeletingLog}
+              onClick={async () => {
+                if (!deleteConfirmLogId) return;
+                setIsDeletingLog(true);
+                try {
+                  await executeDeleteLog(deleteConfirmLogId);
+                } finally {
+                  setIsDeletingLog(false);
+                  setDeleteConfirmLogId(null);
+                }
+              }}
+            >
+              {isDeletingLog ? 'Deleting…' : 'Delete'}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* View Readings modal */}
       <Dialog open={!!readingsModalLogId} onOpenChange={(open) => !open && setReadingsModalLogId(null)}>

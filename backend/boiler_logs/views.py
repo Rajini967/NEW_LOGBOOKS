@@ -21,7 +21,13 @@ from core.log_slot_utils import (
 from equipment.models import Equipment
 from .models import BoilerLog, BoilerEquipmentLimit, BoilerDashboardConfig
 from .serializers import BoilerLogSerializer, BoilerEquipmentLimitSerializer
-from accounts.permissions import CanLogEntries, CanApproveReports, IsSuperAdminOrAdmin
+from accounts.permissions import (
+    CanLogEntries,
+    CanApproveReports,
+    IsSuperAdmin,
+    IsSuperAdminOrAdmin,
+    forbid_manager_rejecting_reading,
+)
 from reports.utils import log_limit_change, log_audit_event, save_missing_slots_snapshot
 from reports.services import create_utility_report_for_log
 from reports.approval_workflow import (
@@ -307,6 +313,8 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
             return [IsAuthenticated(), CanLogEntries()]
         elif self.action == 'approve':
             return [IsAuthenticated(), CanApproveReports()]
+        elif self.action == 'destroy':
+            return [IsAuthenticated(), IsSuperAdmin()]
         return [IsAuthenticated()]
 
     def get_queryset(self):
@@ -1332,7 +1340,8 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
         action_type = normalize_approval_action(request.data.get('action'))
         remarks = (request.data.get('remarks') or '').strip()
         require_rejection_comment(action_type, remarks)
-        
+        forbid_manager_rejecting_reading(request, action_type)
+
         if action_type == 'approve':
             # Primary/secondary approver must be different from the operator (Log Book Done By)
             ensure_not_operator(log.operator_id, request.user.id, "approved")

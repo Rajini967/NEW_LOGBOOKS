@@ -29,7 +29,7 @@ import {
 } from "@/lib/api";
 import { Loader2, Plus, CheckCircle2, XCircle, Link2, ArrowLeft, Trash2 } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
-import { useNavigate } from "react-router-dom";
+import { Navigate, useNavigate } from "react-router-dom";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -41,6 +41,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { useAuth } from "@/contexts/AuthContext";
+import { canAccessFilterHub, canApproveFilterRegister } from "@/lib/auth/role";
 
 interface FilterCategory {
   id: string;
@@ -115,7 +116,7 @@ const getPlainErrorMessage = (
 
 const FilterRegisterPage: React.FC = () => {
   const { toast } = useToast();
-  const { user } = useAuth();
+  const { user, isLoading: authLoading } = useAuth();
   const navigate = useNavigate();
   const [categories, setCategories] = useState<FilterCategory[]>([]);
   const [filters, setFilters] = useState<FilterMaster[]>([]);
@@ -512,6 +513,12 @@ const FilterRegisterPage: React.FC = () => {
     []
   );
 
+  if (!authLoading && !canAccessFilterHub(user?.role)) {
+    return <Navigate to="/e-log-book/filter/entry" replace />;
+  }
+
+  const canApproveRegister = canApproveFilterRegister(user?.role);
+
   return (
     <div className="min-h-screen">
       <Header
@@ -645,7 +652,7 @@ const FilterRegisterPage: React.FC = () => {
                         </td>
                         <td className="px-4 py-2 text-right">
                           <div className="inline-flex items-center gap-2">
-                            {filter.status === "pending" && (
+                            {filter.status === "pending" && canApproveRegister && (
                               <>
                                 <Button
                                   size="icon"

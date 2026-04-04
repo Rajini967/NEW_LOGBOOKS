@@ -14,8 +14,9 @@ import { Switch } from "@/components/ui/switch";
 import { filterCategoryAPI } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
 import { Loader2, Plus, Pencil, Trash2, ArrowLeft } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { Navigate, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
+import { canAccessFilterHub } from "@/lib/auth/role";
 
 interface FilterCategory {
   id: string;
@@ -32,7 +33,7 @@ const MICRON_OPTIONS = ["0.2", "0.45", "1", "3", "5", "10", "20", "100"] as cons
 const FilterCategoriesPage: React.FC = () => {
   const { toast } = useToast();
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, isLoading: authLoading } = useAuth();
   const [categories, setCategories] = useState<FilterCategory[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -92,6 +93,10 @@ const FilterCategoriesPage: React.FC = () => {
   useEffect(() => {
     void loadCategories();
   }, []);
+
+  if (!authLoading && !canAccessFilterHub(user?.role)) {
+    return <Navigate to="/e-log-book/filter/entry" replace />;
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

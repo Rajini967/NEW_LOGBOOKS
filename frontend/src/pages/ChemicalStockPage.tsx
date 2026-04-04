@@ -26,6 +26,7 @@ import {
 import { chemicalStockAPI, equipmentCategoryAPI } from "@/lib/api";
 import { toast } from "@/lib/toast";
 import { useAuth } from "@/contexts/AuthContext";
+import { canManageChemicalInventory, normalizeUserRole } from "@/lib/auth/role";
 
 interface ChemicalStockRow {
   id: string;
@@ -50,7 +51,7 @@ function locationFromCategoryName(name: string): "water_system" | "cooling_tower
 const ChemicalStockPage: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const isAdmin = user?.role === "admin" || user?.role === "super_admin";
+  const canManageStock = canManageChemicalInventory(user?.role);
 
   const [rows, setRows] = useState<ChemicalStockRow[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -262,7 +263,7 @@ const ChemicalStockPage: React.FC = () => {
         </button>
 
         <div className="flex items-center gap-3">
-          {isAdmin && (
+          {canManageStock && (
             <Dialog open={createOpen} onOpenChange={setCreateOpen}>
               <DialogTrigger asChild>
                 <Button>
@@ -417,7 +418,7 @@ const ChemicalStockPage: React.FC = () => {
                     <th className="px-4 py-2 text-left font-medium text-muted-foreground">
                       Site
                     </th>
-                    {isAdmin && (
+                    {canManageStock && (
                       <th className="px-4 py-2 text-right font-medium text-muted-foreground w-24">
                         Actions
                       </th>
@@ -428,7 +429,7 @@ const ChemicalStockPage: React.FC = () => {
                   {isLoading ? (
                     <tr>
                       <td
-                        colSpan={isAdmin ? 6 : 5}
+                        colSpan={canManageStock ? 6 : 5}
                         className="px-4 py-6 text-center text-muted-foreground"
                       >
                         <div className="flex items-center justify-center gap-2">
@@ -440,7 +441,7 @@ const ChemicalStockPage: React.FC = () => {
                   ) : rows.length === 0 ? (
                     <tr>
                       <td
-                        colSpan={isAdmin ? 6 : 5}
+                        colSpan={canManageStock ? 6 : 5}
                         className="px-4 py-6 text-center text-muted-foreground"
                       >
                         No stock records found.
@@ -474,7 +475,7 @@ const ChemicalStockPage: React.FC = () => {
                         <td className="px-4 py-2">
                           {row.site || "—"}
                         </td>
-                        {isAdmin && (
+                        {canManageStock && (
                           <td className="px-4 py-2 text-right">
                             <div className="flex items-center justify-end gap-1">
                               <Button
@@ -487,7 +488,7 @@ const ChemicalStockPage: React.FC = () => {
                               >
                                 <Pencil className="w-4 h-4" />
                               </Button>
-                              {user?.role === "super_admin" && (
+                              {normalizeUserRole(user?.role) === "super_admin" && (
                               <Button
                                 type="button"
                                 variant="ghost"

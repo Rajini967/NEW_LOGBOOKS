@@ -6,6 +6,7 @@ import { filterScheduleAPI } from "@/lib/api";
 import { Loader2, CheckCircle2, XCircle, ArrowLeft } from "lucide-react";
 import { useNavigate, Navigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
+import { canAccessFilterHub, canApproveFilterSchedule } from "@/lib/auth/role";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -58,7 +59,8 @@ const FilterScheduleApprovalsPage: React.FC = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
 
-  const isAdmin = user?.role === "admin" || user?.role === "super_admin";
+  const canViewSchedules = canAccessFilterHub(user?.role);
+  const canApproveSchedules = canApproveFilterSchedule(user?.role);
   const [rows, setRows] = useState<FilterScheduleRow[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [workingId, setWorkingId] = useState<string | null>(null);
@@ -98,10 +100,10 @@ const FilterScheduleApprovalsPage: React.FC = () => {
   };
 
   useEffect(() => {
-    if (!isAdmin) return;
+    if (!canViewSchedules) return;
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAdmin]);
+  }, [canViewSchedules]);
 
   const doApprove = async (id: string, comment: string) => {
     setWorkingId(id);
@@ -137,7 +139,7 @@ const FilterScheduleApprovalsPage: React.FC = () => {
     }
   };
 
-  if (!authLoading && !isAdmin) {
+  if (!authLoading && !canViewSchedules) {
     return <Navigate to="/e-log-book/filter/entry" replace />;
   }
 
@@ -261,60 +263,64 @@ const FilterScheduleApprovalsPage: React.FC = () => {
                           {row.assignment_info?.tag_info || "—"}
                         </td>
                         <td className="px-4 py-2 text-right">
-                          <div className="inline-flex items-center gap-2">
-                            <Button
-                              size="icon"
-                              variant="outline"
-                              className="h-8 w-8 text-emerald-600"
-                              disabled={workingId === row.id || row.is_approved || row.status === "rejected"}
-                              onClick={() => {
-                                if (userIsAssignmentAssigner(row)) {
-                                  toast({
-                                    title: "Cannot approve your own assignment",
-                                    description:
-                                      "Someone else must approve schedules for equipment you assigned the filter to.",
-                                    variant: "destructive",
-                                  });
-                                  return;
-                                }
-                                if (!row.is_approved && row.status !== "rejected") {
-                                  setSelectedScheduleId(row.id);
-                                  setApproveConfirmOpen(true);
-                                }
-                              }}
-                              title="Approve"
-                            >
-                              {workingId === row.id ? (
-                                <Loader2 className="w-4 h-4 animate-spin" />
-                              ) : (
-                                <CheckCircle2 className="w-4 h-4" />
-                              )}
-                            </Button>
-                            <Button
-                              size="icon"
-                              variant="outline"
-                              className="h-8 w-8 text-rose-600"
-                              disabled={workingId === row.id || row.is_approved || row.status === "rejected"}
-                              onClick={() => {
-                                if (userIsAssignmentAssigner(row)) {
-                                  toast({
-                                    title: "Cannot reject your own assignment",
-                                    description:
-                                      "Someone else must reject schedules for equipment you assigned the filter to.",
-                                    variant: "destructive",
-                                  });
-                                  return;
-                                }
-                                if (!row.is_approved && row.status !== "rejected") {
-                                  setSelectedScheduleId(row.id);
-                                  setRejectConfirmOpen(true);
-                                }
-                              }}
-                              title="Reject"
-                            >
-                              <XCircle className="w-4 h-4" />
-                            </Button>
-                          </div>
+                          {canApproveSchedules ? (
+                            <div className="inline-flex items-center gap-2">
+                              <Button
+                                size="icon"
+                                variant="outline"
+                                className="h-8 w-8 text-emerald-600"
+                                disabled={workingId === row.id || row.is_approved || row.status === "rejected"}
+                                onClick={() => {
+                                  if (userIsAssignmentAssigner(row)) {
+                                    toast({
+                                      title: "Cannot approve your own assignment",
+                                      description:
+                                        "Someone else must approve schedules for equipment you assigned the filter to.",
+                                      variant: "destructive",
+                                    });
+                                    return;
+                                  }
+                                  if (!row.is_approved && row.status !== "rejected") {
+                                    setSelectedScheduleId(row.id);
+                                    setApproveConfirmOpen(true);
+                                  }
+                                }}
+                                title="Approve"
+                              >
+                                {workingId === row.id ? (
+                                  <Loader2 className="w-4 h-4 animate-spin" />
+                                ) : (
+                                  <CheckCircle2 className="w-4 h-4" />
+                                )}
+                              </Button>
+                              <Button
+                                size="icon"
+                                variant="outline"
+                                className="h-8 w-8 text-rose-600"
+                                disabled={workingId === row.id || row.is_approved || row.status === "rejected"}
+                                onClick={() => {
+                                  if (userIsAssignmentAssigner(row)) {
+                                    toast({
+                                      title: "Cannot reject your own assignment",
+                                      description:
+                                        "Someone else must reject schedules for equipment you assigned the filter to.",
+                                      variant: "destructive",
+                                    });
+                                    return;
+                                  }
+                                  if (!row.is_approved && row.status !== "rejected") {
+                                    setSelectedScheduleId(row.id);
+                                    setRejectConfirmOpen(true);
+                                  }
+                                }}
+                                title="Reject"
+                              >
+                                <XCircle className="w-4 h-4" />
+                              </Button>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">—</span>
+                          )}
                         </td>
                       </tr>
                     ))

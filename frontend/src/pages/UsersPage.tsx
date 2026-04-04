@@ -19,9 +19,19 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Plus, Users, Shield, Mail, User, Edit, Trash2, Lock, LockOpen, Eye, EyeOff } from 'lucide-react';
 import { toast } from '@/lib/toast';
-import { userAPI } from '@/lib/api';
+import { userAPI, departmentAPI, equipmentAPI } from '@/lib/api';
 import { User as UserType } from '@/types';
 import { useAuth } from '@/contexts/AuthContext';
 import { PasswordRequirementHints } from '@/components/PasswordRequirementHints';
@@ -29,6 +39,9 @@ import { PasswordRequirementHints } from '@/components/PasswordRequirementHints'
 interface UserData extends UserType {
   site?: string;
 }
+
+type DeptRow = { id: string; name: string };
+type EquipmentRow = { id: string; equipment_number?: string; name?: string };
 
 const roleLabels: Record<string, string> = {
   operator: 'Operator',
@@ -55,14 +68,49 @@ export default function UsersPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showPasswordConfirm, setShowPasswordConfirm] = useState(false);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [deleteSubmitting, setDeleteSubmitting] = useState(false);
   
+  const [departments, setDepartments] = useState<DeptRow[]>([]);
+  const [equipmentList, setEquipmentList] = useState<EquipmentRow[]>([]);
+
   const [formData, setFormData] = useState({
     email: '',
     password: '',
     password_confirm: '',
     role: '',
     is_active: true,
+    assigned_department: '',
+    assigned_equipment: '',
   });
+
+  const canAssignDeptEquipment =
+    currentUser?.role === 'admin' || currentUser?.role === 'super_admin';
+
+  useEffect(() => {
+    if (!isDialogOpen || !canAssignDeptEquipment) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const [deptRows, eqRows] = await Promise.all([
+          departmentAPI.list() as Promise<DeptRow[]>,
+          equipmentAPI.listAllPages() as Promise<EquipmentRow[]>,
+        ]);
+        if (!cancelled) {
+          setDepartments(Array.isArray(deptRows) ? deptRows : []);
+          setEquipmentList(Array.isArray(eqRows) ? eqRows : []);
+        }
+      } catch {
+        if (!cancelled) {
+          setDepartments([]);
+          setEquipmentList([]);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isDialogOpen, canAssignDeptEquipment]);
 
   // Fetch users on mount
   useEffect(() => {
@@ -89,6 +137,8 @@ export default function UsersPage() {
       password_confirm: '',
       role: user.role,
       is_active: user.is_active ?? true,
+      assigned_department: user.assigned_department ?? '',
+      assigned_equipment: user.assigned_equipment ?? '',
     });
     setIsDialogOpen(true);
   };
@@ -123,7 +173,12 @@ export default function UsersPage() {
           updateData.password = formData.password;
           updateData.password_confirm = formData.password_confirm;
         }
-        
+
+        if (canAssignDeptEquipment) {
+          updateData.assigned_department = formData.assigned_department || null;
+          updateData.assigned_equipment = formData.assigned_equipment || null;
+        }
+
         const updatedUser = await userAPI.update(editingUserId, updateData);
         setUsers(users.map(u => u.id === editingUserId ? updatedUser : u));
         setIsDialogOpen(false);
@@ -135,6 +190,8 @@ export default function UsersPage() {
           password_confirm: '',
           role: '',
           is_active: true,
+          assigned_department: '',
+          assigned_equipment: '',
         });
         if (formData.password) {
           toast.success('Password changed successfully.');
@@ -145,13 +202,18 @@ export default function UsersPage() {
         }
       } else {
         // Create new user
-        const newUser = await userAPI.create({
+        const createPayload: Record<string, unknown> = {
           email: formData.email,
           password: formData.password,
           password_confirm: formData.password_confirm,
           role: formData.role,
           is_active: formData.is_active,
-        });
+        };
+        if (canAssignDeptEquipment) {
+          createPayload.assigned_department = formData.assigned_department || null;
+          createPayload.assigned_equipment = formData.assigned_equipment || null;
+        }
+        const newUser = await userAPI.create(createPayload);
 
         setUsers([newUser, ...users]);
         setIsDialogOpen(false);
@@ -161,6 +223,8 @@ export default function UsersPage() {
           password_confirm: '',
           role: '',
           is_active: true,
+          assigned_department: '',
+          assigned_equipment: '',
         });
         toast.success('User created and role assigned successfully.');
       }
@@ -208,16 +272,20 @@ export default function UsersPage() {
     }
   };
 
-  const handleDelete = async (userId: string) => {
-    if (!confirm('Are you sure you want to delete this user?')) return;
-    
+  const handleDeleteConfirm = async () => {
+    if (!deleteConfirmId) return;
+    setDeleteSubmitting(true);
     try {
-      await userAPI.delete(userId);
-    setUsers(users.filter(u => u.id !== userId));
+      await userAPI.delete(deleteConfirmId);
+      setUsers((prev) => prev.filter((u) => u.id !== deleteConfirmId));
       toast.success('User deleted successfully');
+      setDeleteConfirmId(null);
     } catch (error: any) {
-      const errorMessage = error?.response?.data?.error || error?.response?.data?.detail || 'Failed to delete user';
+      const errorMessage =
+        error?.response?.data?.error || error?.response?.data?.detail || 'Failed to delete user';
       toast.error(errorMessage);
+    } finally {
+      setDeleteSubmitting(false);
     }
   };
 
@@ -280,6 +348,8 @@ export default function UsersPage() {
                 password_confirm: '',
                 role: '',
                 is_active: true,
+                assigned_department: '',
+                assigned_equipment: '',
               });
             }
           }}>
@@ -429,6 +499,59 @@ export default function UsersPage() {
                   </Select>
                 </div>
 
+                {canAssignDeptEquipment && (
+                  <div className="space-y-4 pt-2 border-t border-border">
+                    <div className="space-y-2">
+                      <Label htmlFor="assigned_department">Department assignment</Label>
+                      <Select
+                        value={formData.assigned_department || 'none'}
+                        onValueChange={(v) =>
+                          setFormData({
+                            ...formData,
+                            assigned_department: v === 'none' ? '' : v,
+                          })
+                        }
+                      >
+                        <SelectTrigger id="assigned_department">
+                          <SelectValue placeholder="None" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">None</SelectItem>
+                          {departments.map((d) => (
+                            <SelectItem key={d.id} value={d.id}>
+                              {d.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="assigned_equipment">Equipment assignment</Label>
+                      <Select
+                        value={formData.assigned_equipment || 'none'}
+                        onValueChange={(v) =>
+                          setFormData({
+                            ...formData,
+                            assigned_equipment: v === 'none' ? '' : v,
+                          })
+                        }
+                      >
+                        <SelectTrigger id="assigned_equipment">
+                          <SelectValue placeholder="None" />
+                        </SelectTrigger>
+                        <SelectContent className="max-h-[240px]">
+                          <SelectItem value="none">None</SelectItem>
+                          {equipmentList.map((eq) => (
+                            <SelectItem key={eq.id} value={eq.id}>
+                              {[eq.equipment_number, eq.name].filter(Boolean).join(' — ') || eq.id}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                )}
+
                 <div className="space-y-3 pt-2 border-t border-border">
                   <div className="flex items-center space-x-2">
                     <Checkbox
@@ -530,13 +653,16 @@ export default function UsersPage() {
                         >
                           <Edit className="w-4 h-4" />
                         </Button>
-                        {currentUser?.role === 'super_admin' && (
-                          <Button 
-                            variant="ghost" 
+                        {(currentUser?.role === 'super_admin' || currentUser?.role === 'admin') &&
+                          user.id !== currentUser?.id &&
+                          user.role !== 'super_admin' && (
+                          <Button
+                            variant="ghost"
                             size="icon"
-                            onClick={() => handleDelete(user.id)}
+                            onClick={() => setDeleteConfirmId(user.id)}
+                            title="Delete user"
                           >
-                            <Trash2 className="w-4 h-4" />
+                            <Trash2 className="w-4 h-4 text-destructive" />
                           </Button>
                         )}
                       </div>
@@ -549,6 +675,41 @@ export default function UsersPage() {
           </div>
         </div>
       </div>
+
+      <AlertDialog
+        open={!!deleteConfirmId}
+        onOpenChange={(open) => {
+          if (!open && !deleteSubmitting) setDeleteConfirmId(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete user</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete this user? The account will be deactivated and removed
+              from the active user list.
+            </AlertDialogDescription>
+            {deleteConfirmId ? (
+              <p className="text-sm font-medium text-foreground -mt-1">
+                {users.find((u) => u.id === deleteConfirmId)?.email ?? deleteConfirmId}
+              </p>
+            ) : null}
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteSubmitting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={deleteSubmitting}
+              onClick={(e) => {
+                e.preventDefault();
+                void handleDeleteConfirm();
+              }}
+            >
+              {deleteSubmitting ? 'Deleting…' : 'Delete'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

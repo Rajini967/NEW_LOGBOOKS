@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime, timedelta
 from collections import defaultdict
 
-from accounts.permissions import CanApproveReports, CanLogEntries
+from accounts.permissions import CanApproveReports, CanLogEntries, IsSuperAdmin, forbid_manager_rejecting_reading
 from equipment.models import Equipment
 from core.log_slot_utils import (
     get_interval_for_equipment,
@@ -117,6 +117,8 @@ class FilterLogViewSet(viewsets.ModelViewSet):
             return [IsAuthenticated(), CanLogEntries()]
         elif self.action == 'approve':
             return [IsAuthenticated(), CanApproveReports()]
+        elif self.action == 'destroy':
+            return [IsAuthenticated(), IsSuperAdmin()]
         return [IsAuthenticated()]
 
     def perform_create(self, serializer):
@@ -718,6 +720,7 @@ class FilterLogViewSet(viewsets.ModelViewSet):
         # Backwards compatible: frontend currently sends approval/rejection comment as `remarks`.
         comment = (request.data.get('comment') or request.data.get('remarks') or '').strip()
         require_rejection_comment(action_type, comment)
+        forbid_manager_rejecting_reading(request, action_type)
 
         if action_type == 'approve':
             ensure_not_operator(log.operator_id, request.user.id, "approved")

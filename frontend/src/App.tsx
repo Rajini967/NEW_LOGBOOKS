@@ -4,6 +4,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
+import { canAccessFilterHub, normalizeUserRole } from "@/lib/auth/role";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import LoginPage from "./pages/LoginPage";
 import ForgotPasswordPage from "./pages/ForgotPasswordPage";
@@ -44,17 +45,15 @@ import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
 
-const isFilterAdmin = (role?: string) =>
-  role === "admin" || role === "super_admin";
-
-const isChemicalAdmin = (role?: string) =>
-  role === "admin" || role === "super_admin";
+/** Chemical hub (stock / assignment / entry tiles): all roles except operator. */
+const canAccessChemicalHub = (role?: string) =>
+  normalizeUserRole(role) !== "operator";
 
 function AdminFilterLandingRoute() {
   const { user, isLoading } = useAuth();
 
   if (isLoading) return null;
-  if (!user || !isFilterAdmin(user.role)) {
+  if (!user || !canAccessFilterHub(user.role)) {
     return <Navigate to="/e-log-book/filter/entry" replace />;
   }
   return <FilterLogBookHomePage />;
@@ -64,7 +63,7 @@ function AdminFilterSettingsRoute() {
   const { user, isLoading } = useAuth();
 
   if (isLoading) return null;
-  if (!user || !isFilterAdmin(user.role)) {
+  if (!user || !canAccessFilterHub(user.role)) {
     return <Navigate to="/e-log-book/filter/entry" replace />;
   }
   return <FilterLogBookSettingsPage />;
@@ -74,7 +73,7 @@ function ChemicalLandingRoute() {
   const { user, isLoading } = useAuth();
 
   if (isLoading) return null;
-  if (!user || !isChemicalAdmin(user.role)) {
+  if (!user || !canAccessChemicalHub(user.role)) {
     return <Navigate to="/e-log-book/chemical/entry" replace />;
   }
   return <ChemicalHomePage />;

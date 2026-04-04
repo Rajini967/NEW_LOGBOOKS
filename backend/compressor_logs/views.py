@@ -10,7 +10,7 @@ from reports.utils import log_audit_event, log_limit_change
 from reports.services import create_utility_report_for_log
 from .models import CompressorLog
 from .serializers import CompressorLogSerializer
-from accounts.permissions import CanLogEntries, CanApproveReports
+from accounts.permissions import CanLogEntries, CanApproveReports, IsSuperAdmin, forbid_manager_rejecting_reading
 
 CREATOR_ONLY_REJECTED_EDIT_MESSAGE = "Only the original creator can edit/correct a rejected entry."
 
@@ -54,6 +54,8 @@ class CompressorLogViewSet(viewsets.ModelViewSet):
             return [IsAuthenticated(), CanLogEntries()]
         elif self.action == 'approve':
             return [IsAuthenticated(), CanApproveReports()]
+        elif self.action == 'destroy':
+            return [IsAuthenticated(), IsSuperAdmin()]
         return [IsAuthenticated()]
     
     def perform_create(self, serializer):
@@ -202,6 +204,7 @@ class CompressorLogViewSet(viewsets.ModelViewSet):
         log = self.get_object()
         action_type = request.data.get('action', 'approve')
         remarks = (request.data.get('remarks') or '').strip()
+        forbid_manager_rejecting_reading(request, action_type)
 
         if action_type == 'reject' and not remarks:
             raise ValidationError({'remarks': ['Comment is required when rejecting.']})

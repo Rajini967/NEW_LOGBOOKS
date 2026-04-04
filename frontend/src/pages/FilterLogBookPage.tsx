@@ -31,6 +31,10 @@ import {
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { firstRequiredFieldError } from "@/lib/requiredFields";
+import {
+  canAccessFilterHub,
+  canPatchEquipmentLogIntervalFromLogbook,
+} from "@/lib/auth/role";
 import { Link, useNavigate } from "react-router-dom";
 import { Clock, Filter, X, Trash2, CheckCircle, XCircle, Edit, History, ArrowLeft } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -109,6 +113,8 @@ const FilterLogBookPage: React.FC = () => {
   const [selectedLogId, setSelectedLogId] = useState<string | null>(null);
   const [selectedLogIds, setSelectedLogIds] = useState<string[]>([]);
   const [editedMaintenanceLogIds, setEditedMaintenanceLogIds] = useState<Set<string>>(new Set());
+  const [deleteConfirmLogId, setDeleteConfirmLogId] = useState<string | null>(null);
+  const [isDeletingLog, setIsDeletingLog] = useState(false);
   const [approvalComment, setApprovalComment] = useState("");
   const [editingCommentLogId, setEditingCommentLogId] = useState<string | null>(null);
   const [editingCommentValue, setEditingCommentValue] = useState("");
@@ -614,7 +620,7 @@ const FilterLogBookPage: React.FC = () => {
   }, [showMissedReadingPopup, missingRangeFrom, missingRangeTo, missingRangeRefreshKey, getFilterMissingDisplayLabel]);
 
   useEffect(() => {
-    if (!isDialogOpen || !!editingLogId) return;
+    if (!isDialogOpen) return;
     if (!formData.equipmentId && !selectedEquipmentUuid) return;
     if (entryLogInterval !== "" || entryShiftDurationHours !== "" || entryToleranceMinutes !== "") return;
     const timingMeta =
@@ -1052,15 +1058,17 @@ const FilterLogBookPage: React.FC = () => {
         toast.error("Shift duration must be between 1 and 24 hours.");
         return;
       }
-      await equipmentAPI.patch(equipmentIdForPatch, {
-        log_entry_interval: entryLogInterval || null,
-        shift_duration_hours:
-          entryLogInterval === "shift" && entryShiftDurationHours !== ""
-            ? Number(entryShiftDurationHours)
-            : null,
-        tolerance_minutes:
-          entryToleranceMinutes === "" ? null : Math.max(0, Number(entryToleranceMinutes) || 0),
-      });
+      if (canPatchEquipmentLogIntervalFromLogbook(user?.role)) {
+        await equipmentAPI.patch(equipmentIdForPatch, {
+          log_entry_interval: entryLogInterval || null,
+          shift_duration_hours:
+            entryLogInterval === "shift" && entryShiftDurationHours !== ""
+              ? Number(entryShiftDurationHours)
+              : null,
+          tolerance_minutes:
+            entryToleranceMinutes === "" ? null : Math.max(0, Number(entryToleranceMinutes) || 0),
+        });
+      }
       setFilterIdToEquipmentInterval((prev) => {
         const next = new Map(prev);
         const meta = {
@@ -1304,10 +1312,7 @@ const FilterLogBookPage: React.FC = () => {
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm("Are you sure you want to delete this entry? This action cannot be undone.")) {
-      return;
-    }
+  const executeDeleteLog = async (id: string) => {
     try {
       await filterLogAPI.delete(id);
       toast.success("Entry deleted successfully");
@@ -1375,8 +1380,7 @@ const FilterLogBookPage: React.FC = () => {
   const approvedLogs = filteredLogs.filter((log) => log.status === "approved");
   const rejectedLogs = filteredLogs.filter((log) => log.status === "rejected");
 
-  const isFilterAdmin =
-    user && (user.role === "admin" || user.role === "super_admin");
+  const showFilterHubBack = user != null && canAccessFilterHub(user.role);
 
   return (
     <>
@@ -1410,7 +1414,7 @@ const FilterLogBookPage: React.FC = () => {
         <button
           type="button"
           onClick={() =>
-            navigate(isFilterAdmin ? "/e-log-book/filter" : "/e-log-book")
+            navigate(showFilterHubBack ? "/e-log-book/filter" : "/e-log-book")
           }
           className="inline-flex items-center text-sm text-muted-foreground hover:text-foreground"
         >
@@ -1699,6 +1703,43 @@ const FilterLogBookPage: React.FC = () => {
             </div>
           </DialogContent>
         </Dialog>
+
+        {/* Delete filter log entry (centered modal, same pattern as Chemical) */}
+        <AlertDialog
+          open={!!deleteConfirmLogId}
+          onOpenChange={(open) => {
+            if (!open && !isDeletingLog) setDeleteConfirmLogId(null);
+          }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete filter entry</AlertDialogTitle>
+              <AlertDialogDescription>
+                Are you sure you want to delete this entry? This action cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={isDeletingLog}>Cancel</AlertDialogCancel>
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={isDeletingLog}
+                onClick={async () => {
+                  if (!deleteConfirmLogId) return;
+                  setIsDeletingLog(true);
+                  try {
+                    await executeDeleteLog(deleteConfirmLogId);
+                  } finally {
+                    setIsDeletingLog(false);
+                    setDeleteConfirmLogId(null);
+                  }
+                }}
+              >
+                {isDeletingLog ? "Deleting…" : "Delete"}
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
 
         {/* Step 1: Approve confirmation alert (match other logbooks) */}
         <AlertDialog open={approveConfirmOpen} onOpenChange={setApproveConfirmOpen}>
@@ -2300,7 +2341,7 @@ const FilterLogBookPage: React.FC = () => {
                               variant="ghost"
                               className="h-7 w-7 text-destructive hover:text-destructive hover:bg-destructive/10"
                               title="Delete entry"
-                              onClick={() => handleDelete(log.id)}
+                              onClick={() => setDeleteConfirmLogId(log.id)}
                             >
                               <Trash2 className="w-4 h-4" />
                             </Button>

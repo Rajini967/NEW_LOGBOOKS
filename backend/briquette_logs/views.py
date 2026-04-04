@@ -7,7 +7,7 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from accounts.permissions import CanApproveReports, CanLogEntries
+from accounts.permissions import CanApproveReports, CanLogEntries, IsSuperAdmin, forbid_manager_rejecting_reading
 from core.log_slot_utils import (
     compute_missing_slots_for_day,
     get_interval_for_equipment,
@@ -40,6 +40,8 @@ class BriquetteLogViewSet(viewsets.ModelViewSet):
             return [IsAuthenticated(), CanLogEntries()]
         if self.action == "approve":
             return [IsAuthenticated(), CanApproveReports()]
+        if self.action == "destroy":
+            return [IsAuthenticated(), IsSuperAdmin()]
         return [IsAuthenticated()]
 
     def get_queryset(self):
@@ -289,6 +291,7 @@ class BriquetteLogViewSet(viewsets.ModelViewSet):
         log = self.get_object()
         action_type = request.data.get("action", "approve")
         remarks = (request.data.get("remarks") or "").strip()
+        forbid_manager_rejecting_reading(request, action_type)
         if action_type == "reject" and not remarks:
             raise ValidationError({"remarks": ["Comment is required when rejecting."]})
 

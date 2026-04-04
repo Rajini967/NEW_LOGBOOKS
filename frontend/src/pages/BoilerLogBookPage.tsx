@@ -27,6 +27,7 @@ import { boilerLogAPI, briquetteLogAPI, equipmentAPI, equipmentCategoryAPI } fro
 import type { MissingSlotsEquipment, MissingSlotsRangeResponse, MissingSlotsResponse } from "@/lib/api/types";
 import { cn } from "@/lib/utils";
 import { firstRequiredFieldError } from "@/lib/requiredFields";
+import { canPatchEquipmentLogIntervalFromLogbook } from "@/lib/auth/role";
 import { Link } from "react-router-dom";
 import { Clock, Thermometer, Gauge, Droplets, Package, Save, Filter, X, Plus, Trash2, CheckCircle, XCircle, Edit, History, Eye } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -220,6 +221,8 @@ const BoilerLogBookPage: React.FC = () => {
   const [editingLogId, setEditingLogId] = useState<string | null>(null);
   const [viewedReadingsLogIds, setViewedReadingsLogIds] = useState<Set<string>>(new Set());
   const [editedMaintenanceLogIds, setEditedMaintenanceLogIds] = useState<Set<string>>(new Set());
+  const [deleteConfirmLogId, setDeleteConfirmLogId] = useState<string | null>(null);
+  const [isDeletingLog, setIsDeletingLog] = useState(false);
   const [equipmentOptions, setEquipmentOptions] = useState<
     {
       id: string;
@@ -653,7 +656,7 @@ const BoilerLogBookPage: React.FC = () => {
   }, [showMissedReadingPopup, missingRangeFrom, missingRangeTo, missingRangeRefreshKey]);
 
   useEffect(() => {
-    if (!isDialogOpen || !!editingLogId) return;
+    if (!isDialogOpen) return;
     if (!formData.equipmentId) return;
     if (entryLogInterval !== "" || entryShiftDurationHours !== "" || entryToleranceMinutes !== "") return;
     const selectedEquipment = equipmentOptions.find(
@@ -801,15 +804,17 @@ const BoilerLogBookPage: React.FC = () => {
           toast.error("Shift duration must be between 1 and 24 hours.");
           return;
         }
-        await equipmentAPI.patch(selectedEquipment.id, {
-          log_entry_interval: entryLogInterval || null,
-          shift_duration_hours:
-            entryLogInterval === "shift" && entryShiftDurationHours !== ""
-              ? Number(entryShiftDurationHours)
-              : null,
-          tolerance_minutes:
-            entryToleranceMinutes === "" ? null : Math.max(0, Number(entryToleranceMinutes) || 0),
-        });
+        if (canPatchEquipmentLogIntervalFromLogbook(user?.role)) {
+          await equipmentAPI.patch(selectedEquipment.id, {
+            log_entry_interval: entryLogInterval || null,
+            shift_duration_hours:
+              entryLogInterval === "shift" && entryShiftDurationHours !== ""
+                ? Number(entryShiftDurationHours)
+                : null,
+            tolerance_minutes:
+              entryToleranceMinutes === "" ? null : Math.max(0, Number(entryToleranceMinutes) || 0),
+          });
+        }
       }
 
       if (!formData.remarks.trim()) {
@@ -1398,10 +1403,7 @@ const BoilerLogBookPage: React.FC = () => {
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm("Are you sure you want to delete this entry? This action cannot be undone.")) {
-      return;
-    }
+  const executeDeleteLog = async (id: string) => {
     try {
       const log = logs.find((l) => l.id === id);
       if (log?.equipmentType === "briquette") {
@@ -2528,7 +2530,7 @@ const BoilerLogBookPage: React.FC = () => {
                             size="icon"
                             className="h-7 w-7 text-destructive hover:text-destructive hover:bg-destructive/10"
                             title="Delete entry"
-                            onClick={() => handleDelete(log.id)}
+                            onClick={() => setDeleteConfirmLogId(log.id)}
                           >
                             <Trash2 className="w-4 h-4" />
                           </Button>
@@ -2542,6 +2544,43 @@ const BoilerLogBookPage: React.FC = () => {
           </div>
         </div>
       </main>
+      {/* Delete log entry (centered modal, same pattern as Chemical) */}
+      <AlertDialog
+        open={!!deleteConfirmLogId}
+        onOpenChange={(open) => {
+          if (!open && !isDeletingLog) setDeleteConfirmLogId(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete log entry</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete this entry? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeletingLog}>Cancel</AlertDialogCancel>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={isDeletingLog}
+              onClick={async () => {
+                if (!deleteConfirmLogId) return;
+                setIsDeletingLog(true);
+                try {
+                  await executeDeleteLog(deleteConfirmLogId);
+                } finally {
+                  setIsDeletingLog(false);
+                  setDeleteConfirmLogId(null);
+                }
+              }}
+            >
+              {isDeletingLog ? "Deleting…" : "Delete"}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       {/* View Readings modal */}
       <Dialog open={!!readingsModalLogId} onOpenChange={(open) => !open && setReadingsModalLogId(null)}>
         <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden">

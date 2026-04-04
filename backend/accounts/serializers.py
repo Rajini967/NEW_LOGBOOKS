@@ -8,10 +8,21 @@ from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
+from equipment.models import Department, Equipment
+
 from .models import User, UserRole, PasswordResetToken, hash_reset_token, UserActivityLog, SessionSetting
 from .password_utils import check_password_history, append_password_history
 from .audit_utils import log_user_activity_event
 from reports.utils import log_limit_change
+
+
+def _can_assign_user_department_equipment(request):
+    u = getattr(request, "user", None) if request else None
+    return (
+        u is not None
+        and u.is_authenticated
+        and getattr(u, "role", None) in (UserRole.ADMIN, UserRole.SUPER_ADMIN)
+    )
 
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
@@ -56,6 +67,8 @@ class UserSerializer(serializers.ModelSerializer):
             'last_login',
             'created_at',
             'updated_at',
+            'assigned_department',
+            'assigned_equipment',
         ]
         read_only_fields = [
             'id',
@@ -85,7 +98,14 @@ class UserSerializer(serializers.ModelSerializer):
 
 class UserCreateSerializer(serializers.ModelSerializer):
     """Serializer for creating users."""
-    
+
+    assigned_department = serializers.PrimaryKeyRelatedField(
+        queryset=Department.objects.all(), allow_null=True, required=False
+    )
+    assigned_equipment = serializers.PrimaryKeyRelatedField(
+        queryset=Equipment.objects.all(), allow_null=True, required=False
+    )
+
     password = serializers.CharField(
         write_only=True,
         required=True,
@@ -107,6 +127,8 @@ class UserCreateSerializer(serializers.ModelSerializer):
             'password_confirm',
             'role',
             'is_active',
+            'assigned_department',
+            'assigned_equipment',
         ]
     
     def validate_email(self, value):
@@ -140,8 +162,15 @@ class UserCreateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({
                 'password_confirm': "Passwords do not match."
             })
+        request = self.context.get("request")
+        initial = getattr(self, "initial_data", None) or {}
+        if any(k in initial for k in ("assigned_department", "assigned_equipment")):
+            if not _can_assign_user_department_equipment(request):
+                raise serializers.ValidationError(
+                    {"assigned_department": "Only Admin or Super Admin can assign department or equipment."}
+                )
         return attrs
-    
+
     def create(self, validated_data):
         """Create user with hashed password."""
         validated_data.pop('password_confirm')
@@ -153,7 +182,14 @@ class UserCreateSerializer(serializers.ModelSerializer):
 
 class UserUpdateSerializer(serializers.ModelSerializer):
     """Serializer for updating users."""
-    
+
+    assigned_department = serializers.PrimaryKeyRelatedField(
+        queryset=Department.objects.all(), allow_null=True, required=False
+    )
+    assigned_equipment = serializers.PrimaryKeyRelatedField(
+        queryset=Equipment.objects.all(), allow_null=True, required=False
+    )
+
     password = serializers.CharField(
         write_only=True,
         required=False,
@@ -170,8 +206,20 @@ class UserUpdateSerializer(serializers.ModelSerializer):
             'password',
             'role',
             'is_active',
+            'assigned_department',
+            'assigned_equipment',
         ]
-    
+
+    def validate(self, attrs):
+        request = self.context.get("request")
+        initial = getattr(self, "initial_data", None) or {}
+        if any(k in initial for k in ("assigned_department", "assigned_equipment")):
+            if not _can_assign_user_department_equipment(request):
+                raise serializers.ValidationError(
+                    {"assigned_department": "Only Admin or Super Admin can assign department or equipment."}
+                )
+        return attrs
+
     def validate_email(self, value):
         """Validate email uniqueness (excluding current user)."""
         user = self.instance

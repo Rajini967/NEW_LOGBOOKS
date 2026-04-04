@@ -26,8 +26,13 @@ interface EquipmentCategory {
   updated_at?: string;
 }
 
+const equipmentMasterMutateRoles = ["supervisor", "manager", "admin", "super_admin"];
+const equipmentMasterDeleteRoles = ["admin", "super_admin"];
+
 export default function EquipmentCategoriesPage() {
   const { user } = useAuth();
+  const canMutate = equipmentMasterMutateRoles.includes(user?.role || "");
+  const canDeleteCategory = equipmentMasterDeleteRoles.includes(user?.role || "");
   const [categories, setCategories] = useState<EquipmentCategory[]>([]);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
@@ -173,12 +178,14 @@ export default function EquipmentCategoriesPage() {
               if (!open) resetForm();
             }}
           >
+            {canMutate && (
             <DialogTrigger asChild>
               <Button variant="accent">
                 <Plus className="w-4 h-4 mr-2" />
                 Add Category
               </Button>
             </DialogTrigger>
+            )}
             <DialogContent className="sm:max-w-[420px]">
               <DialogHeader>
                 <DialogTitle className="flex items-center gap-2">
@@ -292,6 +299,7 @@ export default function EquipmentCategoriesPage() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1">
+                          {canMutate && (
                           <Button
                             variant="ghost"
                             size="icon"
@@ -299,7 +307,8 @@ export default function EquipmentCategoriesPage() {
                           >
                             <Edit className="w-4 h-4" />
                           </Button>
-                          {user?.role === "super_admin" && (
+                          )}
+                          {canDeleteCategory && (
                             <Button
                               variant="ghost"
                               size="icon"

@@ -2,7 +2,16 @@
 Custom permission classes for role-based access control.
 """
 from rest_framework import permissions
+
 from .models import UserRole
+
+
+def forbid_manager_rejecting_reading(request, action_type):
+    """
+    No-op: kept so approve endpoints can call a single hook.
+    Managers may reject readings like other approver roles (same rules as approve: not own entry).
+    """
+    return
 
 
 class IsSuperAdmin(permissions.BasePermission):
@@ -92,22 +101,7 @@ class CanManageUsers(permissions.BasePermission):
 
 
 class CanApproveReports(permissions.BasePermission):
-    """Permission to approve reports (Super Admin, Admin, Supervisor)."""
-
-    def has_permission(self, request, view):
-        return (
-            request.user and
-            request.user.is_authenticated and
-            request.user.role in [
-                UserRole.SUPER_ADMIN,
-                UserRole.ADMIN,
-                UserRole.SUPERVISOR
-            ]
-        )
-
-
-class CanLogEntries(permissions.BasePermission):
-    """Permission to log entries (Super Admin, Admin, Supervisor, Operator)."""
+    """Permission to approve or reject readings (Super Admin, Admin, Supervisor, Manager)."""
 
     def has_permission(self, request, view):
         return (
@@ -117,7 +111,24 @@ class CanLogEntries(permissions.BasePermission):
                 UserRole.SUPER_ADMIN,
                 UserRole.ADMIN,
                 UserRole.SUPERVISOR,
-                UserRole.OPERATOR
+                UserRole.MANAGER,
+            ]
+        )
+
+
+class CanLogEntries(permissions.BasePermission):
+    """Permission to create/update log entries (all roles that enter readings, including Manager)."""
+
+    def has_permission(self, request, view):
+        return (
+            request.user and
+            request.user.is_authenticated and
+            request.user.role in [
+                UserRole.SUPER_ADMIN,
+                UserRole.ADMIN,
+                UserRole.SUPERVISOR,
+                UserRole.MANAGER,
+                UserRole.OPERATOR,
             ]
         )
 
@@ -140,4 +151,120 @@ class IsAdminOrSuperAdmin(permissions.BasePermission):
             request.user and
             request.user.is_authenticated and
             request.user.role in [UserRole.SUPER_ADMIN, UserRole.ADMIN]
+        )
+
+
+class CanAccessEquipmentMasterData(permissions.BasePermission):
+    """
+    Create/update equipment master rows (departments, categories, equipment, corrections).
+    Supervisor, Manager, Admin, Super Admin per privilege matrix (rows 6–9, 12).
+    """
+
+    def has_permission(self, request, view):
+        return (
+            request.user
+            and request.user.is_authenticated
+            and request.user.role
+            in [
+                UserRole.SUPERVISOR,
+                UserRole.MANAGER,
+                UserRole.ADMIN,
+                UserRole.SUPER_ADMIN,
+            ]
+        )
+
+
+class CanApproveEquipmentMaster(permissions.BasePermission):
+    """
+    Approve/reject equipment list entries — Manager, Admin, Super Admin (not Supervisor).
+    Rows 10–11.
+    """
+
+    def has_permission(self, request, view):
+        return (
+            request.user
+            and request.user.is_authenticated
+            and request.user.role
+            in [UserRole.MANAGER, UserRole.ADMIN, UserRole.SUPER_ADMIN]
+        )
+
+
+class CanDeleteEquipmentMaster(permissions.BasePermission):
+    """Delete departments, categories, or equipment — Admin and Super Admin only. Row 13."""
+
+    def has_permission(self, request, view):
+        return (
+            request.user
+            and request.user.is_authenticated
+            and request.user.role in [UserRole.ADMIN, UserRole.SUPER_ADMIN]
+        )
+
+
+class CanManageChemicalInventory(permissions.BasePermission):
+    """Chemical stock and assignment CRUD (excluding assignment approval). Rows 29–30."""
+
+    def has_permission(self, request, view):
+        return (
+            request.user
+            and request.user.is_authenticated
+            and request.user.role
+            in [
+                UserRole.SUPERVISOR,
+                UserRole.MANAGER,
+                UserRole.ADMIN,
+                UserRole.SUPER_ADMIN,
+            ]
+        )
+
+
+class CanApproveChemicalAssignment(permissions.BasePermission):
+    """Approve/reject chemical equipment assignment. Row 31 — not Supervisor."""
+
+    def has_permission(self, request, view):
+        return (
+            request.user
+            and request.user.is_authenticated
+            and request.user.role
+            in [UserRole.MANAGER, UserRole.ADMIN, UserRole.SUPER_ADMIN]
+        )
+
+
+class CanManageFilterConfiguration(permissions.BasePermission):
+    """Filter categories, register mutations, assignments, schedule CRUD (not schedule approval). Rows 32–33, 35–36."""
+
+    def has_permission(self, request, view):
+        return (
+            request.user
+            and request.user.is_authenticated
+            and request.user.role
+            in [
+                UserRole.SUPERVISOR,
+                UserRole.MANAGER,
+                UserRole.ADMIN,
+                UserRole.SUPER_ADMIN,
+            ]
+        )
+
+
+class CanApproveFilterRegister(permissions.BasePermission):
+    """Approve/reject filter register (FilterMaster). Manager+."""
+
+    def has_permission(self, request, view):
+        return (
+            request.user
+            and request.user.is_authenticated
+            and request.user.role
+            in [UserRole.MANAGER, UserRole.ADMIN, UserRole.SUPER_ADMIN]
+        )
+
+
+class CanApproveFilterSchedule(permissions.BasePermission):
+    """Approve/reject filter schedules. Row 34."""
+
+    def has_permission(self, request, view):
+        return (
+            request.user
+            and request.user.is_authenticated
+            and request.user.role
+            in [UserRole.MANAGER, UserRole.ADMIN, UserRole.SUPER_ADMIN]
         )

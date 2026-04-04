@@ -455,10 +455,9 @@ class UserViewSet(viewsets.ModelViewSet):
         """Soft delete a user."""
         instance = self.get_object()
 
-        # Only Super Admin can delete users
-        if request.user.role != UserRole.SUPER_ADMIN:
+        if request.user.role not in (UserRole.SUPER_ADMIN, UserRole.ADMIN):
             return Response(
-                {'error': 'Only Super Admin can delete users.'},
+                {'error': 'Only Super Admin or Admin can delete users.'},
                 status=status.HTTP_403_FORBIDDEN
             )
         

@@ -14,6 +14,8 @@ export interface User {
   must_change_password?: boolean;
   password_expired?: boolean;
   siteId?: string;
+  assigned_department?: string | null;
+  assigned_equipment?: string | null;
   created_at?: string;
   updated_at?: string;
 }

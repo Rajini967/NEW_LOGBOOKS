@@ -227,3 +227,45 @@ class ChillerMissingSlotsRangeTests(APITestCase):
         self.assertIsNotNone(row)
         # No open draft: full missing count except the one maintenance hour → 23.
         self.assertEqual(row.get("missing_slot_count"), 23)
+
+
+class ChillerLogDestroyPermissionTests(APITestCase):
+    def setUp(self):
+        self.operator = User.objects.create_user(
+            email="op-del@example.com",
+            password="testpass123",
+            role=UserRole.OPERATOR,
+            name="Op",
+            is_active=True,
+        )
+        self.super_admin = User.objects.create_user(
+            email="sa-del@example.com",
+            password="testpass123",
+            role=UserRole.SUPER_ADMIN,
+            name="SA",
+            is_active=True,
+            is_staff=True,
+            is_superuser=True,
+        )
+        self.log = ChillerLog.objects.create(
+            equipment_id="CH-DEL",
+            site_id="S1",
+            remarks="x",
+            operator=self.operator,
+            operator_name="Op",
+            status="pending",
+        )
+
+    def test_operator_cannot_delete_chiller_log(self):
+        url = reverse("chiller-log-detail", kwargs={"pk": str(self.log.id)})
+        self.client.force_authenticate(user=self.operator)
+        response = self.client.delete(url)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertTrue(ChillerLog.objects.filter(pk=self.log.pk).exists())
+
+    def test_super_admin_can_delete_chiller_log(self):
+        url = reverse("chiller-log-detail", kwargs={"pk": str(self.log.pk)})
+        self.client.force_authenticate(user=self.super_admin)
+        response = self.client.delete(url)
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(ChillerLog.objects.filter(pk=self.log.pk).exists())
