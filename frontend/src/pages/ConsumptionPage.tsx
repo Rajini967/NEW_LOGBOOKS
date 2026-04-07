@@ -19,6 +19,8 @@ import {
   equipmentAPI,
   chillerLimitsAPI,
   boilerLimitsAPI,
+  chemicalAssignmentAPI,
+  chemicalLimitsAPI,
 } from '@/lib/api';
 
 const toDateStr = (d: Date) => format(d, 'yyyy-MM-dd');
@@ -45,6 +47,27 @@ function pickChillerLimitForDate(rows: ChillerLimitRow[], forDate: string): Chil
   const exact = rows.find((r) => chillerLimitEffectiveDateKey(r) === d);
   if (exact) return exact;
   return rows.find((r) => chillerLimitEffectiveDateKey(r) == null) ?? null;
+}
+
+type ChemicalLimitRow = {
+  equipment_name?: string;
+  chemical_name?: string;
+  effective_from?: string | null;
+  price?: number | null;
+};
+
+function chemicalLimitEffectiveDateKey(row: ChemicalLimitRow): string | null {
+  const raw = row.effective_from;
+  if (raw == null || raw === '') return null;
+  return String(raw).slice(0, 10);
+}
+
+function pickChemicalLimitForDate(rows: ChemicalLimitRow[], forDate: string): ChemicalLimitRow | null {
+  if (!rows.length) return null;
+  const d = forDate.slice(0, 10);
+  const exact = rows.find((r) => chemicalLimitEffectiveDateKey(r) === d);
+  if (exact) return exact;
+  return rows.find((r) => chemicalLimitEffectiveDateKey(r) == null) ?? null;
 }
 
 export default function ConsumptionPage() {
@@ -99,9 +122,15 @@ export default function ConsumptionPage() {
   const [boilerRateRsPerKwh, setBoilerRateRsPerKwh] = useState<number | null>(null);
 
   // Chemical
-  const [chemicalForm, setChemicalForm] = useState({ chemical_kg: 0 });
+  const [chemicalForm, setChemicalForm] = useState({ quantity_kg: 0, price_rs: 0 });
   const [chemicalFormLoading, setChemicalFormLoading] = useState(false);
   const [chemicalSaving, setChemicalSaving] = useState(false);
+  const [chemicalAssignments, setChemicalAssignments] = useState<any[]>([]);
+  const [chemicalEquipmentOptions, setChemicalEquipmentOptions] = useState<string[]>([]);
+  const [selectedChemicalEquipment, setSelectedChemicalEquipment] = useState('');
+  const [chemicalNameOptions, setChemicalNameOptions] = useState<string[]>([]);
+  const [selectedChemicalName, setSelectedChemicalName] = useState('');
+  const [chemicalPrice, setChemicalPrice] = useState<number | null>(null);
 
   useEffect(() => {
     const loadChillerEquipment = async () => {
@@ -180,6 +209,50 @@ export default function ConsumptionPage() {
     };
     loadBoilerEquipment();
   }, []);
+
+  useEffect(() => {
+    const loadChemicalAssignments = async () => {
+      try {
+        const rows = (await chemicalAssignmentAPI.list()) as any[];
+        const approvedRows = (rows || []).filter((r) => r?.is_active !== false && r?.status === 'approved');
+        setChemicalAssignments(approvedRows);
+        const equipmentNames = Array.from(
+          new Set(
+            approvedRows
+              .map((r) => String(r?.equipment_name || '').trim())
+              .filter(Boolean),
+          ),
+        ).sort((a, b) => a.localeCompare(b));
+        setChemicalEquipmentOptions(equipmentNames);
+        if (equipmentNames.length > 0) {
+          setSelectedChemicalEquipment((prev) => prev || equipmentNames[0]);
+        }
+      } catch {
+        setChemicalAssignments([]);
+        setChemicalEquipmentOptions([]);
+        setSelectedChemicalEquipment('');
+      }
+    };
+    loadChemicalAssignments();
+  }, []);
+
+  useEffect(() => {
+    if (!selectedChemicalEquipment) {
+      setChemicalNameOptions([]);
+      setSelectedChemicalName('');
+      return;
+    }
+    const names = Array.from(
+      new Set(
+        chemicalAssignments
+          .filter((r) => String(r?.equipment_name || '').trim() === selectedChemicalEquipment)
+          .map((r) => String(r?.chemical_name || '').trim())
+          .filter(Boolean),
+      ),
+    ).sort((a, b) => a.localeCompare(b));
+    setChemicalNameOptions(names);
+    setSelectedChemicalName((prev) => (prev && names.includes(prev) ? prev : (names[0] || '')));
+  }, [chemicalAssignments, selectedChemicalEquipment]);
 
   // Load chiller form when equipment or date changes
   useEffect(() => {
@@ -310,22 +383,45 @@ export default function ConsumptionPage() {
       .catch(() => setBoilerRateRsPerKwh(null));
   }, [selectedBoiler]);
 
-  // Load chemical form when date changes
+  // Load chemical form when equipment/chemical/date changes
   useEffect(() => {
+    if (!selectedChemicalEquipment || !selectedChemicalName) return;
     setChemicalFormLoading(true);
     dashboardSummaryAPI
       .getDailyConsumption({
         date_from: chemicalDate,
         date_to: chemicalDate,
+        equipment_id: selectedChemicalEquipment,
+        chemical_name: selectedChemicalName,
         type: 'chemical',
       })
       .then((res) => {
         const row = (res.chemical ?? [])[0];
-        setChemicalForm({ chemical_kg: row?.chemical_kg ?? 0 });
+        setChemicalForm({
+          quantity_kg: row?.quantity_kg ?? row?.chemical_kg ?? 0,
+          price_rs: row?.price_rs ?? 0,
+        });
       })
-      .catch(() => setChemicalForm({ chemical_kg: 0 }))
+      .catch(() => {
+        setChemicalForm({ quantity_kg: 0, price_rs: 0 });
+      })
       .finally(() => setChemicalFormLoading(false));
-  }, [chemicalDate]);
+  }, [chemicalDate, selectedChemicalEquipment, selectedChemicalName]);
+
+  useEffect(() => {
+    if (!selectedChemicalEquipment || !selectedChemicalName) {
+      setChemicalPrice(null);
+      return;
+    }
+    chemicalLimitsAPI
+      .list({ equipment_name: selectedChemicalEquipment, chemical_name: selectedChemicalName })
+      .then((rows: any) => {
+        const picked = pickChemicalLimitForDate((rows || []) as ChemicalLimitRow[], chemicalDate);
+        const fromLimits = picked && typeof picked.price === 'number' ? picked.price : null;
+        setChemicalPrice(fromLimits);
+      })
+      .catch(() => setChemicalPrice(null));
+  }, [selectedChemicalEquipment, selectedChemicalName, chemicalDate]);
 
   const saveChiller = async () => {
     if (!selectedChiller) return;
@@ -397,12 +493,20 @@ export default function ConsumptionPage() {
   };
 
   const saveChemical = async () => {
+    if (!selectedChemicalEquipment || !selectedChemicalName) return;
     setChemicalSaving(true);
     try {
       await dashboardSummaryAPI.saveDailyConsumption({
         type: 'chemical',
         date: chemicalDate,
-        chemical_kg: chemicalForm.chemical_kg,
+        equipment_id: selectedChemicalEquipment,
+        chemical_name: selectedChemicalName,
+        quantity_kg: chemicalForm.quantity_kg,
+        // Persist computed amount (quantity × unit price from Settings).
+        price_rs:
+          chemicalPrice != null
+            ? Number((chemicalForm.quantity_kg * chemicalPrice).toFixed(2))
+            : 0,
       });
       toast.success('Chemical consumption saved');
     } catch (e: unknown) {
@@ -664,26 +768,74 @@ export default function ConsumptionPage() {
           <div className="space-y-4">
             <div className="flex flex-wrap gap-4 items-end">
               <div className="space-y-1">
+                <Label>Select equipment</Label>
+                <Select value={selectedChemicalEquipment} onValueChange={setSelectedChemicalEquipment}>
+                  <SelectTrigger className="w-full min-w-[220px]">
+                    <SelectValue placeholder="Select equipment" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {chemicalEquipmentOptions.map((equipmentName) => (
+                      <SelectItem key={equipmentName} value={equipmentName}>
+                        {equipmentName}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
                 <Label>Date</Label>
                 <Input type="date" max={todayDate} value={chemicalDate} onChange={(e) => setChemicalDate(e.target.value)} className="w-40" />
               </div>
             </div>
-            <div className="border border-border rounded-lg p-4 space-y-4 max-w-md">
+            <div className="border border-border rounded-lg p-4 space-y-4">
+              {selectedChemicalEquipment && selectedChemicalName && (
+                <h4 className="font-medium text-foreground">{selectedChemicalEquipment} - {selectedChemicalName}</h4>
+              )}
               {chemicalFormLoading ? (
                 <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
                   <Loader2 className="w-4 h-4 animate-spin" />
                   Loading…
                 </div>
               ) : (
-                <div className="space-y-1">
-                  <Label className="text-xs">Chemical consumption (kg)</Label>
-                  <Input
-                    type="number"
-                    min={0}
-                    step="any"
-                    value={chemicalForm.chemical_kg === 0 ? '' : chemicalForm.chemical_kg}
-                    onChange={(e) => setChemicalForm((p) => ({ ...p, chemical_kg: e.target.value === '' ? 0 : parseFloat(e.target.value) || 0 }))}
-                  />
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div className="space-y-1">
+                    <Label className="text-xs">Select chemical</Label>
+                    <Select value={selectedChemicalName} onValueChange={setSelectedChemicalName}>
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="Select chemical" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {chemicalNameOptions.map((chemicalName) => (
+                          <SelectItem key={chemicalName} value={chemicalName}>
+                            {chemicalName}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Quantity (kg)</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      step="any"
+                      value={chemicalForm.quantity_kg === 0 ? '' : chemicalForm.quantity_kg}
+                      onChange={(e) => setChemicalForm((p) => ({ ...p, quantity_kg: e.target.value === '' ? 0 : parseFloat(e.target.value) || 0 }))}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Price</Label>
+                    <Input
+                      type="text"
+                      readOnly
+                      className="bg-muted/50"
+                      value={
+                        chemicalPrice != null
+                          ? `₹ ${(chemicalForm.quantity_kg * chemicalPrice).toFixed(2)}`
+                          : 'No price in Settings for this date'
+                      }
+                    />
+                  </div>
                 </div>
               )}
               <Button size="sm" variant="default" disabled={chemicalSaving || chemicalFormLoading} onClick={saveChemical}>

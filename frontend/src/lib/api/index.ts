@@ -18,6 +18,7 @@ export {
   chemicalStockAPI,
   chemicalAssignmentAPI,
   chemicalDashboardAPI,
+  chemicalLimitsAPI,
 } from "./modules/chemical";
 export {
   chillerLogAPI,

@@ -32,6 +32,8 @@ interface ChemicalDashboardSectionProps {
   onDateChange?: (value: string) => void;
   selectedEquipmentName?: string;
   onSelectedEquipmentNameChange?: (value: string) => void;
+  selectedChemicalName?: string;
+  onSelectedChemicalNameChange?: (value: string) => void;
   showToolbar?: boolean;
   className?: string;
   onEquipmentOptionsChange?: (options: { value: string; label: string }[]) => void;
@@ -66,6 +68,8 @@ export function ChemicalDashboardSection({
   onDateChange,
   selectedEquipmentName: selectedEquipmentNameProp,
   onSelectedEquipmentNameChange,
+  selectedChemicalName: selectedChemicalNameProp,
+  onSelectedChemicalNameChange,
   showToolbar = true,
   className,
   onEquipmentOptionsChange,
@@ -73,12 +77,15 @@ export function ChemicalDashboardSection({
   const [periodTypeState, setPeriodTypeState] = useState<PeriodType>('month');
   const [dateState, setDateState] = useState<string>(getDefaultDate());
   const [selectedEquipmentNameState, setSelectedEquipmentNameState] = useState<string>('');
+  const [selectedChemicalNameState, setSelectedChemicalNameState] = useState<string>('');
   const periodType = periodTypeProp ?? periodTypeState;
   const setPeriodType = onPeriodTypeChange ?? setPeriodTypeState;
   const date = dateProp ?? dateState;
   const setDate = onDateChange ?? setDateState;
   const selectedEquipmentName = selectedEquipmentNameProp ?? selectedEquipmentNameState;
   const setSelectedEquipmentName = onSelectedEquipmentNameChange ?? setSelectedEquipmentNameState;
+  const selectedChemicalName = selectedChemicalNameProp ?? selectedChemicalNameState;
+  const setSelectedChemicalName = onSelectedChemicalNameChange ?? setSelectedChemicalNameState;
   const [equipmentOptions, setEquipmentOptions] = useState<{ value: string; label: string }[]>([]);
   const [summary, setSummary] = useState<ChemicalDashboardSummary | null>(null);
   const [series, setSeries] = useState<ChemicalDashboardSeriesPoint[]>([]);
@@ -118,6 +125,7 @@ export function ChemicalDashboardSection({
           periodType,
           date,
           equipmentName: selectedEquipmentName || undefined,
+          chemicalName: selectedChemicalName || undefined,
         });
         setSummary(data);
       } catch (e: unknown) {
@@ -130,7 +138,7 @@ export function ChemicalDashboardSection({
         if (!background) setLoading(false);
       }
     },
-    [periodType, date, selectedEquipmentName]
+    [periodType, date, selectedEquipmentName, selectedChemicalName]
   );
 
   const fetchSeries = useCallback(async () => {
@@ -139,13 +147,14 @@ export function ChemicalDashboardSection({
         periodType,
         date,
         equipmentName: selectedEquipmentName || undefined,
+        chemicalName: selectedChemicalName || undefined,
         days: periodType === 'day' ? 1 : undefined,
       });
       setSeries(data.series || []);
     } catch {
       setSeries([]);
     }
-  }, [periodType, date, selectedEquipmentName]);
+  }, [periodType, date, selectedEquipmentName, selectedChemicalName]);
 
   useEffect(() => {
     fetchSummary();
@@ -267,6 +276,15 @@ export function ChemicalDashboardSection({
           </SelectContent>
         </Select>
       </div>
+      <div className="flex items-center gap-2">
+        <Label className="text-xs text-muted-foreground whitespace-nowrap sm:text-sm">Chemical</Label>
+        <Input
+          value={selectedChemicalName}
+          onChange={(e) => setSelectedChemicalName(e.target.value)}
+          className="h-9 w-[180px] sm:w-[200px]"
+          placeholder="All chemicals"
+        />
+      </div>
     </>
   );
 
@@ -332,7 +350,7 @@ export function ChemicalDashboardSection({
               formatTooltip={(value) => [`${Number(value).toFixed(2)} kg`, '']}
               tableRows={consumptionTableRows}
               emptyMessage="No consumption data for this period."
-              chartType="area-dual"
+              chartType="grouped-bar"
               rowVariant="soft"
               tableZebra
               comparisonHsl="220, 48%, 40%"
@@ -382,7 +400,7 @@ export function ChemicalDashboardSection({
               ]}
               tableRows={costTableRows}
               emptyMessage="No cost data for this period."
-              chartType="area-dual"
+              chartType="grouped-bar"
               rowVariant="elevated"
               comparisonHsl="38, 62%, 44%"
             />

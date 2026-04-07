@@ -26,9 +26,10 @@ import {
   Lock,
   Thermometer,
   Flame,
+  Droplets,
 } from 'lucide-react';
 import { toast } from '@/lib/toast';
-import { authAPI, equipmentCategoryAPI, equipmentAPI, chillerLimitsAPI, boilerLimitsAPI } from '@/lib/api';
+import { authAPI, equipmentCategoryAPI, equipmentAPI, chillerLimitsAPI, boilerLimitsAPI, chemicalLimitsAPI, chemicalAssignmentAPI } from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
 import type { LogEntryIntervalType } from '@/types';
 
@@ -74,6 +75,28 @@ export default function SettingsPage() {
   const [boilerLimitsLoading, setBoilerLimitsLoading] = useState(false);
   const [boilerLimitSaving, setBoilerLimitSaving] = useState<string | null>(null);
   const [selectedBoilerForLimits, setSelectedBoilerForLimits] = useState<string>('');
+  type ChemicalLimitRow = {
+    id?: string;
+    equipment_name?: string;
+    chemical_name?: string;
+    effective_from?: string | null;
+    quantity?: number | null;
+    price?: number | null;
+  };
+  const [chemicalAssignments, setChemicalAssignments] = useState<any[]>([]);
+  const [chemicalEquipmentOptions, setChemicalEquipmentOptions] = useState<string[]>([]);
+  const [selectedChemicalEquipment, setSelectedChemicalEquipment] = useState<string>('');
+  const [chemicalNameOptions, setChemicalNameOptions] = useState<string[]>([]);
+  const [selectedChemicalName, setSelectedChemicalName] = useState<string>('');
+  const [chemicalLimits, setChemicalLimits] = useState<ChemicalLimitRow>({
+    equipment_name: '',
+    chemical_name: '',
+    effective_from: null,
+    quantity: null,
+    price: null,
+  });
+  const [chemicalLimitsLoading, setChemicalLimitsLoading] = useState(false);
+  const [chemicalLimitSaving, setChemicalLimitSaving] = useState(false);
 
   const emptyChillerLimit = (): ChillerLimitRow => ({
     equipment_id: undefined,
@@ -220,6 +243,79 @@ export default function SettingsPage() {
         ...prev,
         [equipmentNumber]: { ...emptyBoilerLimit(), effective_from: selectedDate ?? null },
       }));
+    }
+  };
+
+  const emptyChemicalLimit = (): ChemicalLimitRow => ({
+    equipment_name: '',
+    chemical_name: '',
+    effective_from: null,
+    quantity: null,
+    price: null,
+  });
+
+  const toChemicalLimitState = (limit: ChemicalLimitRow): ChemicalLimitRow => ({
+    id: limit.id,
+    equipment_name: limit.equipment_name ?? '',
+    chemical_name: limit.chemical_name ?? '',
+    effective_from: limit.effective_from ?? null,
+    quantity: limit.quantity ?? null,
+    price: limit.price ?? null,
+  });
+
+  const getChemicalEffectiveDate = (limit: ChemicalLimitRow): string | null => {
+    const raw = limit.effective_from;
+    if (!raw) return null;
+    return String(raw).slice(0, 10);
+  };
+
+  const pickChemicalLimitForDate = (
+    rows: ChemicalLimitRow[],
+    selectedDate?: string | null,
+  ): ChemicalLimitRow | null => {
+    if (!rows.length) return null;
+    const date = (selectedDate ?? '').slice(0, 10);
+    if (date) {
+      const exact = rows.find((r) => getChemicalEffectiveDate(r) === date);
+      if (exact) return exact;
+      return null;
+    }
+    const nullDefault = rows.find((r) => !getChemicalEffectiveDate(r));
+    if (nullDefault) return nullDefault;
+    return null;
+  };
+
+  const loadChemicalLimitForDate = async (
+    equipmentName: string,
+    chemicalName: string,
+    selectedDate?: string | null,
+  ) => {
+    setChemicalLimitsLoading(true);
+    try {
+      const rows = (await chemicalLimitsAPI.list({
+        equipment_name: equipmentName,
+        chemical_name: chemicalName,
+      })) as ChemicalLimitRow[];
+      const picked = pickChemicalLimitForDate(rows, selectedDate);
+      setChemicalLimits(
+        picked
+          ? toChemicalLimitState(picked)
+          : {
+            ...emptyChemicalLimit(),
+            equipment_name: equipmentName,
+            chemical_name: chemicalName,
+            effective_from: selectedDate ?? null,
+          },
+      );
+    } catch {
+      setChemicalLimits({
+        ...emptyChemicalLimit(),
+        equipment_name: equipmentName,
+        chemical_name: chemicalName,
+        effective_from: selectedDate ?? null,
+      });
+    } finally {
+      setChemicalLimitsLoading(false);
     }
   };
 
@@ -374,6 +470,91 @@ export default function SettingsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedBoilerForLimits]);
 
+  useEffect(() => {
+    const loadChemicalEquipment = async () => {
+      setChemicalLimitsLoading(true);
+      try {
+        const assignments = (await chemicalAssignmentAPI.list()) as any[];
+        setChemicalAssignments(assignments || []);
+        const approvedEquipment = Array.from(
+          new Set(
+            (assignments || [])
+              .filter((row) => row?.is_active !== false && row?.status === 'approved')
+              .map((row) => String(row?.equipment_name || '').trim())
+              .filter(Boolean),
+          ),
+        ).sort((a, b) => a.localeCompare(b));
+        setChemicalEquipmentOptions(approvedEquipment);
+        const first = approvedEquipment[0] ?? '';
+        setSelectedChemicalEquipment(first);
+        const firstChemicals = Array.from(
+          new Set(
+            (assignments || [])
+              .filter((row) => row?.is_active !== false && row?.status === 'approved' && String(row?.equipment_name || '').trim() === first)
+              .map((row) => String(row?.chemical_name || '').trim())
+              .filter(Boolean),
+          ),
+        ).sort((a, b) => a.localeCompare(b));
+        setChemicalNameOptions(firstChemicals);
+        const firstChemical = firstChemicals[0] ?? '';
+        setSelectedChemicalName(firstChemical);
+        if (first && firstChemical) {
+          await loadChemicalLimitForDate(first, firstChemical, null);
+        } else {
+          setChemicalLimits({ ...emptyChemicalLimit(), equipment_name: first, chemical_name: firstChemical });
+        }
+      } catch (error) {
+        console.error('Failed to load chemical assignment equipment', error);
+        setChemicalAssignments([]);
+        setChemicalEquipmentOptions([]);
+        setSelectedChemicalEquipment('');
+        setChemicalNameOptions([]);
+        setSelectedChemicalName('');
+        setChemicalLimits({ ...emptyChemicalLimit(), equipment_name: '', chemical_name: '' });
+      } finally {
+        setChemicalLimitsLoading(false);
+      }
+    };
+    void loadChemicalEquipment();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!selectedChemicalEquipment) return;
+    const names = Array.from(
+      new Set(
+        (chemicalAssignments || [])
+          .filter((row) => row?.is_active !== false && row?.status === 'approved' && String(row?.equipment_name || '').trim() === selectedChemicalEquipment)
+          .map((row) => String(row?.chemical_name || '').trim())
+          .filter(Boolean),
+      ),
+    ).sort((a, b) => a.localeCompare(b));
+    setChemicalNameOptions(names);
+    const nextChemical = names.includes(selectedChemicalName) ? selectedChemicalName : (names[0] ?? '');
+    setSelectedChemicalName(nextChemical);
+    if (nextChemical) {
+      const selectedDate = chemicalLimits.effective_from ?? null;
+      void loadChemicalLimitForDate(selectedChemicalEquipment, nextChemical, selectedDate);
+    } else {
+      setChemicalLimits((prev) => ({
+        ...prev,
+        equipment_name: selectedChemicalEquipment,
+        chemical_name: '',
+        effective_from: null,
+        quantity: null,
+        price: null,
+      }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedChemicalEquipment]);
+
+  useEffect(() => {
+    if (!selectedChemicalEquipment || !selectedChemicalName) return;
+    const selectedDate = chemicalLimits.effective_from ?? null;
+    void loadChemicalLimitForDate(selectedChemicalEquipment, selectedChemicalName, selectedDate);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedChemicalName]);
+
   const handleSaveChillerLimits = async (equipmentNumber: string) => {
     setChillerLimitSaving(equipmentNumber);
     try {
@@ -438,6 +619,48 @@ export default function SettingsPage() {
       toast.error(error?.message || 'Failed to save boiler limits');
     } finally {
       setBoilerLimitSaving(null);
+    }
+  };
+
+  const handleSaveChemicalLimits = async () => {
+    if (!selectedChemicalEquipment) {
+      toast.error('Select equipment from approved chemical assignment');
+      return;
+    }
+    if (!selectedChemicalName) {
+      toast.error('Select chemical for the selected equipment');
+      return;
+    }
+    setChemicalLimitSaving(true);
+    try {
+      const data = chemicalLimits ?? {};
+      const payload = {
+        equipment_name: selectedChemicalEquipment,
+        chemical_name: selectedChemicalName,
+        effective_from: data.effective_from ?? null,
+        quantity: data.quantity ?? null,
+        price: data.price ?? null,
+      };
+      const rows = (await chemicalLimitsAPI.list({
+        equipment_name: selectedChemicalEquipment,
+        chemical_name: selectedChemicalName,
+      })) as ChemicalLimitRow[];
+      const selectedDate = (data.effective_from ?? '').toString().slice(0, 10) || null;
+      const existing = rows.find((r) => {
+        const rDate = (r.effective_from ?? '').toString().slice(0, 10) || null;
+        return rDate === selectedDate;
+      });
+      if (existing?.id) {
+        await chemicalLimitsAPI.update(existing.id, payload);
+      } else {
+        await chemicalLimitsAPI.create(payload);
+      }
+      toast.success(`Chemical daily limits saved for ${selectedChemicalEquipment} / ${selectedChemicalName}`);
+      await loadChemicalLimitForDate(selectedChemicalEquipment, selectedChemicalName, selectedDate);
+    } catch (error: any) {
+      toast.error(error?.message || 'Failed to save chemical daily limits');
+    } finally {
+      setChemicalLimitSaving(false);
     }
   };
 
@@ -1121,6 +1344,118 @@ export default function SettingsPage() {
                   </div>
                 );
               })()}
+            </div>
+          )}
+        </div>
+
+        {/* Chemical daily limits */}
+        <div className="bg-card rounded-lg border border-border p-6">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="w-10 h-10 rounded-lg bg-accent/10 flex items-center justify-center">
+              <Droplets className="w-5 h-5 text-accent" />
+            </div>
+            <div>
+              <h3 className="text-lg font-semibold text-foreground">Chemical daily limits</h3>
+              <p className="text-sm text-muted-foreground">Configure date-wise chemical quantity and price limits.</p>
+            </div>
+          </div>
+          {chemicalLimitsLoading ? (
+            <p className="text-sm text-muted-foreground">Loading chemical limits…</p>
+          ) : chemicalEquipmentOptions.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No approved equipment found in Chemical Assignment.</p>
+          ) : (
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label>Select equipment</Label>
+                <Select value={selectedChemicalEquipment} onValueChange={setSelectedChemicalEquipment}>
+                  <SelectTrigger className="w-full max-w-sm">
+                    <SelectValue placeholder="Select equipment" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {chemicalEquipmentOptions.map((equipmentName) => (
+                      <SelectItem key={equipmentName} value={equipmentName}>
+                        {equipmentName}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">Equipment list is fetched from approved Chemical Assignment.</p>
+              </div>
+
+              {selectedChemicalEquipment && selectedChemicalName && (
+                <div className="border border-border rounded-lg p-4 space-y-4">
+                  <h4 className="font-medium text-foreground">{selectedChemicalEquipment} - {selectedChemicalName}</h4>
+
+                  <div className="space-y-2 pb-2 border-b border-border">
+                    <Label className="text-sm font-medium text-foreground">Effective from (date)</Label>
+                    <Input
+                      type="date"
+                      className="max-w-xs"
+                      max={todayDate}
+                      value={(chemicalLimits.effective_from ?? '').toString().slice(0, 10)}
+                      onChange={(e) => {
+                        const v = e.target.value || null;
+                        setChemicalLimits((prev) => ({ ...prev, effective_from: v ?? undefined }));
+                        void loadChemicalLimitForDate(selectedChemicalEquipment, selectedChemicalName, v);
+                      }}
+                    />
+                    <p className="text-xs text-muted-foreground">Leave blank to apply to all dates.</p>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div className="space-y-2">
+                      <Label>Select chemical</Label>
+                      <Select value={selectedChemicalName} onValueChange={setSelectedChemicalName}>
+                        <SelectTrigger className="w-full">
+                          <SelectValue placeholder="Select chemical" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {chemicalNameOptions.map((chemicalName) => (
+                            <SelectItem key={chemicalName} value={chemicalName}>
+                              {chemicalName}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted-foreground">Chemical list is filtered by selected equipment assignment.</p>
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label className="text-xs">Quantity</Label>
+                      <Input
+                        type="number"
+                        min={0}
+                        step="any"
+                        placeholder="No limit"
+                        value={chemicalLimits.quantity ?? ''}
+                        onChange={(e) => {
+                          const v = e.target.value === '' ? null : Number(e.target.value);
+                          setChemicalLimits((prev) => ({ ...prev, quantity: v ?? undefined }));
+                        }}
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label className="text-xs">Price</Label>
+                      <Input
+                        type="number"
+                        min={0}
+                        step="any"
+                        placeholder="No limit"
+                        value={chemicalLimits.price ?? ''}
+                        onChange={(e) => {
+                          const v = e.target.value === '' ? null : Number(e.target.value);
+                          setChemicalLimits((prev) => ({ ...prev, price: v ?? undefined }));
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  <Button size="sm" variant="accent" disabled={chemicalLimitSaving} onClick={handleSaveChemicalLimits}>
+                    {chemicalLimitSaving ? 'Saving…' : 'Save limits'}
+                  </Button>
+                </div>
+              )}
             </div>
           )}
         </div>

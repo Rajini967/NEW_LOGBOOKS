@@ -12,6 +12,7 @@ function unwrapPaginated<T>(payload: unknown): T[] {
 type ChemicalPrepRecord = Record<string, unknown>;
 type ChemicalStockRecord = Record<string, unknown>;
 type ChemicalAssignmentRecord = Record<string, unknown>;
+type ChemicalLimitRecord = Record<string, unknown>;
 
 export const chemicalPrepAPI = {
   list: async (
@@ -141,12 +142,26 @@ export const chemicalDashboardAPI = {
     const response = await api.get<{ equipment_names: string[] }>("/chemical-preps/equipment_names/");
     return response.data;
   },
-  getSummary: async (params: { periodType: "day" | "month" | "year"; date: string; equipmentName?: string | null }) => {
+  getChemicalNames: async (params?: { equipmentName?: string | null }): Promise<{ chemical_names: string[] }> => {
+    const response = await api.get<{ chemical_names: string[] }>("/chemical-preps/chemical_names/", {
+      params: {
+        ...(params?.equipmentName ? { equipment_name: params.equipmentName } : {}),
+      },
+    });
+    return response.data;
+  },
+  getSummary: async (params: {
+    periodType: "day" | "month" | "year";
+    date: string;
+    equipmentName?: string | null;
+    chemicalName?: string | null;
+  }) => {
     const response = await api.get("/chemical-preps/dashboard_summary/", {
       params: {
         period_type: params.periodType,
         date: params.date,
         ...(params.equipmentName ? { equipment_name: params.equipmentName } : {}),
+        ...(params.chemicalName ? { chemical_name: params.chemicalName } : {}),
       },
     });
     return response.data;
@@ -155,6 +170,7 @@ export const chemicalDashboardAPI = {
     periodType: "day" | "month" | "year";
     date: string;
     equipmentName?: string | null;
+    chemicalName?: string | null;
     days?: number;
   }) => {
     const response = await api.get("/chemical-preps/dashboard_series/", {
@@ -162,9 +178,40 @@ export const chemicalDashboardAPI = {
         period_type: params.periodType,
         date: params.date,
         ...(params.equipmentName ? { equipment_name: params.equipmentName } : {}),
+        ...(params.chemicalName ? { chemical_name: params.chemicalName } : {}),
         ...(params.days != null ? { days: params.days } : {}),
       },
     });
+    return response.data;
+  },
+};
+
+export const chemicalLimitsAPI = {
+  list: async (params?: { equipment_name?: string; chemical_name?: string }) => {
+    const response = await api.get("/chemical-limits/", { params });
+    return unwrapPaginated<ChemicalLimitRecord>(response.data);
+  },
+  create: async (data: {
+    equipment_name: string;
+    chemical_name: string;
+    effective_from?: string | null;
+    quantity?: number | null;
+    price?: number | null;
+  }) => {
+    const response = await api.post("/chemical-limits/", data);
+    return response.data;
+  },
+  update: async (
+    id: string,
+    data: Partial<{
+      equipment_name: string;
+      chemical_name: string;
+      effective_from: string | null;
+      quantity: number | null;
+      price: number | null;
+    }>,
+  ) => {
+    const response = await api.patch(`/chemical-limits/${encodeURIComponent(id)}/`, data);
     return response.data;
   },
 };

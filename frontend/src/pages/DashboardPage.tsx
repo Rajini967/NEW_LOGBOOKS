@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Header } from '@/components/layout/Header';
-import { MetricCard } from '@/components/dashboard/MetricCard';
 import { ChillerDashboardSection } from '@/components/dashboard/ChillerDashboardSection';
 import { BoilerDashboardSection } from '@/components/dashboard/BoilerDashboardSection';
 import { ChemicalDashboardSection } from '@/components/dashboard/ChemicalDashboardSection';
@@ -25,7 +24,16 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { chillerDashboardAPI, boilerDashboardAPI, chemicalDashboardAPI, filtersDashboardAPI, filterScheduleAPI } from '@/lib/api';
+import {
+  chillerDashboardAPI,
+  boilerDashboardAPI,
+  chemicalDashboardAPI,
+  filtersDashboardAPI,
+  filterScheduleAPI,
+  chillerLimitsAPI,
+  boilerLimitsAPI,
+  dashboardSummaryAPI,
+} from '@/lib/api';
 import {
   Thermometer,
   FlaskConical,
@@ -90,6 +98,8 @@ export default function DashboardPage() {
   const { data: dashboardSummary } = useDashboardSummaryQuery(true);
   const { data: overdueSummary } = useOverdueSummaryQuery(true);
   const [activeTab, setActiveTab] = useState('overview');
+  const [overviewDate, setOverviewDate] = useState(new Date().toISOString().slice(0, 10));
+  const [overviewPeriodType, setOverviewPeriodType] = useState<'day' | 'month' | 'year'>('day');
   const [showOverduePopup, setShowOverduePopup] = useState(false);
   const [overduePopupAcknowledged, setOverduePopupAcknowledged] = useState(false);
   const [chillerDate, setChillerDate] = useState(new Date().toISOString().slice(0, 10));
@@ -104,12 +114,16 @@ export default function DashboardPage() {
   const [chemicalDate, setChemicalDate] = useState(new Date().toISOString().slice(0, 10));
   const [chemicalPeriodType, setChemicalPeriodType] = useState<'day' | 'month' | 'year'>('month');
   const [chemicalEquipmentName, setChemicalEquipmentName] = useState('');
+  const [chemicalName, setChemicalName] = useState('');
   const [chemicalEquipmentOptions, setChemicalEquipmentOptions] = useState<{ value: string; label: string }[]>([]);
+  const [chemicalNameOptions, setChemicalNameOptions] = useState<{ value: string; label: string }[]>([]);
   const [filtersDate, setFiltersDate] = useState(new Date().toISOString().slice(0, 10));
   const [filtersPeriodType, setFiltersPeriodType] = useState<'week' | 'month'>('month');
   const [filtersEquipmentId, setFiltersEquipmentId] = useState('');
   const [filtersEquipmentOptions, setFiltersEquipmentOptions] = useState<{ value: string; label: string }[]>([]);
   const [overviewData, setOverviewData] = useState<OverviewData | null>(null);
+  const [overviewActualWaterLiters, setOverviewActualWaterLiters] = useState(0);
+  const [overviewProjectedWaterLiters, setOverviewProjectedWaterLiters] = useState(0);
   const [overdueByFilter, setOverdueByFilter] = useState<OverdueFilterGroup[]>([]);
   const overdueEntries = useMemo(
     () =>
@@ -178,15 +192,38 @@ export default function DashboardPage() {
 
   useEffect(() => {
     let cancelled = false;
+    (async () => {
+      try {
+        const { chemical_names } = await chemicalDashboardAPI.getChemicalNames({
+          equipmentName: chemicalEquipmentName || undefined,
+        });
+        if (cancelled) return;
+        const opts = (chemical_names || []).map((name) => ({ value: name, label: name }));
+        setChemicalNameOptions(opts);
+        setChemicalName((prev) => (prev && opts.some((o) => o.value === prev) ? prev : ''));
+      } catch {
+        if (!cancelled) {
+          setChemicalNameOptions([]);
+          setChemicalName('');
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [chemicalEquipmentName]);
+
+  useEffect(() => {
+    let cancelled = false;
     const loadOverview = async () => {
       try {
         const [chillerSummary, chillerSeries, boilerSummary, boilerSeries, chemicalSummary, filterSummary] =
           await Promise.all([
-            chillerDashboardAPI.getSummary({ periodType: chillerPeriodType, date: chillerDate, equipmentId: undefined }),
-            chillerDashboardAPI.getSeries({ periodType: chillerPeriodType, date: chillerDate }),
-            boilerDashboardAPI.getSummary({ periodType: boilerPeriodType, date: boilerDate, equipmentId: undefined }),
-            boilerDashboardAPI.getSeries({ periodType: boilerPeriodType, date: boilerDate }),
-            chemicalDashboardAPI.getSummary({ periodType: chemicalPeriodType, date: chemicalDate }),
+            chillerDashboardAPI.getSummary({ periodType: overviewPeriodType, date: overviewDate, equipmentId: undefined }),
+            chillerDashboardAPI.getSeries({ periodType: overviewPeriodType, date: overviewDate }),
+            boilerDashboardAPI.getSummary({ periodType: overviewPeriodType, date: overviewDate, equipmentId: undefined }),
+            boilerDashboardAPI.getSeries({ periodType: overviewPeriodType, date: overviewDate }),
+            chemicalDashboardAPI.getSummary({ periodType: overviewPeriodType, date: overviewDate }),
             filtersDashboardAPI.getSummary({ periodType: filtersPeriodType, date: filtersDate }),
           ]);
         if (!cancelled) setOverviewData({ chillerSummary, chillerSeries, boilerSummary, boilerSeries, chemicalSummary, filterSummary });
@@ -200,7 +237,119 @@ export default function DashboardPage() {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [chillerDate, chillerPeriodType, boilerDate, boilerPeriodType, chemicalDate, chemicalPeriodType, filtersDate, filtersPeriodType]);
+  }, [overviewDate, overviewPeriodType, filtersDate, filtersPeriodType]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const daysInSelectedPeriod = (period: 'day' | 'month' | 'year', dateStr: string) => {
+      const d = new Date(`${dateStr}T00:00:00`);
+      if (period === 'day') return 1;
+      if (period === 'month') return new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+      return new Date(d.getFullYear(), 11, 31).getDate() === 31 &&
+        new Date(d.getFullYear(), 1, 29).getMonth() === 1
+        ? 366
+        : 365;
+    };
+
+    (async () => {
+      try {
+        const days = daysInSelectedPeriod(overviewPeriodType, overviewDate);
+        const d = new Date(`${overviewDate}T00:00:00`);
+        const start =
+          overviewPeriodType === 'day'
+            ? overviewDate
+            : overviewPeriodType === 'month'
+              ? new Date(d.getFullYear(), d.getMonth(), 1).toISOString().slice(0, 10)
+              : new Date(d.getFullYear(), 0, 1).toISOString().slice(0, 10);
+        const end =
+          overviewPeriodType === 'day'
+            ? overviewDate
+            : overviewPeriodType === 'month'
+              ? new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().slice(0, 10)
+              : new Date(d.getFullYear(), 11, 31).toISOString().slice(0, 10);
+
+        const [chillerLimitsRaw, boilerLimitsRaw, chillerConsumption, boilerConsumption] = await Promise.all([
+          chillerLimitsAPI.list(),
+          boilerLimitsAPI.list(),
+          dashboardSummaryAPI.getDailyConsumption({ type: 'chiller', date_from: start, date_to: end }),
+          dashboardSummaryAPI.getDailyConsumption({ type: 'boiler', date_from: start, date_to: end }),
+        ]);
+        if (cancelled) return;
+
+        const chillerByEquipment = new Map<string, any[]>();
+        for (const row of (chillerLimitsRaw as any[]) || []) {
+          const eid = String(row?.equipment_id ?? '').trim();
+          if (!eid) continue;
+          if (!chillerByEquipment.has(eid)) chillerByEquipment.set(eid, []);
+          chillerByEquipment.get(eid)!.push(row);
+        }
+        let chillerPerDay = 0;
+        chillerByEquipment.forEach((rows) => {
+          let selected: any | null = null;
+          for (const row of rows) {
+            const eff = String(row?.effective_from ?? '').trim();
+            if (!eff) {
+              if (!selected) selected = row;
+              continue;
+            }
+            if (eff <= overviewDate && (!selected || String(selected?.effective_from ?? '') < eff)) {
+              selected = row;
+            }
+          }
+          if (!selected) return;
+          chillerPerDay += numberOrZero(selected.daily_water_ct1_liters)
+            + numberOrZero(selected.daily_water_ct2_liters)
+            + numberOrZero(selected.daily_water_ct3_liters);
+        });
+
+        const boilerByEquipment = new Map<string, any[]>();
+        for (const row of (boilerLimitsRaw as any[]) || []) {
+          const eid = String(row?.equipment_id ?? '').trim();
+          if (!eid) continue;
+          if (!boilerByEquipment.has(eid)) boilerByEquipment.set(eid, []);
+          boilerByEquipment.get(eid)!.push(row);
+        }
+        let boilerPerDay = 0;
+        boilerByEquipment.forEach((rows) => {
+          let selected: any | null = null;
+          for (const row of rows) {
+            const eff = String(row?.effective_from ?? '').trim();
+            if (!eff) {
+              if (!selected) selected = row;
+              continue;
+            }
+            if (eff <= overviewDate && (!selected || String(selected?.effective_from ?? '') < eff)) {
+              selected = row;
+            }
+          }
+          if (!selected) return;
+          boilerPerDay += numberOrZero(selected.daily_water_limit_liters);
+        });
+
+        const chillerRows = Array.isArray((chillerConsumption as any)?.chiller) ? (chillerConsumption as any).chiller : [];
+        const boilerRows = Array.isArray((boilerConsumption as any)?.boiler) ? (boilerConsumption as any).boiler : [];
+        const waterActual = chillerRows.reduce(
+          (sum: number, row: any) =>
+            sum +
+            numberOrZero(row?.water_ct1_l) +
+            numberOrZero(row?.water_ct2_l) +
+            numberOrZero(row?.water_ct3_l),
+          0
+        ) + boilerRows.reduce((sum: number, row: any) => sum + numberOrZero(row?.water_l), 0);
+        setOverviewActualWaterLiters(Number(waterActual.toFixed(2)));
+        setOverviewProjectedWaterLiters(Number(((chillerPerDay + boilerPerDay) * days).toFixed(2)));
+      } catch {
+        if (!cancelled) {
+          setOverviewActualWaterLiters(0);
+          setOverviewProjectedWaterLiters(0);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [overviewDate, overviewPeriodType]);
 
   const powerTrend = useMemo(() => {
     const c = overviewData?.chillerSeries?.series ?? [];
@@ -281,6 +430,10 @@ export default function DashboardPage() {
               <SelectTrigger className="h-8 w-[200px]"><SelectValue placeholder="All equipment" /></SelectTrigger>
               <SelectContent><SelectItem value="all">All equipment</SelectItem>{chemicalEquipmentOptions.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
             </Select>
+            <Select value={chemicalName || 'all'} onValueChange={(v) => setChemicalName(v === 'all' ? '' : v)}>
+              <SelectTrigger className="h-8 w-[200px]"><SelectValue placeholder="All chemicals" /></SelectTrigger>
+              <SelectContent><SelectItem value="all">All chemicals</SelectItem>{chemicalNameOptions.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
+            </Select>
           </>
         )}
         {activeTab === 'maintenance' && (
@@ -300,6 +453,67 @@ export default function DashboardPage() {
       </div>
     </div>
   );
+
+  const numberOrZero = (value: unknown): number => {
+    const n = Number(value ?? 0);
+    return Number.isFinite(n) ? n : 0;
+  };
+  const pickProjected = (obj: unknown, keys: string[]): number => {
+    const rec = (obj ?? {}) as Record<string, unknown>;
+    for (const key of keys) {
+      const raw = rec[key];
+      if (raw != null) return numberOrZero(raw);
+    }
+    return 0;
+  };
+
+  const projectedFuelLiquid =
+    numberOrZero((overviewData?.boilerSummary as any)?.projected_diesel_liters) +
+    numberOrZero((overviewData?.boilerSummary as any)?.projected_furnace_oil_liters);
+  const projectedFuelFallback = numberOrZero((overviewData?.boilerSummary as any)?.projected_brigade_kg);
+  const actualFuelLiquid =
+    numberOrZero((overviewData?.boilerSummary as any)?.actual_diesel_liters) +
+    numberOrZero((overviewData?.boilerSummary as any)?.actual_furnace_oil_liters);
+  const actualFuelFallback = numberOrZero((overviewData?.boilerSummary as any)?.actual_brigade_kg);
+
+  const overviewConsumptionCards = [
+    {
+      title: 'Power',
+      unit: 'kWh',
+      icon: Zap,
+      accent: 'bg-blue-500/10 text-blue-600 border-blue-500/20',
+      actual:
+        numberOrZero((overviewData?.chillerSummary as any)?.actual_power_kwh) +
+        numberOrZero((overviewData?.boilerSummary as any)?.actual_power_kwh),
+      projected:
+        numberOrZero((overviewData?.chillerSummary as any)?.projected_power_kwh) +
+        numberOrZero((overviewData?.boilerSummary as any)?.projected_power_kwh),
+    },
+    {
+      title: 'Water',
+      unit: 'L',
+      icon: Droplets,
+      accent: 'bg-cyan-500/10 text-cyan-600 border-cyan-500/20',
+      actual: overviewActualWaterLiters,
+      projected: overviewProjectedWaterLiters,
+    },
+    {
+      title: 'Fuel',
+      unit: 'L',
+      icon: Fuel,
+      accent: 'bg-amber-500/10 text-amber-600 border-amber-500/20',
+      actual: actualFuelLiquid > 0 ? actualFuelLiquid : actualFuelFallback,
+      projected: projectedFuelLiquid > 0 ? projectedFuelLiquid : projectedFuelFallback,
+    },
+    {
+      title: 'Chemical',
+      unit: 'kg',
+      icon: FlaskConical,
+      accent: 'bg-violet-500/10 text-violet-600 border-violet-500/20',
+      actual: numberOrZero((overviewData?.chemicalSummary as any)?.total_consumption_kg),
+      projected: numberOrZero((overviewData?.chemicalSummary as any)?.projected_consumption_kg),
+    },
+  ];
 
   return (
     <div className="min-h-screen">
@@ -328,16 +542,80 @@ export default function DashboardPage() {
           </TabsList>
           {activeTab !== 'overview' && topFilterBar}
           <TabsContent value="overview" className="space-y-3">
+            <div className="rounded-lg border border-border bg-card px-3 py-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <Input
+                  type="date"
+                  max={todayDate}
+                  value={overviewDate}
+                  onChange={(e) => setOverviewDate(e.target.value)}
+                  className="h-8 w-[145px]"
+                />
+                <div className="flex rounded-md border p-0.5">
+                  {(['day', 'month', 'year'] as const).map((p) => (
+                    <Button
+                      key={p}
+                      size="sm"
+                      variant={overviewPeriodType === p ? 'secondary' : 'ghost'}
+                      className="h-7 px-2 text-[10px]"
+                      onClick={() => setOverviewPeriodType(p)}
+                    >
+                      {p === 'day' ? 'D' : p === 'month' ? 'M' : 'Y'}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            </div>
             <DashboardSectionShell title="Operations overview" accentHsl="220,60%,35%">
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
-                <MetricCard title="Active Chillers" value={dashboardSummary?.active_chillers_count ?? '—'} unit="units" icon={Thermometer} sparklineData={powerTrend.map((p) => ({ value: p.actual }))} />
-                <MetricCard title="Active Boilers" value={dashboardSummary?.active_boilers_count ?? '—'} unit="units" icon={Zap} sparklineData={powerTrend.map((p) => ({ value: p.projected }))} />
-                <MetricCard title="Active Chemicals" value={dashboardSummary?.active_chemicals_count ?? '—'} unit="units" icon={FlaskConical} />
-                <MetricCard title="Active Filters" value={dashboardSummary?.active_filters_count ?? '—'} unit="units" icon={Filter} />
-                <MetricCard title="Power" value={dashboardSummary?.power_today_kwh ?? 0} unit="kWh" icon={Zap} />
-                <MetricCard title="Water" value={dashboardSummary?.water_today_liters ?? 0} unit="L" icon={Droplets} />
-                <MetricCard title="Fuel" value={dashboardSummary?.fuel_today_liters ?? 0} unit="L" icon={Fuel} />
-                <MetricCard title="Diesel" value={dashboardSummary?.diesel_today_liters ?? 0} unit="L" icon={Fuel} />
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+                {overviewConsumptionCards.map((card) => {
+                  const Icon = card.icon;
+                  const delta = card.actual - card.projected;
+                  const deltaLabel =
+                    delta === 0
+                      ? 'On target'
+                      : `${delta > 0 ? '+' : ''}${delta.toLocaleString('en-IN', { maximumFractionDigits: 2 })} ${card.unit}`;
+                  return (
+                    <div key={card.title} className="rounded-lg border border-border bg-card p-4 transition-colors hover:bg-muted/20">
+                      <div className="flex items-start justify-between">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{card.title}</p>
+                        <span className={`inline-flex h-8 w-8 items-center justify-center rounded-md border ${card.accent}`}>
+                          <Icon className="h-4 w-4" />
+                        </span>
+                      </div>
+                      <div className="mt-3 rounded-md border border-border bg-muted/30 p-2.5">
+                        <div className="space-y-2 text-sm">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-muted-foreground">Actual</span>
+                            <span className="font-semibold tabular-nums">
+                              {card.actual.toLocaleString('en-IN', { maximumFractionDigits: 2 })} {card.unit}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-muted-foreground">Projected</span>
+                            <span className="font-semibold tabular-nums">
+                              {card.projected.toLocaleString('en-IN', { maximumFractionDigits: 2 })} {card.unit}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="mt-3 flex items-center justify-between">
+                        <span className="text-xs text-muted-foreground">Difference</span>
+                        <span
+                          className={`inline-flex rounded-full px-2 py-1 text-[10px] font-medium ${
+                            delta > 0
+                              ? 'bg-amber-500/10 text-amber-700'
+                              : delta < 0
+                                ? 'bg-emerald-500/10 text-emerald-700'
+                                : 'bg-muted text-muted-foreground'
+                          }`}
+                        >
+                          {deltaLabel}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </DashboardSectionShell>
 
@@ -352,7 +630,7 @@ export default function DashboardPage() {
             </div>
           </TabsContent>
           <TabsContent value="chemicals" className="space-y-3">
-            <ChemicalDashboardSection periodType={chemicalPeriodType} onPeriodTypeChange={setChemicalPeriodType} date={chemicalDate} onDateChange={setChemicalDate} selectedEquipmentName={chemicalEquipmentName} onSelectedEquipmentNameChange={setChemicalEquipmentName} onEquipmentOptionsChange={setChemicalEquipmentOptions} showToolbar={false} />
+            <ChemicalDashboardSection periodType={chemicalPeriodType} onPeriodTypeChange={setChemicalPeriodType} date={chemicalDate} onDateChange={setChemicalDate} selectedEquipmentName={chemicalEquipmentName} onSelectedEquipmentNameChange={setChemicalEquipmentName} selectedChemicalName={chemicalName} onSelectedChemicalNameChange={setChemicalName} onEquipmentOptionsChange={setChemicalEquipmentOptions} showToolbar={false} />
           </TabsContent>
           <TabsContent value="maintenance" className="space-y-3">
             <FiltersDashboardSection

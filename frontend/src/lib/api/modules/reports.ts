@@ -88,6 +88,7 @@ export const dashboardSummaryAPI = {
     date_from?: string;
     date_to?: string;
     equipment_id?: string;
+    chemical_name?: string;
     type?: "chiller" | "boiler" | "chemical";
   }) => {
     const response = await api.get("/reports/daily_consumption/", {
@@ -99,12 +100,15 @@ export const dashboardSummaryAPI = {
     type: "chiller" | "boiler" | "chemical";
     date: string;
     equipment_id?: string;
+    chemical_name?: string;
     power_kwh?: number;
     water_ct1_l?: number;
     water_ct2_l?: number;
     water_ct3_l?: number;
     water_l?: number;
     chemical_kg?: number;
+    quantity_kg?: number;
+    price_rs?: number;
     diesel_l?: number;
     furnace_oil_l?: number;
     brigade_kg?: number;
