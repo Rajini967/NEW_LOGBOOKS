@@ -88,9 +88,6 @@ export const chillerLimitsAPI = {
     daily_water_ct1_liters?: number | null;
     daily_water_ct2_liters?: number | null;
     daily_water_ct3_liters?: number | null;
-    daily_chemical_ct1_kg?: number | null;
-    daily_chemical_ct2_kg?: number | null;
-    daily_chemical_ct3_kg?: number | null;
   }) => {
     const response = await api.post("/chiller-limits/", data);
     return response.data;
@@ -105,9 +102,6 @@ export const chillerLimitsAPI = {
       daily_water_ct1_liters: number | null;
       daily_water_ct2_liters: number | null;
       daily_water_ct3_liters: number | null;
-      daily_chemical_ct1_kg: number | null;
-      daily_chemical_ct2_kg: number | null;
-      daily_chemical_ct3_kg: number | null;
     }>,
   ) => {
     const response = await api.patch(`/chiller-limits/${encodeURIComponent(equipmentId)}/`, data);

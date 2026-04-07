@@ -25,11 +25,8 @@ type BaseApiLog = {
 
 type BoilerLikeLog = BaseApiLog & {
   equipment_id?: string | null;
-  feed_water_temp?: number | null;
-  oil_temp?: number | null;
-  steam_temp?: number | null;
+  /** Briquette logs only */
   steam_pressure?: number | null;
-  steam_flow_lph?: number | null;
   fo_hsd_ng_day_tank_level?: number | null;
   feed_water_tank_level?: number | null;
   fo_pre_heater_temp?: number | null;
@@ -147,11 +144,6 @@ export function mapBoilerLogPayload(log: BoilerLikeLog): {
     equipmentId: log.equipment_id,
     date,
     time,
-    feedWaterTemp: log.feed_water_temp,
-    oilTemp: log.oil_temp,
-    steamTemp: log.steam_temp,
-    steamPressure: log.steam_pressure,
-    steamFlowLPH: log.steam_flow_lph ?? undefined,
     foHsdNgDayTankLevel: log.fo_hsd_ng_day_tank_level ?? undefined,
     feedWaterTankLevel: log.feed_water_tank_level ?? undefined,
     foPreHeaterTemp: log.fo_pre_heater_temp ?? undefined,
@@ -333,16 +325,11 @@ export function mapFilterLogPayload(log: FilterLikeLog) {
 
 export function mapBoilerPreviousReadingPayload(log: BoilerLikeLog, equipmentType: "boiler" | "briquette") {
   const { timestamp, date, time } = toDateTime(log.timestamp);
-  return {
+  const base = {
     id: log.id,
     equipmentId: log.equipment_id,
     date,
     time,
-    feedWaterTemp: log.feed_water_temp,
-    oilTemp: log.oil_temp,
-    steamTemp: log.steam_temp,
-    steamPressure: log.steam_pressure,
-    steamFlowLPH: log.steam_flow_lph,
     remarks: log.remarks || "",
     comment: log.comment,
     checkedBy: log.operator_name,
@@ -360,6 +347,19 @@ export function mapBoilerPreviousReadingPayload(log: BoilerLikeLog, equipmentTyp
     activity_to_date: log.activity_to_date,
     activity_from_time: log.activity_from_time,
     activity_to_time: log.activity_to_time,
+  };
+  if (equipmentType === "briquette") {
+    return {
+      ...base,
+      steamPressure: log.steam_pressure ?? undefined,
+    };
+  }
+  return {
+    ...base,
+    foPreHeaterTemp: log.fo_pre_heater_temp ?? undefined,
+    stackTemperature: log.stack_temperature ?? undefined,
+    boilerSteamPressure: log.boiler_steam_pressure ?? undefined,
+    steamPressureAfterPrv: log.steam_pressure_after_prv ?? undefined,
   };
 }
 

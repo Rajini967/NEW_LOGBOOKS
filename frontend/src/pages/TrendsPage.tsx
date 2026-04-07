@@ -56,11 +56,6 @@ const CHILLER_PARAMS: { key: string; label: string }[] = [
 ];
 
 const BOILER_PARAMS: { key: string; label: string }[] = [
-  { key: 'feed_water_temp', label: 'Feed water temp (°C)' },
-  { key: 'oil_temp', label: 'Oil temp (°C)' },
-  { key: 'steam_temp', label: 'Steam temp (°C)' },
-  { key: 'steam_pressure', label: 'Steam pressure (bar)' },
-  { key: 'steam_flow_lph', label: 'Steam flow (LPH)' },
   { key: 'fo_hsd_ng_day_tank_level', label: 'FO/HSD/NG day tank level (L)' },
   { key: 'feed_water_tank_level', label: 'Feed water tank level (KL)' },
   { key: 'fo_pre_heater_temp', label: 'FO pre heater temp (°C)' },

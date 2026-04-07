@@ -98,12 +98,19 @@ interface ELogBook {
   coolingTowerFanChemicalQtyKg?: number;
   operatorSign?: string;
   verifiedBy?: string;
-  // Boiler fields
-  feedWaterTemp?: number;
-  oilTemp?: number;
-  steamTemp?: number;
-  steamPressure?: number;
-  steamFlowLPH?: number;
+  foPreHeaterTemp?: number;
+  stackTemperature?: number;
+  boilerSteamPressure?: number;
+  steamPressureAfterPrv?: number;
+  foHsdNgDayTankLevel?: number;
+  feedWaterTankLevel?: number;
+  burnerOilPressure?: number;
+  burnerHeaterTemp?: number;
+  feedWaterHardnessPpm?: number;
+  feedWaterTdsPpm?: number;
+  foHsdNgConsumption?: number;
+  mobreyFunctioning?: string;
+  manualBlowdownTime?: string;
   // Compressor fields (similar to chiller but different parameters)
   compressorSupplyTemp?: number;
   compressorReturnTemp?: number;
@@ -159,12 +166,7 @@ const equipmentLimits = {
     compressorRunningTimeMin: { max: 60 * 24, unit: 'min', type: 'NMT' },
     starterEnergyKwh: { max: 1000, unit: 'kWh', type: 'NMT' },
   },
-  boiler: {
-    feedWaterTemp: { min: 50, unit: '°C', type: 'NLT' },
-    oilTemp: { min: 50, unit: '°C', type: 'NLT' },
-    steamTemp: { min: 150, unit: '°C', type: 'NLT' },
-    steamPressure: { min: 6, unit: 'bar', type: 'NLT' },
-  },
+  boiler: {},
   compressor: {
     compressorSupplyTemp: { max: 10, unit: '°C', type: 'NMT' },
     compressorReturnTemp: { max: 20, unit: '°C', type: 'NMT' },
@@ -193,11 +195,6 @@ const CHILLER_LIST_FIELDS: { key: keyof ELogBook; label: string; unit: string }[
   { key: 'coolingTowerFanChemicalQtyKg', label: 'CT Fan Chemical', unit: 'Kg' },
 ];
 const BOILER_LIST_FIELDS: { key: string; label: string; unit: string }[] = [
-  { key: 'feedWaterTemp', label: 'Feed Water', unit: '°C' },
-  { key: 'oilTemp', label: 'Oil', unit: '°C' },
-  { key: 'steamTemp', label: 'Steam', unit: '°C' },
-  { key: 'steamPressure', label: 'Pressure', unit: 'bar' },
-  { key: 'steamFlowLPH', label: 'Flow', unit: 'LPH' },
   { key: 'foHsdNgDayTankLevel', label: 'Day Tank', unit: 'Ltr' },
   { key: 'feedWaterTankLevel', label: 'Feed Tank', unit: 'KL' },
   { key: 'foPreHeaterTemp', label: 'Pre Heater', unit: '°C' },
@@ -304,12 +301,6 @@ export default function ELogBookPage() {
     coolingTowerFanChemicalQtyKg: '',
     operatorSign: '',
     verifiedBy: '',
-    // Boiler fields
-    feedWaterTemp: '',
-    oilTemp: '',
-    steamTemp: '',
-    steamPressure: '',
-    steamFlowLPH: '',
     // Compressor fields
     compressorSupplyTemp: '',
     compressorReturnTemp: '',
@@ -515,10 +506,14 @@ export default function ELogBookPage() {
             equipmentId: log.equipment_id,
             date: format(timestamp, 'yyyy-MM-dd'),
             time: format(timestamp, 'HH:mm:ss'),
-            feedWaterTemp: log.feed_water_temp,
-            oilTemp: log.oil_temp,
-            steamTemp: log.steam_temp,
-            steamPressure: log.steam_pressure,
+            ...(eqType === 'boiler'
+              ? {
+                  foPreHeaterTemp: log.fo_pre_heater_temp,
+                  stackTemperature: log.stack_temperature,
+                  boilerSteamPressure: log.boiler_steam_pressure,
+                  steamPressureAfterPrv: log.steam_pressure_after_prv,
+                }
+              : {}),
             compressorSupplyTemp: log.compressor_supply_temp,
             compressorReturnTemp: log.compressor_return_temp,
             remarks: log.remarks || '',
@@ -799,7 +794,20 @@ export default function ELogBookPage() {
           activity_to_date: log.activity_to_date,
           activity_from_time: log.activity_from_time,
           activity_to_time: log.activity_to_time,
-        });
+          foPreHeaterTemp: log.fo_pre_heater_temp,
+          stackTemperature: log.stack_temperature,
+          boilerSteamPressure: log.boiler_steam_pressure,
+          steamPressureAfterPrv: log.steam_pressure_after_prv,
+          foHsdNgDayTankLevel: log.fo_hsd_ng_day_tank_level,
+          feedWaterTankLevel: log.feed_water_tank_level,
+          burnerOilPressure: log.burner_oil_pressure,
+          burnerHeaterTemp: log.burner_heater_temp,
+          feedWaterHardnessPpm: log.feed_water_hardness_ppm,
+          feedWaterTdsPpm: log.feed_water_tds_ppm,
+          foHsdNgConsumption: log.fo_hsd_ng_consumption,
+          mobreyFunctioning: log.mobrey_functioning,
+          manualBlowdownTime: log.manual_blowdown_time,
+        } as ELogBook);
       });
 
       // Convert chemical logs
@@ -1254,16 +1262,6 @@ export default function ELogBookPage() {
           activity_to_time: maintenanceTimings.toTime || undefined,
           remarks: formData.remarks || undefined,
         };
-        if (isReadingsApplicable) {
-          Object.assign(logData, {
-            feed_water_temp: parseFloat(formData.feedWaterTemp),
-            oil_temp: parseFloat(formData.oilTemp),
-            steam_temp: parseFloat(formData.steamTemp),
-            steam_pressure: parseFloat(formData.steamPressure),
-            steam_flow_lph: formData.steamFlowLPH ? parseFloat(formData.steamFlowLPH) : undefined,
-          });
-        }
-        
         await boilerLogAPI.create(logData as any);
         toast.success('Boiler entry saved successfully');
       }
@@ -1332,11 +1330,6 @@ export default function ELogBookPage() {
         coolingTowerFanChemicalQtyKg: '',
         operatorSign: '',
         verifiedBy: '',
-        feedWaterTemp: '',
-        oilTemp: '',
-        steamTemp: '',
-        steamPressure: '',
-        steamFlowLPH: '',
         compressorSupplyTemp: '',
         compressorReturnTemp: '',
         compressorPressure: '',
@@ -2097,11 +2090,6 @@ export default function ELogBookPage() {
                           coolingTowerChemicalQtyPerDay: '',
                           operatorSign: '',
                           verifiedBy: '',
-                          feedWaterTemp: '',
-                          oilTemp: '',
-                          steamTemp: '',
-                          steamPressure: '',
-                          steamFlowLPH: '',
                           compressorSupplyTemp: '',
                           compressorReturnTemp: '',
                           compressorPressure: '',
@@ -2311,7 +2299,10 @@ export default function ELogBookPage() {
                                   <>Chiller entry</>
                                 )}
                                 {formData.equipmentType === 'boiler' && (
-                                  <>Feed {log.feedWaterTemp}°C · Steam {log.steamTemp}°C / {log.steamPressure} bar</>
+                                  <>
+                                    FO pre {log.foPreHeaterTemp ?? '—'}°C · Stack {log.stackTemperature ?? '—'}°C · Boiler steam{' '}
+                                    {log.boilerSteamPressure ?? '—'} kg/cm²
+                                  </>
                                 )}
                                 {formData.equipmentType === 'compressor' && (
                                   <>Supply {log.compressorSupplyTemp}°C · Return {log.compressorReturnTemp}°C</>
@@ -3220,98 +3211,6 @@ export default function ELogBookPage() {
                   </>
                 )}
 
-                {/* Boiler Fields */}
-                {formData.equipmentType === 'boiler' && (
-                  <>
-                    <fieldset disabled={!isReadingsApplicable} className={cn(!isReadingsApplicable && "opacity-60")}>
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <Label className="flex items-center gap-2">
-                          <Thermometer className="w-4 h-4" /> Feed water temp
-                          <span className="text-xs text-muted-foreground">(NLT {equipmentLimits.boiler.feedWaterTemp.min} {equipmentLimits.boiler.feedWaterTemp.unit})</span>
-                        </Label>
-                        <Input
-                          type="number"
-                          step="0.1"
-                          value={formData.feedWaterTemp}
-                          onChange={(e) => setFormData({ ...formData, feedWaterTemp: e.target.value })}
-                          placeholder="e.g., 50"
-                          className={cn(isFormValueOutOfLimit('boiler', 'feedWaterTemp' as keyof (typeof equipmentLimits)['chiller'], formData.feedWaterTemp) && 'border-destructive bg-destructive/5 text-destructive font-semibold')}
-                        />
-                        {isFormValueOutOfLimit('boiler', 'feedWaterTemp' as keyof (typeof equipmentLimits)['chiller'], formData.feedWaterTemp) && (
-                          <p className="text-xs text-destructive mt-1">{getLimitErrorMessage('boiler', 'feedWaterTemp' as keyof (typeof equipmentLimits)['chiller'])}</p>
-                        )}
-                      </div>
-                      <div className="space-y-2">
-                        <Label className="flex items-center gap-2">
-                          <Thermometer className="w-4 h-4" /> Oil temp
-                          <span className="text-xs text-muted-foreground">(NLT {equipmentLimits.boiler.oilTemp.min} {equipmentLimits.boiler.oilTemp.unit})</span>
-                        </Label>
-                        <Input
-                          type="number"
-                          step="0.1"
-                          value={formData.oilTemp}
-                          onChange={(e) => setFormData({ ...formData, oilTemp: e.target.value })}
-                          placeholder="e.g., 50"
-                          className={cn(isFormValueOutOfLimit('boiler', 'oilTemp' as keyof (typeof equipmentLimits)['chiller'], formData.oilTemp) && 'border-destructive bg-destructive/5 text-destructive font-semibold')}
-                        />
-                        {isFormValueOutOfLimit('boiler', 'oilTemp' as keyof (typeof equipmentLimits)['chiller'], formData.oilTemp) && (
-                          <p className="text-xs text-destructive mt-1">{getLimitErrorMessage('boiler', 'oilTemp' as keyof (typeof equipmentLimits)['chiller'])}</p>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <Label className="flex items-center gap-2">
-                          <Thermometer className="w-4 h-4" /> Steam temp
-                          <span className="text-xs text-muted-foreground">(NLT {equipmentLimits.boiler.steamTemp.min} {equipmentLimits.boiler.steamTemp.unit})</span>
-                        </Label>
-                        <Input
-                          type="number"
-                          step="0.1"
-                          value={formData.steamTemp}
-                          onChange={(e) => setFormData({ ...formData, steamTemp: e.target.value })}
-                          placeholder="e.g., 150"
-                          className={cn(isFormValueOutOfLimit('boiler', 'steamTemp' as keyof (typeof equipmentLimits)['chiller'], formData.steamTemp) && 'border-destructive bg-destructive/5 text-destructive font-semibold')}
-                        />
-                        {isFormValueOutOfLimit('boiler', 'steamTemp' as keyof (typeof equipmentLimits)['chiller'], formData.steamTemp) && (
-                          <p className="text-xs text-destructive mt-1">{getLimitErrorMessage('boiler', 'steamTemp' as keyof (typeof equipmentLimits)['chiller'])}</p>
-                        )}
-                      </div>
-                      <div className="space-y-2">
-                        <Label className="flex items-center gap-2">
-                          <Gauge className="w-4 h-4" /> Steam Pressure
-                          <span className="text-xs text-muted-foreground">(NLT {equipmentLimits.boiler.steamPressure.min} {equipmentLimits.boiler.steamPressure.unit})</span>
-                        </Label>
-                        <Input
-                          type="number"
-                          step="0.1"
-                          value={formData.steamPressure}
-                          onChange={(e) => setFormData({ ...formData, steamPressure: e.target.value })}
-                          placeholder="e.g., 6"
-                          className={cn(isFormValueOutOfLimit('boiler', 'steamPressure' as keyof (typeof equipmentLimits)['chiller'], formData.steamPressure) && 'border-destructive bg-destructive/5 text-destructive font-semibold')}
-                        />
-                        {isFormValueOutOfLimit('boiler', 'steamPressure' as keyof (typeof equipmentLimits)['chiller'], formData.steamPressure) && (
-                          <p className="text-xs text-destructive mt-1">{getLimitErrorMessage('boiler', 'steamPressure' as keyof (typeof equipmentLimits)['chiller'])}</p>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label>Steam Flow LPH</Label>
-                      <Input
-                        type="number"
-                        step="1"
-                        value={formData.steamFlowLPH}
-                        onChange={(e) => setFormData({ ...formData, steamFlowLPH: e.target.value })}
-                        placeholder="e.g., 10000"
-                      />
-                    </div>
-                    </fieldset>
-                  </>
-                )}
-
                 {/* Compressor Fields */}
                 {formData.equipmentType === 'compressor' && (
                   <>
@@ -3995,9 +3894,9 @@ export default function ELogBookPage() {
                 );
               }
               if (log.equipmentType === 'boiler') {
-                const tempKeys = ['feedWaterTemp', 'oilTemp', 'steamTemp', 'foPreHeaterTemp', 'burnerHeaterTemp', 'stackTemperature'];
-                const pressureKeys = ['steamPressure', 'burnerOilPressure', 'boilerSteamPressure', 'steamPressureAfterPrv'];
-                const flowKeys = ['steamFlowLPH'];
+                const tempKeys = ['foPreHeaterTemp', 'burnerHeaterTemp', 'stackTemperature'];
+                const pressureKeys = ['burnerOilPressure', 'boilerSteamPressure', 'steamPressureAfterPrv'];
+                const flowKeys: string[] = [];
                 const otherKeys = ['foHsdNgDayTankLevel', 'feedWaterTankLevel', 'feedWaterHardnessPpm', 'feedWaterTdsPpm', 'foHsdNgConsumption', 'mobreyFunctioning', 'manualBlowdownTime'];
                 const section = (title: string, keys: string[]) => {
                   const items = BOILER_LIST_FIELDS.filter((f) => keys.includes(f.key)).map(({ key, label, unit }) => {

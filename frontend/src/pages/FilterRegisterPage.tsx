@@ -150,10 +150,13 @@ const FilterRegisterPage: React.FC = () => {
     tag_info: "",
     replacement_selected: false,
     replacement_frequency_days: "",
+    replacement_tolerance_days: "",
     cleaning_selected: false,
     cleaning_frequency_days: "",
+    cleaning_tolerance_days: "",
     integrity_selected: false,
     integrity_frequency_days: "",
+    integrity_tolerance_days: "",
   });
   const [isAssignSubmitting, setIsAssignSubmitting] = useState(false);
   const [pendingApprovalFilter, setPendingApprovalFilter] =
@@ -407,10 +410,13 @@ const FilterRegisterPage: React.FC = () => {
       tag_info: "",
       replacement_selected: false,
       replacement_frequency_days: "",
+      replacement_tolerance_days: "",
       cleaning_selected: false,
       cleaning_frequency_days: "",
+      cleaning_tolerance_days: "",
       integrity_selected: false,
       integrity_frequency_days: "",
+      integrity_tolerance_days: "",
     });
     setIsAssignDialogOpen(true);
     await loadEquipment();
@@ -458,12 +464,25 @@ const FilterRegisterPage: React.FC = () => {
       });
 
       const schedulePromises: Promise<any>[] = [];
+      const tol = (v: string) => {
+        const t = String(v ?? "").trim();
+        if (!t) return undefined;
+        const n = Number(t);
+        if (!Number.isFinite(n)) return undefined;
+        const i = Math.trunc(n);
+        if (Math.abs(i) > 3660) return undefined;
+        return i;
+      };
+      const repTol = tol(assignForm.replacement_tolerance_days);
+      const cleanTol = tol(assignForm.cleaning_tolerance_days);
+      const intTol = tol(assignForm.integrity_tolerance_days);
       if (assignForm.replacement_selected && Number(assignForm.replacement_frequency_days) > 0) {
         schedulePromises.push(
           filterScheduleAPI.create({
             assignment: assignment.id,
             schedule_type: "replacement",
             frequency_days: Number(assignForm.replacement_frequency_days),
+            ...(repTol != null ? { tolerance_days: repTol } : {}),
           })
         );
       }
@@ -473,6 +492,7 @@ const FilterRegisterPage: React.FC = () => {
             assignment: assignment.id,
             schedule_type: "cleaning",
             frequency_days: Number(assignForm.cleaning_frequency_days),
+            ...(cleanTol != null ? { tolerance_days: cleanTol } : {}),
           })
         );
       }
@@ -482,6 +502,7 @@ const FilterRegisterPage: React.FC = () => {
             assignment: assignment.id,
             schedule_type: "integrity",
             frequency_days: Number(assignForm.integrity_frequency_days),
+            ...(intTol != null ? { tolerance_days: intTol } : {}),
           })
         );
       }
@@ -947,30 +968,36 @@ const FilterRegisterPage: React.FC = () => {
           }
         }}
       >
-        <DialogContent>
-          <form onSubmit={handleAssignSubmit}>
-            <DialogHeader>
-              <DialogTitle>Assign Filter to Equipment</DialogTitle>
-              <DialogDescription>
-                Assign the approved filter to equipment and configure basic
-                schedules.
-              </DialogDescription>
-            </DialogHeader>
+        <DialogContent className="flex max-h-[min(90vh,calc(100dvh-1.5rem))] w-[calc(100vw-1.5rem)] max-w-2xl flex-col gap-0 overflow-hidden p-0 sm:rounded-lg">
+          <form
+            onSubmit={handleAssignSubmit}
+            className="flex min-h-0 max-h-[min(90vh,calc(100dvh-1.5rem))] flex-1 flex-col"
+          >
+            <div className="shrink-0 space-y-3 border-b border-border px-6 pb-4 pt-6 pr-14">
+              <DialogHeader>
+                <DialogTitle>Assign Filter to Equipment</DialogTitle>
+                <DialogDescription>
+                  Assign the approved filter to equipment and configure basic
+                  schedules.
+                </DialogDescription>
+              </DialogHeader>
 
-            {assignForFilter && (
-              <div className="mt-2 text-sm text-muted-foreground">
-                <div className="font-medium text-foreground">
-                  {assignForFilter.filter_id || "Unassigned ID"} –{" "}
-                  {assignForFilter.make} {assignForFilter.model}
+              {assignForFilter && (
+                <div className="text-sm text-muted-foreground">
+                  <div className="font-medium text-foreground">
+                    {assignForFilter.filter_id || "Unassigned ID"} –{" "}
+                    {assignForFilter.make} {assignForFilter.model}
+                  </div>
+                  <div>
+                    Category: {assignForFilter.category_name || "—"}, Micron:{" "}
+                    {micronLabel(assignForFilter.micron_size)}
+                  </div>
                 </div>
-                <div>
-                  Category: {assignForFilter.category_name || "—"}, Micron:{" "}
-                  {micronLabel(assignForFilter.micron_size)}
-                </div>
-              </div>
-            )}
+              )}
+            </div>
 
-            <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 py-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-1 md:col-span-2">
                 <label className="text-sm font-medium text-foreground">
                   Equipment<span className="text-destructive">*</span>
@@ -1034,7 +1061,7 @@ const FilterRegisterPage: React.FC = () => {
                 />
               </div>
 
-              <div className="space-y-1">
+              <div className="space-y-1 md:col-span-2">
                 <label className="text-sm font-medium text-foreground flex items-center gap-2">
                   <Checkbox
                     checked={assignForm.replacement_selected}
@@ -1043,26 +1070,51 @@ const FilterRegisterPage: React.FC = () => {
                         ...prev,
                         replacement_selected: !!checked,
                         replacement_frequency_days: !!checked ? prev.replacement_frequency_days : "",
+                        replacement_tolerance_days: !!checked ? prev.replacement_tolerance_days : "",
                       }))
                     }
                   />
-                  Replacement Frequency (days)
+                  Replacement schedule
                 </label>
-                <Input
-                  type="number"
-                  min={0}
-                  disabled={!assignForm.replacement_selected}
-                  value={assignForm.replacement_frequency_days}
-                  onChange={(e) =>
-                    setAssignForm((prev) => ({
-                      ...prev,
-                      replacement_frequency_days: e.target.value,
-                    }))
-                  }
-                />
+                <div
+                  className={`flex items-stretch gap-3 rounded-md border border-border bg-muted/30 px-3 py-2 ${!assignForm.replacement_selected ? "opacity-50 pointer-events-none" : ""}`}
+                >
+                  <div className="flex-1 min-w-0 space-y-1">
+                    <span className="text-xs text-muted-foreground">Frequency (days)</span>
+                    <Input
+                      type="number"
+                      min={0}
+                      disabled={!assignForm.replacement_selected}
+                      value={assignForm.replacement_frequency_days}
+                      onChange={(e) =>
+                        setAssignForm((prev) => ({
+                          ...prev,
+                          replacement_frequency_days: e.target.value,
+                        }))
+                      }
+                    />
+                  </div>
+                  <div className="w-px shrink-0 self-stretch min-h-[2.5rem] bg-border my-1" aria-hidden />
+                  <div className="flex-1 min-w-0 space-y-1">
+                    <span className="text-xs text-muted-foreground">Tolerance (± days)</span>
+                    <Input
+                      type="number"
+                      step={1}
+                      placeholder="+ grace after due, − earlier overdue"
+                      disabled={!assignForm.replacement_selected}
+                      value={assignForm.replacement_tolerance_days}
+                      onChange={(e) =>
+                        setAssignForm((prev) => ({
+                          ...prev,
+                          replacement_tolerance_days: e.target.value,
+                        }))
+                      }
+                    />
+                  </div>
+                </div>
               </div>
 
-              <div className="space-y-1">
+              <div className="space-y-1 md:col-span-2">
                 <label className="text-sm font-medium text-foreground flex items-center gap-2">
                   <Checkbox
                     checked={assignForm.cleaning_selected}
@@ -1071,26 +1123,51 @@ const FilterRegisterPage: React.FC = () => {
                         ...prev,
                         cleaning_selected: !!checked,
                         cleaning_frequency_days: !!checked ? prev.cleaning_frequency_days : "",
+                        cleaning_tolerance_days: !!checked ? prev.cleaning_tolerance_days : "",
                       }))
                     }
                   />
-                  Cleaning Frequency (days)
+                  Cleaning schedule
                 </label>
-                <Input
-                  type="number"
-                  min={0}
-                  disabled={!assignForm.cleaning_selected}
-                  value={assignForm.cleaning_frequency_days}
-                  onChange={(e) =>
-                    setAssignForm((prev) => ({
-                      ...prev,
-                      cleaning_frequency_days: e.target.value,
-                    }))
-                  }
-                />
+                <div
+                  className={`flex items-stretch gap-3 rounded-md border border-border bg-muted/30 px-3 py-2 ${!assignForm.cleaning_selected ? "opacity-50 pointer-events-none" : ""}`}
+                >
+                  <div className="flex-1 min-w-0 space-y-1">
+                    <span className="text-xs text-muted-foreground">Frequency (days)</span>
+                    <Input
+                      type="number"
+                      min={0}
+                      disabled={!assignForm.cleaning_selected}
+                      value={assignForm.cleaning_frequency_days}
+                      onChange={(e) =>
+                        setAssignForm((prev) => ({
+                          ...prev,
+                          cleaning_frequency_days: e.target.value,
+                        }))
+                      }
+                    />
+                  </div>
+                  <div className="w-px shrink-0 self-stretch min-h-[2.5rem] bg-border my-1" aria-hidden />
+                  <div className="flex-1 min-w-0 space-y-1">
+                    <span className="text-xs text-muted-foreground">Tolerance (± days)</span>
+                    <Input
+                      type="number"
+                      step={1}
+                      placeholder="+ grace after due, − earlier overdue"
+                      disabled={!assignForm.cleaning_selected}
+                      value={assignForm.cleaning_tolerance_days}
+                      onChange={(e) =>
+                        setAssignForm((prev) => ({
+                          ...prev,
+                          cleaning_tolerance_days: e.target.value,
+                        }))
+                      }
+                    />
+                  </div>
+                </div>
               </div>
 
-              <div className="space-y-1">
+              <div className="space-y-1 md:col-span-2">
                 <label className="text-sm font-medium text-foreground flex items-center gap-2">
                   <Checkbox
                     checked={assignForm.integrity_selected}
@@ -1099,27 +1176,53 @@ const FilterRegisterPage: React.FC = () => {
                         ...prev,
                         integrity_selected: !!checked,
                         integrity_frequency_days: !!checked ? prev.integrity_frequency_days : "",
+                        integrity_tolerance_days: !!checked ? prev.integrity_tolerance_days : "",
                       }))
                     }
                   />
-                  Integrity Test Frequency (days)
+                  Integrity test schedule
                 </label>
-                <Input
-                  type="number"
-                  min={0}
-                  disabled={!assignForm.integrity_selected}
-                  value={assignForm.integrity_frequency_days}
-                  onChange={(e) =>
-                    setAssignForm((prev) => ({
-                      ...prev,
-                      integrity_frequency_days: e.target.value,
-                    }))
-                  }
-                />
+                <div
+                  className={`flex items-stretch gap-3 rounded-md border border-border bg-muted/30 px-3 py-2 ${!assignForm.integrity_selected ? "opacity-50 pointer-events-none" : ""}`}
+                >
+                  <div className="flex-1 min-w-0 space-y-1">
+                    <span className="text-xs text-muted-foreground">Frequency (days)</span>
+                    <Input
+                      type="number"
+                      min={0}
+                      disabled={!assignForm.integrity_selected}
+                      value={assignForm.integrity_frequency_days}
+                      onChange={(e) =>
+                        setAssignForm((prev) => ({
+                          ...prev,
+                          integrity_frequency_days: e.target.value,
+                        }))
+                      }
+                    />
+                  </div>
+                  <div className="w-px shrink-0 self-stretch min-h-[2.5rem] bg-border my-1" aria-hidden />
+                  <div className="flex-1 min-w-0 space-y-1">
+                    <span className="text-xs text-muted-foreground">Tolerance (± days)</span>
+                    <Input
+                      type="number"
+                      step={1}
+                      placeholder="+ grace after due, − earlier overdue"
+                      disabled={!assignForm.integrity_selected}
+                      value={assignForm.integrity_tolerance_days}
+                      onChange={(e) =>
+                        setAssignForm((prev) => ({
+                          ...prev,
+                          integrity_tolerance_days: e.target.value,
+                        }))
+                      }
+                    />
+                  </div>
+                </div>
               </div>
             </div>
+            </div>
 
-            <DialogFooter className="mt-6">
+            <DialogFooter className="shrink-0 gap-2 border-t border-border bg-background px-6 py-4 sm:mt-0">
               <Button
                 type="button"
                 variant="outline"

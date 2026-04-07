@@ -23,9 +23,34 @@ import {
 
 const toDateStr = (d: Date) => format(d, 'yyyy-MM-dd');
 
+type ChillerLimitRow = {
+  equipment_id?: string;
+  effective_from?: string | null;
+  electricity_rate_rs_per_kwh?: number | null;
+};
+
+function chillerLimitEffectiveDateKey(row: ChillerLimitRow): string | null {
+  const raw = row.effective_from;
+  if (raw == null || raw === '') return null;
+  return String(raw).slice(0, 10);
+}
+
+/**
+ * Same rule as backend `_get_chiller_limit_for_electricity_cost_date`:
+ * effective_from must match the consumption date exactly, or blank effective_from (all dates).
+ */
+function pickChillerLimitForDate(rows: ChillerLimitRow[], forDate: string): ChillerLimitRow | null {
+  if (!rows.length) return null;
+  const d = forDate.slice(0, 10);
+  const exact = rows.find((r) => chillerLimitEffectiveDateKey(r) === d);
+  if (exact) return exact;
+  return rows.find((r) => chillerLimitEffectiveDateKey(r) == null) ?? null;
+}
+
 export default function ConsumptionPage() {
   const today = new Date();
   const defaultDate = toDateStr(today);
+  const todayDate = defaultDate;
 
   const [chillerDate, setChillerDate] = useState(defaultDate);
   const [boilerDate, setBoilerDate] = useState(defaultDate);
@@ -37,14 +62,18 @@ export default function ConsumptionPage() {
   >([]);
   const [chillerLoading, setChillerLoading] = useState(true);
   const [selectedChiller, setSelectedChiller] = useState('');
-  const [chillerForm, setChillerForm] = useState({
+  const [chillerForm, setChillerForm] = useState<{
+    power_kwh: number;
+    water_ct1_l: number;
+    water_ct2_l: number;
+    water_ct3_l: number;
+    actual_electricity_cost_rs: number | null;
+  }>({
     power_kwh: 0,
     water_ct1_l: 0,
     water_ct2_l: 0,
     water_ct3_l: 0,
-    chemical_ct1_kg: 0,
-    chemical_ct2_kg: 0,
-    chemical_ct3_kg: 0,
+    actual_electricity_cost_rs: null,
   });
   const [chillerFormLoading, setChillerFormLoading] = useState(false);
   const [chillerSaving, setChillerSaving] = useState(false);
@@ -59,11 +88,11 @@ export default function ConsumptionPage() {
   const [boilerForm, setBoilerForm] = useState({
     power_kwh: 0,
     water_l: 0,
-    chemical_kg: 0,
     diesel_l: 0,
     furnace_oil_l: 0,
     brigade_kg: 0,
     steam_kg_hr: 0,
+    actual_electricity_cost_rs: null as number | null,
   });
   const [boilerFormLoading, setBoilerFormLoading] = useState(false);
   const [boilerSaving, setBoilerSaving] = useState(false);
@@ -171,9 +200,8 @@ export default function ConsumptionPage() {
             water_ct1_l: row.water_ct1_l ?? 0,
             water_ct2_l: row.water_ct2_l ?? 0,
             water_ct3_l: row.water_ct3_l ?? 0,
-            chemical_ct1_kg: row.chemical_ct1_kg ?? 0,
-            chemical_ct2_kg: row.chemical_ct2_kg ?? 0,
-            chemical_ct3_kg: row.chemical_ct3_kg ?? 0,
+            actual_electricity_cost_rs:
+              typeof row.actual_electricity_cost_rs === 'number' ? row.actual_electricity_cost_rs : null,
           });
         } else {
           setChillerForm({
@@ -181,30 +209,41 @@ export default function ConsumptionPage() {
             water_ct1_l: 0,
             water_ct2_l: 0,
             water_ct3_l: 0,
-            chemical_ct1_kg: 0,
-            chemical_ct2_kg: 0,
-            chemical_ct3_kg: 0,
+            actual_electricity_cost_rs: null,
           });
         }
       })
-      .catch(() => setChillerForm({ power_kwh: 0, water_ct1_l: 0, water_ct2_l: 0, water_ct3_l: 0, chemical_ct1_kg: 0, chemical_ct2_kg: 0, chemical_ct3_kg: 0 }))
+      .catch(() =>
+        setChillerForm({
+          power_kwh: 0,
+          water_ct1_l: 0,
+          water_ct2_l: 0,
+          water_ct3_l: 0,
+          actual_electricity_cost_rs: null,
+        }),
+      )
       .finally(() => setChillerFormLoading(false));
   }, [selectedChiller, chillerDate]);
 
-  // Load chiller electricity rate (for cost display) when equipment changes
+  // Chiller electricity rate: exact effective_from = consumption date, or blank effective_from (all dates).
   useEffect(() => {
     if (!selectedChiller) {
       setChillerRateRsPerKwh(null);
       return;
     }
+    const eq = chillerEquipment.find((e) => e.equipment_number === selectedChiller);
     chillerLimitsAPI
-      .get(selectedChiller)
-      .then((limit) => {
-        const rate = limit?.electricity_rate_rs_per_kwh;
+      .list()
+      .then((rowsAll) => {
+        const rows = (rowsAll as ChillerLimitRow[]).filter(
+          (r) => r.equipment_id === selectedChiller || (!!eq?.id && r.equipment_id === eq.id),
+        );
+        const picked = pickChillerLimitForDate(rows, chillerDate);
+        const rate = picked?.electricity_rate_rs_per_kwh;
         setChillerRateRsPerKwh(typeof rate === 'number' ? rate : null);
       })
       .catch(() => setChillerRateRsPerKwh(null));
-  }, [selectedChiller]);
+  }, [selectedChiller, chillerDate, chillerEquipment]);
 
   // Load boiler form when equipment or date changes
   useEffect(() => {
@@ -223,17 +262,36 @@ export default function ConsumptionPage() {
           setBoilerForm({
             power_kwh: row.power_kwh ?? 0,
             water_l: row.water_l ?? 0,
-            chemical_kg: row.chemical_kg ?? 0,
             diesel_l: row.diesel_l ?? 0,
             furnace_oil_l: row.furnace_oil_l ?? 0,
             brigade_kg: row.brigade_kg ?? 0,
             steam_kg_hr: row.steam_kg_hr ?? 0,
+            actual_electricity_cost_rs:
+              typeof row.actual_electricity_cost_rs === 'number' ? row.actual_electricity_cost_rs : null,
           });
         } else {
-          setBoilerForm({ power_kwh: 0, water_l: 0, chemical_kg: 0, diesel_l: 0, furnace_oil_l: 0, brigade_kg: 0, steam_kg_hr: 0 });
+          setBoilerForm({
+            power_kwh: 0,
+            water_l: 0,
+            diesel_l: 0,
+            furnace_oil_l: 0,
+            brigade_kg: 0,
+            steam_kg_hr: 0,
+            actual_electricity_cost_rs: null,
+          });
         }
       })
-      .catch(() => setBoilerForm({ power_kwh: 0, water_l: 0, chemical_kg: 0, diesel_l: 0, furnace_oil_l: 0, brigade_kg: 0, steam_kg_hr: 0 }))
+      .catch(() =>
+        setBoilerForm({
+          power_kwh: 0,
+          water_l: 0,
+          diesel_l: 0,
+          furnace_oil_l: 0,
+          brigade_kg: 0,
+          steam_kg_hr: 0,
+          actual_electricity_cost_rs: null,
+        }),
+      )
       .finally(() => setBoilerFormLoading(false));
   }, [selectedBoiler, boilerDate]);
 
@@ -277,8 +335,16 @@ export default function ConsumptionPage() {
         type: 'chiller',
         date: chillerDate,
         equipment_id: selectedChiller,
-        ...chillerForm,
-      })) as { warnings?: string[] };
+        power_kwh: chillerForm.power_kwh,
+        water_ct1_l: chillerForm.water_ct1_l,
+        water_ct2_l: chillerForm.water_ct2_l,
+        water_ct3_l: chillerForm.water_ct3_l,
+      })) as { warnings?: string[]; actual_electricity_cost_rs?: number | null };
+      setChillerForm((p) => ({
+        ...p,
+        actual_electricity_cost_rs:
+          typeof res?.actual_electricity_cost_rs === 'number' ? res.actual_electricity_cost_rs : null,
+      }));
       const warnings = res?.warnings;
       if (Array.isArray(warnings) && warnings.length > 0) {
         const warningMessage = warnings.join(' ');
@@ -302,8 +368,18 @@ export default function ConsumptionPage() {
         type: 'boiler',
         date: boilerDate,
         equipment_id: selectedBoiler,
-        ...boilerForm,
-      })) as { warnings?: string[] };
+        power_kwh: boilerForm.power_kwh,
+        water_l: boilerForm.water_l,
+        diesel_l: boilerForm.diesel_l,
+        furnace_oil_l: boilerForm.furnace_oil_l,
+        brigade_kg: boilerForm.brigade_kg,
+        steam_kg_hr: boilerForm.steam_kg_hr,
+      })) as { warnings?: string[]; actual_electricity_cost_rs?: number | null };
+      setBoilerForm((p) => ({
+        ...p,
+        actual_electricity_cost_rs:
+          typeof res?.actual_electricity_cost_rs === 'number' ? res.actual_electricity_cost_rs : null,
+      }));
       const warnings = res?.warnings;
       if (Array.isArray(warnings) && warnings.length > 0) {
         const warningMessage = warnings.join(' ');
@@ -388,6 +464,7 @@ export default function ConsumptionPage() {
                   <Label>Date</Label>
                   <Input
                     type="date"
+                    max={todayDate}
                     value={chillerDate}
                     onChange={(e) => setChillerDate(e.target.value)}
                     className="w-40"
@@ -409,7 +486,19 @@ export default function ConsumptionPage() {
                       <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
                         <div className="space-y-1">
                           <Label className="text-xs">Daily power consumption (kWh)</Label>
-                          <Input type="number" min={0} step="any" value={chillerForm.power_kwh === 0 ? '' : chillerForm.power_kwh} onChange={(e) => setChillerForm((p) => ({ ...p, power_kwh: e.target.value === '' ? 0 : parseFloat(e.target.value) || 0 }))} />
+                          <Input
+                            type="number"
+                            min={0}
+                            step="any"
+                            value={chillerForm.power_kwh === 0 ? '' : chillerForm.power_kwh}
+                            onChange={(e) =>
+                              setChillerForm((p) => ({
+                                ...p,
+                                power_kwh: e.target.value === '' ? 0 : parseFloat(e.target.value) || 0,
+                                actual_electricity_cost_rs: null,
+                              }))
+                            }
+                          />
                         </div>
                         <div className="space-y-1">
                           <Label className="text-xs">Actual electricity cost (₹)</Label>
@@ -419,8 +508,10 @@ export default function ConsumptionPage() {
                             className="bg-muted/50"
                             value={
                               chillerRateRsPerKwh != null
-                                ? `₹ ${((chillerForm.power_kwh ?? 0) * chillerRateRsPerKwh).toFixed(2)}`
-                                : 'Set electricity rate in Settings → Chiller limits'
+                                ? chillerForm.actual_electricity_cost_rs != null
+                                  ? `₹ ${Number(chillerForm.actual_electricity_cost_rs).toFixed(2)}`
+                                  : `₹ ${((chillerForm.power_kwh ?? 0) * chillerRateRsPerKwh).toFixed(2)}`
+                                : 'No rate for this date — in Settings use Effective from = this date, or leave blank for all dates'
                             }
                           />
                         </div>
@@ -435,18 +526,6 @@ export default function ConsumptionPage() {
                         <div className="space-y-1">
                           <Label className="text-xs">Cooling Tower 3 – Water (L)</Label>
                           <Input type="number" min={0} step="any" value={chillerForm.water_ct3_l === 0 ? '' : chillerForm.water_ct3_l} onChange={(e) => setChillerForm((p) => ({ ...p, water_ct3_l: e.target.value === '' ? 0 : parseFloat(e.target.value) || 0 }))} />
-                        </div>
-                        <div className="space-y-1">
-                          <Label className="text-xs">Cooling Tower 1 – Chemical (kg)</Label>
-                          <Input type="number" min={0} step="any" value={chillerForm.chemical_ct1_kg === 0 ? '' : chillerForm.chemical_ct1_kg} onChange={(e) => setChillerForm((p) => ({ ...p, chemical_ct1_kg: e.target.value === '' ? 0 : parseFloat(e.target.value) || 0 }))} />
-                        </div>
-                        <div className="space-y-1">
-                          <Label className="text-xs">Chilled Water Pump – Chemical (kg)</Label>
-                          <Input type="number" min={0} step="any" value={chillerForm.chemical_ct2_kg === 0 ? '' : chillerForm.chemical_ct2_kg} onChange={(e) => setChillerForm((p) => ({ ...p, chemical_ct2_kg: e.target.value === '' ? 0 : parseFloat(e.target.value) || 0 }))} />
-                        </div>
-                        <div className="space-y-1">
-                          <Label className="text-xs">Cooling Tower Fan – Chemical (kg)</Label>
-                          <Input type="number" min={0} step="any" value={chillerForm.chemical_ct3_kg === 0 ? '' : chillerForm.chemical_ct3_kg} onChange={(e) => setChillerForm((p) => ({ ...p, chemical_ct3_kg: e.target.value === '' ? 0 : parseFloat(e.target.value) || 0 }))} />
                         </div>
                       </div>
                     )}
@@ -502,7 +581,7 @@ export default function ConsumptionPage() {
                 </div>
                 <div className="space-y-1">
                   <Label>Date</Label>
-                  <Input type="date" value={boilerDate} onChange={(e) => setBoilerDate(e.target.value)} className="w-40" />
+                  <Input type="date" max={todayDate} value={boilerDate} onChange={(e) => setBoilerDate(e.target.value)} className="w-40" />
                 </div>
               </div>
               {selectedBoiler && (() => {
@@ -520,7 +599,7 @@ export default function ConsumptionPage() {
                       <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
                         <div className="space-y-1">
                           <Label className="text-xs">Daily power consumption (kWh)</Label>
-                          <Input type="number" min={0} step="any" value={boilerForm.power_kwh === 0 ? '' : boilerForm.power_kwh} onChange={(e) => setBoilerForm((p) => ({ ...p, power_kwh: e.target.value === '' ? 0 : parseFloat(e.target.value) || 0 }))} />
+                          <Input type="number" min={0} step="any" value={boilerForm.power_kwh === 0 ? '' : boilerForm.power_kwh} onChange={(e) => setBoilerForm((p) => ({ ...p, power_kwh: e.target.value === '' ? 0 : parseFloat(e.target.value) || 0, actual_electricity_cost_rs: null }))} />
                         </div>
                         <div className="space-y-1">
                           <Label className="text-xs">Actual electricity cost (₹)</Label>
@@ -529,19 +608,17 @@ export default function ConsumptionPage() {
                             readOnly
                             className="bg-muted/50"
                             value={
-                              boilerRateRsPerKwh != null
-                                ? `₹ ${((boilerForm.power_kwh ?? 0) * boilerRateRsPerKwh).toFixed(2)}`
-                                : 'Set electricity rate in Settings → Boiler limits'
+                              boilerForm.actual_electricity_cost_rs != null
+                                ? `₹ ${Number(boilerForm.actual_electricity_cost_rs).toFixed(2)}`
+                                : boilerRateRsPerKwh != null
+                                  ? `₹ ${((boilerForm.power_kwh ?? 0) * boilerRateRsPerKwh).toFixed(2)}`
+                                  : 'Set electricity rate in Settings → Boiler limits'
                             }
                           />
                         </div>
                         <div className="space-y-1">
                           <Label className="text-xs">Daily water consumption (L)</Label>
                           <Input type="number" min={0} step="any" value={boilerForm.water_l === 0 ? '' : boilerForm.water_l} onChange={(e) => setBoilerForm((p) => ({ ...p, water_l: e.target.value === '' ? 0 : parseFloat(e.target.value) || 0 }))} />
-                        </div>
-                        <div className="space-y-1">
-                          <Label className="text-xs">Daily chemical consumption (kg)</Label>
-                          <Input type="number" min={0} step="any" value={boilerForm.chemical_kg === 0 ? '' : boilerForm.chemical_kg} onChange={(e) => setBoilerForm((p) => ({ ...p, chemical_kg: e.target.value === '' ? 0 : parseFloat(e.target.value) || 0 }))} />
                         </div>
                         <div className="space-y-1">
                           <Label className="text-xs">Daily diesel consumption (L)</Label>
@@ -588,7 +665,7 @@ export default function ConsumptionPage() {
             <div className="flex flex-wrap gap-4 items-end">
               <div className="space-y-1">
                 <Label>Date</Label>
-                <Input type="date" value={chemicalDate} onChange={(e) => setChemicalDate(e.target.value)} className="w-40" />
+                <Input type="date" max={todayDate} value={chemicalDate} onChange={(e) => setChemicalDate(e.target.value)} className="w-40" />
               </div>
             </div>
             <div className="border border-border rounded-lg p-4 space-y-4 max-w-md">

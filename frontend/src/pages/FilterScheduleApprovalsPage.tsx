@@ -33,6 +33,7 @@ interface FilterScheduleRow {
   id: string;
   schedule_type: ScheduleType;
   frequency_days?: number | null;
+  tolerance_days?: number | null;
   next_due_date?: string | null;
   is_approved: boolean;
   status?: "active" | "overdue" | "completed" | "rejected";
@@ -178,7 +179,7 @@ const FilterScheduleApprovalsPage: React.FC = () => {
                       Status
                     </th>
                     <th className="px-4 py-2 text-left font-medium text-muted-foreground">
-                      Frequency (days)
+                      Freq. / tolerance (days)
                     </th>
                     <th className="px-4 py-2 text-left font-medium text-muted-foreground">
                       Area Category
@@ -254,7 +255,15 @@ const FilterScheduleApprovalsPage: React.FC = () => {
                           })()}
                         </td>
                         <td className="px-4 py-2">
-                          {row.frequency_days ?? "—"}
+                          <span className="tabular-nums">
+                            {row.frequency_days ?? "—"}
+                            {row.tolerance_days != null ? (
+                              <>
+                                <span className="mx-1.5 inline-block w-px h-3 align-middle bg-border" aria-hidden />
+                                <span className="text-muted-foreground">tol {row.tolerance_days}</span>
+                              </>
+                            ) : null}
+                          </span>
                         </td>
                         <td className="px-4 py-2 text-muted-foreground">
                           {row.assignment_info?.area_category || "—"}

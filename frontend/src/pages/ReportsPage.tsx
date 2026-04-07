@@ -276,11 +276,6 @@ const mapBoilerLogForMonitoringPdf = (l: any) => ({
   id: l.id,
   equipmentType: 'boiler',
   equipmentId: l.equipment_id,
-  feedWaterTemp: l.feed_water_temp,
-  oilTemp: l.oil_temp,
-  steamTemp: l.steam_temp,
-  steamPressure: l.steam_pressure,
-  steamFlowLPH: l.steam_flow_lph,
   foHsdNgDayTankLevel: l.fo_hsd_ng_day_tank_level,
   feedWaterTankLevel: l.feed_water_tank_level,
   foPreHeaterTemp: l.fo_pre_heater_temp,
@@ -2177,11 +2172,6 @@ export default function ReportsPage() {
       `;
     } else if (log.equipmentType === 'boiler') {
       detailsHTML += `
-        <div class="info"><span class="label">Feed Water Temp:</span><span class="value">${log.feedWaterTemp !== undefined ? log.feedWaterTemp + '°C' : 'N/A'}</span></div>
-        <div class="info"><span class="label">Oil Temp:</span><span class="value">${log.oilTemp !== undefined ? log.oilTemp + '°C' : 'N/A'}</span></div>
-        <div class="info"><span class="label">Steam Temp:</span><span class="value">${log.steamTemp !== undefined ? log.steamTemp + '°C' : 'N/A'}</span></div>
-        <div class="info"><span class="label">Steam Pressure:</span><span class="value">${log.steamPressure !== undefined ? log.steamPressure + ' bar' : 'N/A'}</span></div>
-        <div class="info"><span class="label">Steam Flow LPH:</span><span class="value">${log.steamFlowLPH !== undefined ? log.steamFlowLPH + ' LPH' : 'N/A'}</span></div>
       `;
     } else if (log.equipmentType === 'compressor') {
       detailsHTML += `

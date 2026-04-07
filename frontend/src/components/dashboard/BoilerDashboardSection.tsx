@@ -89,6 +89,7 @@ export function BoilerDashboardSection({
   const [series, setSeries] = useState<BoilerDashboardSeriesPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const todayDate = getDefaultDate();
 
   useEffect(() => {
     let cancelled = false;
@@ -330,6 +331,7 @@ export function BoilerDashboardSection({
         <Input
           id="boiler-period-date"
           type="date"
+          max={todayDate}
           value={date}
           onChange={(e) => setDate(e.target.value)}
           className="h-9 w-[150px] sm:w-[160px]"

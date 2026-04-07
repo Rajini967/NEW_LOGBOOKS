@@ -103,9 +103,6 @@ export const dashboardSummaryAPI = {
     water_ct1_l?: number;
     water_ct2_l?: number;
     water_ct3_l?: number;
-    chemical_ct1_kg?: number;
-    chemical_ct2_kg?: number;
-    chemical_ct3_kg?: number;
     water_l?: number;
     chemical_kg?: number;
     diesel_l?: number;
@@ -114,6 +111,10 @@ export const dashboardSummaryAPI = {
     steam_kg_hr?: number;
   }) => {
     const response = await api.post("/reports/daily_consumption/", payload);
-    return response.data;
+    return response.data as Record<string, unknown> & {
+      warnings?: string[];
+      /** Chiller/Boiler POST: stored power × rate snapshot */
+      actual_electricity_cost_rs?: number | null;
+    };
   },
 };

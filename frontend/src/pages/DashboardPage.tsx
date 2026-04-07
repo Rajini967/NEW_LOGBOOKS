@@ -85,6 +85,7 @@ type OverdueFilterGroup = {
 export default function DashboardPage() {
   const { user } = useAuth();
   const { missedByLogType, loading: missedReadingsLoading } = useMissedReadingsByType();
+  const todayDate = new Date().toISOString().slice(0, 10);
 
   const { data: dashboardSummary } = useDashboardSummaryQuery(true);
   const { data: overdueSummary } = useOverdueSummaryQuery(true);
@@ -256,7 +257,7 @@ export default function DashboardPage() {
         {activeTab === 'energy' && (
           <>
             <Label className="text-[10px] text-muted-foreground">Date</Label>
-            <Input type="date" value={chillerDate} onChange={(e) => setChillerDate(e.target.value)} className="h-8 w-[145px]" />
+            <Input type="date" max={todayDate} value={chillerDate} onChange={(e) => setChillerDate(e.target.value)} className="h-8 w-[145px]" />
             <div className="flex rounded-md border p-0.5">
               {(['day', 'month', 'year'] as const).map((p) => (
                 <Button key={p} size="sm" variant={chillerPeriodType === p ? 'secondary' : 'ghost'} className="h-7 px-2 text-[10px]" onClick={() => setChillerPeriodType(p)}>{p === 'day' ? 'D' : p === 'month' ? 'M' : 'Y'}</Button>
@@ -270,7 +271,7 @@ export default function DashboardPage() {
         )}
         {activeTab === 'chemicals' && (
           <>
-            <Input type="date" value={chemicalDate} onChange={(e) => setChemicalDate(e.target.value)} className="h-8 w-[145px]" />
+            <Input type="date" max={todayDate} value={chemicalDate} onChange={(e) => setChemicalDate(e.target.value)} className="h-8 w-[145px]" />
             <div className="flex rounded-md border p-0.5">
               {(['day', 'month', 'year'] as const).map((p) => (
                 <Button key={p} size="sm" variant={chemicalPeriodType === p ? 'secondary' : 'ghost'} className="h-7 px-2 text-[10px]" onClick={() => setChemicalPeriodType(p)}>{p === 'day' ? 'D' : p === 'month' ? 'M' : 'Y'}</Button>
@@ -284,7 +285,7 @@ export default function DashboardPage() {
         )}
         {activeTab === 'maintenance' && (
           <>
-            <Input type="date" value={filtersDate} onChange={(e) => setFiltersDate(e.target.value)} className="h-8 w-[145px]" />
+            <Input type="date" max={todayDate} value={filtersDate} onChange={(e) => setFiltersDate(e.target.value)} className="h-8 w-[145px]" />
             <div className="flex rounded-md border p-0.5">
               {(['week', 'month'] as const).map((p) => (
                 <Button key={p} size="sm" variant={filtersPeriodType === p ? 'secondary' : 'ghost'} className="h-7 px-2 text-[10px]" onClick={() => setFiltersPeriodType(p)}>{p === 'week' ? 'W' : 'M'}</Button>

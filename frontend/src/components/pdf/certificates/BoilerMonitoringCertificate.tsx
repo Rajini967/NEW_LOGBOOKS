@@ -217,7 +217,7 @@ export function BoilerMonitoringCertificate({ data }: BoilerMonitoringCertificat
   /** Aligned with operational limits in BoilerLogBookPage (boilerLimits). */
   const rows: { label: string; range: string; key: FieldKey }[] = [
     { label: 'FO/HSD/NG Day tank level', range: 'NLT 200 L', key: 'foHsdNgDayTankLevel' },
-    { label: 'Feed water tank level', range: 'NLT 3 KL', key: 'feedWaterTankLevel' },
+    { label: 'Feed water tank level', range: 'NLT 2 KL', key: 'feedWaterTankLevel' },
     { label: 'FO Pre heater temp', range: '60 to 70°C', key: 'foPreHeaterTemp' },
     { label: 'Burner Oil pressure', range: '18 to 25 kg/cm²', key: 'burnerOilPressure' },
     { label: 'Burner heater temp', range: '110 to 130°C', key: 'burnerHeaterTemp' },

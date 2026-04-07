@@ -60,10 +60,8 @@ import {
 } from "@/hooks/useLogbookQueries";
 
 const boilerLimits = {
-  feedWaterTemp: { min: 50, unit: "°C", type: "NLT" as const },
-  oilTemp: { min: 50, unit: "°C", type: "NLT" as const },
-  steamTemp: { min: 150, unit: "°C", type: "NLT" as const },
-  steamPressure: { min: 6, unit: "bar", type: "NLT" as const },
+  foHsdNgDayTankLevel: { min: 200, unit: "Ltr", type: "NLT" as const },
+  feedWaterTankLevel: { min: 2, unit: "KL", type: "NLT" as const },
   foPreHeaterTemp: { min: 60, max: 70, unit: "°C", type: "range" as const },
   burnerOilPressure: { min: 18, max: 25, unit: "kg/cm²", type: "range" as const },
   burnerHeaterTemp: { min: 110, max: 130, unit: "°C", type: "range" as const },
@@ -77,11 +75,6 @@ const boilerLimits = {
 type BoilerLimitField = keyof typeof boilerLimits;
 
 const BOILER_LIST_FIELDS: { key: keyof BoilerLog; label: string; unit: string }[] = [
-  { key: "feedWaterTemp", label: "Feed Water", unit: "°C" },
-  { key: "oilTemp", label: "Oil", unit: "°C" },
-  { key: "steamTemp", label: "Steam", unit: "°C" },
-  { key: "steamPressure", label: "Pressure", unit: "bar" },
-  { key: "steamFlowLPH", label: "Flow", unit: "LPH" },
   { key: "foHsdNgDayTankLevel", label: "Day Tank", unit: "Ltr" },
   { key: "feedWaterTankLevel", label: "Feed Tank", unit: "KL" },
   { key: "foPreHeaterTemp", label: "Pre Heater", unit: "°C" },
@@ -95,6 +88,7 @@ const BOILER_LIST_FIELDS: { key: keyof BoilerLog; label: string; unit: string }[
   { key: "foHsdNgConsumption", label: "Consumption", unit: "Ltr" },
   { key: "mobreyFunctioning", label: "Mobrey", unit: "" },
   { key: "manualBlowdownTime", label: "Blowdown Time", unit: "" },
+  { key: "steamConsumptionKgHr", label: "Steam consumption", unit: "kg/hr" },
 ];
 
 interface BoilerLog {
@@ -103,11 +97,8 @@ interface BoilerLog {
   equipmentId: string;
   date: string;
   time: string;
-  feedWaterTemp?: number;
-  oilTemp?: number;
-  steamTemp?: number;
+  /** Briquette logs */
   steamPressure?: number;
-  steamFlowLPH?: number;
   foHsdNgDayTankLevel?: number;
   feedWaterTankLevel?: number;
   foPreHeaterTemp?: number;
@@ -252,11 +243,7 @@ const BoilerLogBookPage: React.FC = () => {
     equipmentType: "boiler" as const,
     fuelType: "fo" as "fo" | "briquette",
     equipmentId: "",
-    feedWaterTemp: "",
-    oilTemp: "",
-    steamTemp: "",
     steamPressure: "",
-    steamFlowLPH: "",
     foHsdNgDayTankLevel: "",
     feedWaterTankLevel: "",
     foPreHeaterTemp: "",
@@ -978,11 +965,6 @@ const BoilerLogBookPage: React.FC = () => {
         setFormData((prev) => ({
           ...prev,
           equipmentId: "",
-          feedWaterTemp: "",
-          oilTemp: "",
-          steamTemp: "",
-          steamPressure: "",
-          steamFlowLPH: "",
           foHsdNgDayTankLevel: "",
           feedWaterTankLevel: "",
           foPreHeaterTemp: "",
@@ -1031,11 +1013,6 @@ const BoilerLogBookPage: React.FC = () => {
         { key: "boilerSteamPressure", label: "Boiler Steam Pressure", numeric: true },
         { key: "stackTemperature", label: "Stack Temperature", numeric: true },
         { key: "steamPressureAfterPrv", label: "Steam Pressure after PRV", numeric: true },
-        { key: "feedWaterTemp", label: "Feed Water Temp", numeric: true },
-        { key: "oilTemp", label: "Oil Temp", numeric: true },
-        { key: "steamTemp", label: "Steam Temp", numeric: true },
-        { key: "steamPressure", label: "Steam Pressure", numeric: true },
-        { key: "steamFlowLPH", label: "Steam Flow LPH", numeric: true },
         { key: "feedWaterHardnessPpm", label: "Feed Water Hardness", numeric: true },
         { key: "feedWaterTdsPpm", label: "Feed Water TDS", numeric: true },
         { key: "foHsdNgConsumption", label: "FO/HSD/NG Consumption", numeric: true },
@@ -1057,11 +1034,6 @@ const BoilerLogBookPage: React.FC = () => {
         activity_to_date: maintenanceTimings.toDate || undefined,
         activity_from_time: maintenanceTimings.fromTime || undefined,
         activity_to_time: maintenanceTimings.toTime || undefined,
-        feed_water_temp: parseFloat(formData.feedWaterTemp),
-        oil_temp: parseFloat(formData.oilTemp),
-        steam_temp: parseFloat(formData.steamTemp),
-        steam_pressure: parseFloat(formData.steamPressure),
-        steam_flow_lph: parseFloat(formData.steamFlowLPH),
         fo_hsd_ng_day_tank_level: parseFloat(formData.foHsdNgDayTankLevel),
         feed_water_tank_level: parseFloat(formData.feedWaterTankLevel),
         fo_pre_heater_temp: parseFloat(formData.foPreHeaterTemp),
@@ -1115,11 +1087,6 @@ const BoilerLogBookPage: React.FC = () => {
         setFormData((prev) => ({
           ...prev,
           equipmentId: "",
-          feedWaterTemp: "",
-          oilTemp: "",
-          steamTemp: "",
-          steamPressure: "",
-          steamFlowLPH: "",
           foHsdNgDayTankLevel: "",
           feedWaterTankLevel: "",
           foPreHeaterTemp: "",
@@ -1162,11 +1129,6 @@ const BoilerLogBookPage: React.FC = () => {
         setFormData((prev) => ({
           ...prev,
           equipmentId: "",
-          feedWaterTemp: "",
-          oilTemp: "",
-          steamTemp: "",
-          steamPressure: "",
-          steamFlowLPH: "",
           foHsdNgDayTankLevel: "",
           feedWaterTankLevel: "",
           foPreHeaterTemp: "",
@@ -1256,11 +1218,7 @@ const BoilerLogBookPage: React.FC = () => {
       equipmentType: "boiler",
       fuelType: log.equipmentType === "briquette" ? "briquette" : "fo",
       equipmentId: log.equipmentId ?? "",
-      feedWaterTemp: log.feedWaterTemp != null ? String(log.feedWaterTemp) : "",
-      oilTemp: log.oilTemp != null ? String(log.oilTemp) : "",
-      steamTemp: log.steamTemp != null ? String(log.steamTemp) : "",
       steamPressure: log.steamPressure != null ? String(log.steamPressure) : "",
-      steamFlowLPH: log.steamFlowLPH != null ? String(log.steamFlowLPH) : "",
       foHsdNgDayTankLevel: log.foHsdNgDayTankLevel != null ? String(log.foHsdNgDayTankLevel) : "",
       feedWaterTankLevel: log.feedWaterTankLevel != null ? String(log.feedWaterTankLevel) : "",
       foPreHeaterTemp: log.foPreHeaterTemp != null ? String(log.foPreHeaterTemp) : "",
@@ -1811,7 +1769,14 @@ const BoilerLogBookPage: React.FC = () => {
                               <span className="font-medium">{log.date} {log.time}</span>
                               <span className="text-muted-foreground"> — Entered by: {log.checkedBy || "—"}</span>
                               <div className="mt-1 text-muted-foreground">
-                                Feed {log.feedWaterTemp}°C · Oil {log.oilTemp}°C · Steam {log.steamTemp}°C / {log.steamPressure} bar
+                                {formData.fuelType === "briquette" ? (
+                                  <>Steam pressure {log.steamPressure ?? "—"}</>
+                                ) : (
+                                  <>
+                                    FO pre {log.foPreHeaterTemp ?? "—"}°C · Stack {log.stackTemperature ?? "—"}°C · Boiler steam{" "}
+                                    {log.boilerSteamPressure ?? "—"} kg/cm²
+                                  </>
+                                )}
                               </div>
                             </div>
                           ))}
@@ -1932,12 +1897,50 @@ const BoilerLogBookPage: React.FC = () => {
                     <h3 className="text-sm font-semibold border-b pb-2">Hourly Parameters</h3>
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-2">
-                        <Label>FO/HSD/NG Day Tank Level <span className="text-muted-foreground text-xs">(Ltr)</span></Label>
-                        <Input type="number" step="0.1" min={0} value={formData.foHsdNgDayTankLevel} onChange={(e) => setFormData({ ...formData, foHsdNgDayTankLevel: e.target.value })} placeholder="e.g., 500" />
+                        <Label>
+                          FO/HSD/NG Day Tank Level{" "}
+                          <span className="text-muted-foreground text-xs">
+                            (Ltr, NLT {boilerLimits.foHsdNgDayTankLevel.min})
+                          </span>
+                        </Label>
+                        <Input
+                          type="number"
+                          step="0.1"
+                          min={0}
+                          value={formData.foHsdNgDayTankLevel}
+                          onChange={(e) => setFormData({ ...formData, foHsdNgDayTankLevel: e.target.value })}
+                          placeholder="e.g., 500"
+                          className={cn(
+                            isFormValueOutOfLimit("foHsdNgDayTankLevel", formData.foHsdNgDayTankLevel) &&
+                              "border-destructive bg-destructive/5 text-destructive font-semibold",
+                          )}
+                        />
+                        {isFormValueOutOfLimit("foHsdNgDayTankLevel", formData.foHsdNgDayTankLevel) && (
+                          <p className="text-xs text-destructive">{getLimitErrorMessage("foHsdNgDayTankLevel")}</p>
+                        )}
                       </div>
                       <div className="space-y-2">
-                        <Label>Feed Water Tank Level <span className="text-muted-foreground text-xs">(KL)</span></Label>
-                        <Input type="number" step="0.01" min={0} value={formData.feedWaterTankLevel} onChange={(e) => setFormData({ ...formData, feedWaterTankLevel: e.target.value })} placeholder="e.g., 2.5" />
+                        <Label>
+                          Feed Water Tank Level{" "}
+                          <span className="text-muted-foreground text-xs">
+                            (KL, NLT {boilerLimits.feedWaterTankLevel.min})
+                          </span>
+                        </Label>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          min={0}
+                          value={formData.feedWaterTankLevel}
+                          onChange={(e) => setFormData({ ...formData, feedWaterTankLevel: e.target.value })}
+                          placeholder="e.g., 2.5"
+                          className={cn(
+                            isFormValueOutOfLimit("feedWaterTankLevel", formData.feedWaterTankLevel) &&
+                              "border-destructive bg-destructive/5 text-destructive font-semibold",
+                          )}
+                        />
+                        {isFormValueOutOfLimit("feedWaterTankLevel", formData.feedWaterTankLevel) && (
+                          <p className="text-xs text-destructive">{getLimitErrorMessage("feedWaterTankLevel")}</p>
+                        )}
                       </div>
                       <div className="space-y-2">
                         <Label>FO Pre Heater Temp <span className="text-muted-foreground text-xs">(60–70°C)</span></Label>
@@ -2010,60 +2013,6 @@ const BoilerLogBookPage: React.FC = () => {
                           placeholder="e.g., 5.5"
                         />
                         {isFormValueOutOfLimit("steamPressureAfterPrv", formData.steamPressureAfterPrv) && <p className="text-xs text-destructive">{getLimitErrorMessage("steamPressureAfterPrv")}</p>}
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-2 gap-4 pt-2">
-                      <div className="space-y-2">
-                        <Label>Feed Water Temp <span className="text-muted-foreground text-xs">(°C, NLT {boilerLimits.feedWaterTemp.min})</span></Label>
-                        <Input
-                          type="number"
-                          step="0.1"
-                          value={formData.feedWaterTemp}
-                          onChange={(e) => setFormData({ ...formData, feedWaterTemp: e.target.value })}
-                          className={cn(isFormValueOutOfLimit("feedWaterTemp", formData.feedWaterTemp) && "border-destructive bg-destructive/5 text-destructive font-semibold")}
-                          placeholder="e.g., 50"
-                        />
-                        {isFormValueOutOfLimit("feedWaterTemp", formData.feedWaterTemp) && <p className="text-xs text-destructive">{getLimitErrorMessage("feedWaterTemp")}</p>}
-                      </div>
-                      <div className="space-y-2">
-                        <Label>Oil Temp <span className="text-muted-foreground text-xs">(°C, NLT {boilerLimits.oilTemp.min})</span></Label>
-                        <Input
-                          type="number"
-                          step="0.1"
-                          value={formData.oilTemp}
-                          onChange={(e) => setFormData({ ...formData, oilTemp: e.target.value })}
-                          className={cn(isFormValueOutOfLimit("oilTemp", formData.oilTemp) && "border-destructive bg-destructive/5 text-destructive font-semibold")}
-                          placeholder="e.g., 50"
-                        />
-                        {isFormValueOutOfLimit("oilTemp", formData.oilTemp) && <p className="text-xs text-destructive">{getLimitErrorMessage("oilTemp")}</p>}
-                      </div>
-                      <div className="space-y-2">
-                        <Label>Steam Temp <span className="text-muted-foreground text-xs">(°C, NLT {boilerLimits.steamTemp.min})</span></Label>
-                        <Input
-                          type="number"
-                          step="0.1"
-                          value={formData.steamTemp}
-                          onChange={(e) => setFormData({ ...formData, steamTemp: e.target.value })}
-                          className={cn(isFormValueOutOfLimit("steamTemp", formData.steamTemp) && "border-destructive bg-destructive/5 text-destructive font-semibold")}
-                          placeholder="e.g., 150"
-                        />
-                        {isFormValueOutOfLimit("steamTemp", formData.steamTemp) && <p className="text-xs text-destructive">{getLimitErrorMessage("steamTemp")}</p>}
-                      </div>
-                      <div className="space-y-2">
-                        <Label>Steam Pressure <span className="text-muted-foreground text-xs">(bar, NLT {boilerLimits.steamPressure.min})</span></Label>
-                        <Input
-                          type="number"
-                          step="0.1"
-                          value={formData.steamPressure}
-                          onChange={(e) => setFormData({ ...formData, steamPressure: e.target.value })}
-                          className={cn(isFormValueOutOfLimit("steamPressure", formData.steamPressure) && "border-destructive bg-destructive/5 text-destructive font-semibold")}
-                          placeholder="e.g., 6"
-                        />
-                        {isFormValueOutOfLimit("steamPressure", formData.steamPressure) && <p className="text-xs text-destructive">{getLimitErrorMessage("steamPressure")}</p>}
-                      </div>
-                      <div className="space-y-2">
-                        <Label>Steam Flow LPH <span className="text-muted-foreground text-xs">(LPH)</span></Label>
-                        <Input type="number" step="1" value={formData.steamFlowLPH} onChange={(e) => setFormData({ ...formData, steamFlowLPH: e.target.value })} placeholder="e.g., 10000" />
                       </div>
                     </div>
                   </div>
@@ -2615,10 +2564,11 @@ const BoilerLogBookPage: React.FC = () => {
                   <span className={cn("tabular-nums", isOut && "font-semibold")}>{value}</span>
                 </div>
               );
-              const tempKeys = ["feedWaterTemp", "oilTemp", "steamTemp", "foPreHeaterTemp", "burnerHeaterTemp", "stackTemperature"];
-              const pressureKeys = ["steamPressure", "burnerOilPressure", "boilerSteamPressure", "steamPressureAfterPrv"];
-              const flowKeys = ["steamFlowLPH"];
-              const otherKeys = ["foHsdNgDayTankLevel", "feedWaterTankLevel", "feedWaterHardnessPpm", "feedWaterTdsPpm", "foHsdNgConsumption", "mobreyFunctioning", "manualBlowdownTime"];
+              const tankLevelKeys = ["foHsdNgDayTankLevel", "feedWaterTankLevel"];
+              const tempKeys = ["foPreHeaterTemp", "burnerHeaterTemp", "stackTemperature"];
+              const pressureKeys = ["burnerOilPressure", "boilerSteamPressure", "steamPressureAfterPrv"];
+              const flowKeys = ["steamConsumptionKgHr"];
+              const otherKeys = ["feedWaterHardnessPpm", "feedWaterTdsPpm", "foHsdNgConsumption", "mobreyFunctioning", "manualBlowdownTime"];
               const SectionCard = ({ title, icon: Icon, keys }: { title: string; icon: React.ElementType; keys: string[] }) => {
                 const items = BOILER_LIST_FIELDS.filter((f) => keys.includes(f.key)).map(({ key, label, unit }) => {
                   const value = logRecord[key];
@@ -2648,6 +2598,7 @@ const BoilerLogBookPage: React.FC = () => {
               return (
                 <div className="space-y-4">
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <SectionCard title="Tank levels" icon={Package} keys={tankLevelKeys} />
                     <SectionCard title="Temperature" icon={Thermometer} keys={tempKeys} />
                     <SectionCard title="Pressure" icon={Gauge} keys={pressureKeys} />
                     <SectionCard title="Flow" icon={Droplets} keys={flowKeys} />

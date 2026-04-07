@@ -35,6 +35,7 @@ import type { LogEntryIntervalType } from '@/types';
 export default function SettingsPage() {
   const navigate = useNavigate();
   const { refreshSessionSettings } = useAuth();
+  const todayDate = new Date().toISOString().slice(0, 10);
   const [sessionTimeoutMinutes, setSessionTimeoutMinutes] = useState<number | ''>('');
   const [passwordExpiryDays, setPasswordExpiryDays] = useState<number | ''>('');
   const [logEntryInterval, setLogEntryInterval] = useState<LogEntryIntervalType>('hourly');
@@ -42,6 +43,7 @@ export default function SettingsPage() {
   const [isSessionLoading, setIsSessionLoading] = useState(false);
   const [chillerEquipment, setChillerEquipment] = useState<{ id: string; equipment_number: string; name: string }[]>([]);
   type ChillerLimitRow = {
+    id?: string;
     equipment_id?: string;
     effective_from?: string | null;
     daily_power_limit_kw?: number | null;
@@ -49,9 +51,6 @@ export default function SettingsPage() {
     daily_water_ct1_liters?: number | null;
     daily_water_ct2_liters?: number | null;
     daily_water_ct3_liters?: number | null;
-    daily_chemical_ct1_kg?: number | null;
-    daily_chemical_ct2_kg?: number | null;
-    daily_chemical_ct3_kg?: number | null;
   };
 
   const [chillerLimits, setChillerLimits] = useState<Record<string, ChillerLimitRow>>({});
@@ -63,7 +62,6 @@ export default function SettingsPage() {
     effective_from?: string | null;
     daily_power_limit_kw?: number | null;
     daily_water_limit_liters?: number | null;
-    daily_chemical_limit_kg?: number | null;
     daily_diesel_limit_liters?: number | null;
     daily_furnace_oil_limit_liters?: number | null;
     daily_brigade_limit_kg?: number | null;
@@ -85,12 +83,10 @@ export default function SettingsPage() {
     daily_water_ct1_liters: null,
     daily_water_ct2_liters: null,
     daily_water_ct3_liters: null,
-    daily_chemical_ct1_kg: null,
-    daily_chemical_ct2_kg: null,
-    daily_chemical_ct3_kg: null,
   });
 
   const toChillerLimitState = (limit: ChillerLimitRow): ChillerLimitRow => ({
+    id: limit.id,
     equipment_id: limit.equipment_id,
     effective_from: limit.effective_from ?? null,
     daily_power_limit_kw: limit.daily_power_limit_kw ?? null,
@@ -98,9 +94,6 @@ export default function SettingsPage() {
     daily_water_ct1_liters: limit.daily_water_ct1_liters ?? null,
     daily_water_ct2_liters: limit.daily_water_ct2_liters ?? null,
     daily_water_ct3_liters: limit.daily_water_ct3_liters ?? null,
-    daily_chemical_ct1_kg: limit.daily_chemical_ct1_kg ?? null,
-    daily_chemical_ct2_kg: limit.daily_chemical_ct2_kg ?? null,
-    daily_chemical_ct3_kg: limit.daily_chemical_ct3_kg ?? null,
   });
 
   const getChillerEffectiveDate = (limit: ChillerLimitRow): string | null => {
@@ -115,6 +108,8 @@ export default function SettingsPage() {
     if (date) {
       const exact = rows.find((r) => getChillerEffectiveDate(r) === date);
       if (exact) return exact;
+      // No exact row for this chosen date: keep the selected date as a new draft row.
+      return null;
     }
     const nullDefault = rows.find((r) => !getChillerEffectiveDate(r));
     if (nullDefault) return nullDefault;
@@ -147,10 +142,10 @@ export default function SettingsPage() {
   };
 
   type BoilerLimitRow = {
+    id?: string;
     effective_from?: string | null;
     daily_power_limit_kw?: number | null;
     daily_water_limit_liters?: number | null;
-    daily_chemical_limit_kg?: number | null;
     daily_diesel_limit_liters?: number | null;
     daily_furnace_oil_limit_liters?: number | null;
     daily_brigade_limit_kg?: number | null;
@@ -165,7 +160,6 @@ export default function SettingsPage() {
     effective_from: null,
     daily_power_limit_kw: null,
     daily_water_limit_liters: null,
-    daily_chemical_limit_kg: null,
     daily_diesel_limit_liters: null,
     daily_furnace_oil_limit_liters: null,
     daily_brigade_limit_kg: null,
@@ -177,10 +171,10 @@ export default function SettingsPage() {
   });
 
   const toBoilerLimitState = (limit: BoilerLimitRow): BoilerLimitRow => ({
+    id: limit.id,
     effective_from: limit.effective_from ?? null,
     daily_power_limit_kw: limit.daily_power_limit_kw ?? null,
     daily_water_limit_liters: limit.daily_water_limit_liters ?? null,
-    daily_chemical_limit_kg: limit.daily_chemical_limit_kg ?? null,
     daily_diesel_limit_liters: limit.daily_diesel_limit_liters ?? null,
     daily_furnace_oil_limit_liters: limit.daily_furnace_oil_limit_liters ?? null,
     daily_brigade_limit_kg: limit.daily_brigade_limit_kg ?? null,
@@ -203,6 +197,8 @@ export default function SettingsPage() {
     if (date) {
       const exact = rows.find((r) => getEffectiveDate(r) === date);
       if (exact) return exact;
+      // No exact row for this chosen date: keep the selected date as a new draft row.
+      return null;
     }
     const nullDefault = rows.find((r) => !getEffectiveDate(r));
     if (nullDefault) return nullDefault;
@@ -382,7 +378,6 @@ export default function SettingsPage() {
     setChillerLimitSaving(equipmentNumber);
     try {
       const data = chillerLimits[equipmentNumber] ?? {};
-      const lookupEquipmentId = data.equipment_id || equipmentNumber;
       const payload = {
         effective_from: data.effective_from ?? null,
         daily_power_limit_kw: data.daily_power_limit_kw ?? null,
@@ -390,19 +385,17 @@ export default function SettingsPage() {
         daily_water_ct1_liters: data.daily_water_ct1_liters ?? null,
         daily_water_ct2_liters: data.daily_water_ct2_liters ?? null,
         daily_water_ct3_liters: data.daily_water_ct3_liters ?? null,
-        daily_chemical_ct1_kg: data.daily_chemical_ct1_kg ?? null,
-        daily_chemical_ct2_kg: data.daily_chemical_ct2_kg ?? null,
-        daily_chemical_ct3_kg: data.daily_chemical_ct3_kg ?? null,
       };
-      try {
-        await chillerLimitsAPI.update(lookupEquipmentId, payload);
-      } catch (err: any) {
-        // API client throws enhanced error with .status (not .response.status); 404 = no limit yet, create one
-        if (err?.status === 404 || err?.response?.status === 404) {
-          await chillerLimitsAPI.create({ equipment_id: equipmentNumber, ...payload });
-        } else {
-          throw err;
-        }
+      const rows = (await chillerLimitsAPI.list({ equipment_id: equipmentNumber })) as ChillerLimitRow[];
+      const selectedDate = (data.effective_from ?? '').toString().slice(0, 10) || null;
+      const existing = rows.find((r) => {
+        const rDate = (r.effective_from ?? '').toString().slice(0, 10) || null;
+        return rDate === selectedDate;
+      });
+      if (existing?.id) {
+        await chillerLimitsAPI.update(existing.id, payload);
+      } else {
+        await chillerLimitsAPI.create({ equipment_id: equipmentNumber, ...payload });
       }
       toast.success(`Limits saved for ${equipmentNumber}`);
     } catch (error: any) {
@@ -420,7 +413,6 @@ export default function SettingsPage() {
         effective_from: data.effective_from ?? null,
         daily_power_limit_kw: data.daily_power_limit_kw ?? null,
         daily_water_limit_liters: data.daily_water_limit_liters ?? null,
-        daily_chemical_limit_kg: data.daily_chemical_limit_kg ?? null,
         daily_diesel_limit_liters: data.daily_diesel_limit_liters ?? null,
         daily_furnace_oil_limit_liters: data.daily_furnace_oil_limit_liters ?? null,
         daily_brigade_limit_kg: data.daily_brigade_limit_kg ?? null,
@@ -430,14 +422,16 @@ export default function SettingsPage() {
         furnace_oil_rate_rs_per_liter: data.furnace_oil_rate_rs_per_liter ?? null,
         brigade_rate_rs_per_kg: data.brigade_rate_rs_per_kg ?? null,
       };
-      try {
-        await boilerLimitsAPI.update(equipmentNumber, payload);
-      } catch (err: any) {
-        if (err?.status === 404 || err?.response?.status === 404) {
-          await boilerLimitsAPI.create({ equipment_id: equipmentNumber, ...payload });
-        } else {
-          throw err;
-        }
+      const rows = (await boilerLimitsAPI.list({ equipment_id: equipmentNumber })) as BoilerLimitRow[];
+      const selectedDate = (data.effective_from ?? '').toString().slice(0, 10) || null;
+      const existing = rows.find((r) => {
+        const rDate = (r.effective_from ?? '').toString().slice(0, 10) || null;
+        return rDate === selectedDate;
+      });
+      if (existing?.id) {
+        await boilerLimitsAPI.update(existing.id, payload);
+      } else {
+        await boilerLimitsAPI.create({ equipment_id: equipmentNumber, ...payload });
       }
       toast.success(`Limits saved for ${equipmentNumber}`);
     } catch (error: any) {
@@ -769,6 +763,7 @@ export default function SettingsPage() {
                       <Input
                         type="date"
                         className="max-w-xs"
+                        max={todayDate}
                         value={(chillerLimits[eq.equipment_number]?.effective_from ?? '').toString().slice(0, 10)}
                         onChange={(e) => {
                           const v = e.target.value || null;
@@ -867,57 +862,6 @@ export default function SettingsPage() {
                           }}
                         />
                       </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs">Cooling Tower-1 – Chemical limit (kg)</Label>
-                        <Input
-                          type="number"
-                          min={0}
-                          step="any"
-                          placeholder="No limit"
-                          value={chillerLimits[eq.equipment_number]?.daily_chemical_ct1_kg ?? ''}
-                          onChange={(e) => {
-                            const v = e.target.value === '' ? null : Number(e.target.value);
-                            setChillerLimits((prev) => ({
-                              ...prev,
-                              [eq.equipment_number]: { ...(prev[eq.equipment_number] ?? {}), daily_chemical_ct1_kg: v ?? undefined },
-                            }));
-                          }}
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs">Chilled Water Pump – Chemical limit (kg)</Label>
-                        <Input
-                          type="number"
-                          min={0}
-                          step="any"
-                          placeholder="No limit"
-                          value={chillerLimits[eq.equipment_number]?.daily_chemical_ct2_kg ?? ''}
-                          onChange={(e) => {
-                            const v = e.target.value === '' ? null : Number(e.target.value);
-                            setChillerLimits((prev) => ({
-                              ...prev,
-                              [eq.equipment_number]: { ...(prev[eq.equipment_number] ?? {}), daily_chemical_ct2_kg: v ?? undefined },
-                            }));
-                          }}
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs">Cooling Tower Fan – Chemical limit (kg)</Label>
-                        <Input
-                          type="number"
-                          min={0}
-                          step="any"
-                          placeholder="No limit"
-                          value={chillerLimits[eq.equipment_number]?.daily_chemical_ct3_kg ?? ''}
-                          onChange={(e) => {
-                            const v = e.target.value === '' ? null : Number(e.target.value);
-                            setChillerLimits((prev) => ({
-                              ...prev,
-                              [eq.equipment_number]: { ...(prev[eq.equipment_number] ?? {}), daily_chemical_ct3_kg: v ?? undefined },
-                            }));
-                          }}
-                        />
-                      </div>
                     </div>
                     <Button
                       size="sm"
@@ -942,7 +886,7 @@ export default function SettingsPage() {
             </div>
             <div>
               <h3 className="text-lg font-semibold text-foreground">Boiler daily limits</h3>
-              <p className="text-sm text-muted-foreground">Daily power (kWh), water (L) and chemical (kg) limits per boiler. Leave blank for no limit.</p>
+              <p className="text-sm text-muted-foreground">Daily power (kWh), water (L), fuel, steam, and rate fields per boiler. Leave blank for no limit.</p>
             </div>
           </div>
           {boilerLimitsLoading ? (
@@ -981,6 +925,7 @@ export default function SettingsPage() {
                       <Input
                         type="date"
                         className="max-w-xs"
+                        max={todayDate}
                         value={(boilerLimits[eq.equipment_number]?.effective_from ?? '').toString().slice(0, 10)}
                         onChange={(e) => {
                           const v = e.target.value || null;
@@ -1041,23 +986,6 @@ export default function SettingsPage() {
                             setBoilerLimits((prev) => ({
                               ...prev,
                               [eq.equipment_number]: { ...(prev[eq.equipment_number] ?? {}), daily_water_limit_liters: v ?? undefined },
-                            }));
-                          }}
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs">Daily chemical limit (kg)</Label>
-                        <Input
-                          type="number"
-                          min={0}
-                          step="any"
-                          placeholder="No limit"
-                          value={boilerLimits[eq.equipment_number]?.daily_chemical_limit_kg ?? ''}
-                          onChange={(e) => {
-                            const v = e.target.value === '' ? null : Number(e.target.value);
-                            setBoilerLimits((prev) => ({
-                              ...prev,
-                              [eq.equipment_number]: { ...(prev[eq.equipment_number] ?? {}), daily_chemical_limit_kg: v ?? undefined },
                             }));
                           }}
                         />
