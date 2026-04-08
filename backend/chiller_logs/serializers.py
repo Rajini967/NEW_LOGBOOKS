@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from django.utils import timezone
 from .models import ChillerLog, ChillerEquipmentLimit
 from reports.utils import log_limit_change
 
@@ -82,7 +83,6 @@ CHILLER_LIMIT_FIELDS = [
     'daily_power_limit_kw',
     'electricity_rate_rs_per_kwh',
     'daily_water_ct1_liters', 'daily_water_ct2_liters', 'daily_water_ct3_liters',
-    'daily_chemical_ct1_kg', 'daily_chemical_ct2_kg', 'daily_chemical_ct3_kg',
 ]
 
 
@@ -94,7 +94,6 @@ class ChillerEquipmentLimitSerializer(serializers.ModelSerializer):
             'daily_power_limit_kw',
             'electricity_rate_rs_per_kwh',
             'daily_water_ct1_liters', 'daily_water_ct2_liters', 'daily_water_ct3_liters',
-            'daily_chemical_ct1_kg', 'daily_chemical_ct2_kg', 'daily_chemical_ct3_kg',
             'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
@@ -102,6 +101,11 @@ class ChillerEquipmentLimitSerializer(serializers.ModelSerializer):
     def _get_user(self):
         request = self.context.get("request")
         return request.user if request and getattr(request, "user", None) else None
+
+    def validate_effective_from(self, value):
+        if value and value > timezone.localdate():
+            raise serializers.ValidationError("Effective from date cannot be in the future.")
+        return value
 
     def create(self, validated_data):
         instance = super().create(validated_data)

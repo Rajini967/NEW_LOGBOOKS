@@ -1,4 +1,5 @@
 from django.db import models
+from django.db.models import Q
 from django.conf import settings
 from django.core.validators import MinValueValidator
 import uuid
@@ -34,13 +35,6 @@ class BoilerLog(models.Model):
     activity_to_date = models.DateField(blank=True, null=True)
     activity_from_time = models.TimeField(blank=True, null=True)
     activity_to_time = models.TimeField(blank=True, null=True)
-    
-    # Boiler specific readings
-    feed_water_temp = models.FloatField(validators=[MinValueValidator(0)], blank=True, null=True, help_text="Feed water temperature (°C)")
-    oil_temp = models.FloatField(validators=[MinValueValidator(0)], blank=True, null=True, help_text="Oil temperature (°C)")
-    steam_temp = models.FloatField(validators=[MinValueValidator(0)], blank=True, null=True, help_text="Steam temperature (°C)")
-    steam_pressure = models.FloatField(validators=[MinValueValidator(0)], blank=True, null=True, help_text="Steam pressure (bar)")
-    steam_flow_lph = models.FloatField(validators=[MinValueValidator(0)], blank=True, null=True, help_text="Steam flow (LPH)")
 
     # Section 1: Hourly Parameters (physical format)
     fo_hsd_ng_day_tank_level = models.FloatField(validators=[MinValueValidator(0)], blank=True, null=True, help_text="FO/HSD/NG day tank level (Ltr)")
@@ -67,7 +61,7 @@ class BoilerLog(models.Model):
     daily_diesel_consumption_liters = models.FloatField(validators=[MinValueValidator(0)], blank=True, null=True, help_text="Daily diesel consumption (L)")
     daily_furnace_oil_consumption_liters = models.FloatField(validators=[MinValueValidator(0)], blank=True, null=True, help_text="Daily furnace oil consumption (L)")
     daily_brigade_consumption_kg = models.FloatField(validators=[MinValueValidator(0)], blank=True, null=True, help_text="Daily brigade consumption (kg)")
-    steam_consumption_kg_hr = models.FloatField(validators=[MinValueValidator(0)], blank=True, null=True, help_text="Steam consumption (kg/hr); if null, steam_flow_lph used as proxy")
+    steam_consumption_kg_hr = models.FloatField(validators=[MinValueValidator(0)], blank=True, null=True, help_text="Steam consumption (kg/hr)")
 
     remarks = models.TextField(blank=True, null=True, help_text="Operator remarks from entry form")
     comment = models.TextField(blank=True, null=True, help_text="Separate comment field for list view")
@@ -118,11 +112,10 @@ class BoilerLog(models.Model):
 
 
 class BoilerEquipmentLimit(models.Model):
-    """Daily consumption limits per boiler equipment (power, water, chemical)."""
+    """Daily consumption limits per boiler equipment (power, water, fuels, steam)."""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     equipment_id = models.CharField(
         max_length=100,
-        unique=True,
         db_index=True,
         help_text="Boiler equipment identifier",
     )
@@ -144,12 +137,6 @@ class BoilerEquipmentLimit(models.Model):
         null=True,
         help_text="Daily water consumption limit (liters)",
     )
-    daily_chemical_limit_kg = models.FloatField(
-        validators=[MinValueValidator(0)],
-        blank=True,
-        null=True,
-        help_text="Daily chemical consumption limit (kg)",
-    )
     # Oil limits by type
     daily_diesel_limit_liters = models.FloatField(validators=[MinValueValidator(0)], blank=True, null=True, help_text="Daily diesel consumption limit (L)")
     daily_furnace_oil_limit_liters = models.FloatField(validators=[MinValueValidator(0)], blank=True, null=True, help_text="Daily furnace oil consumption limit (L)")
@@ -168,6 +155,17 @@ class BoilerEquipmentLimit(models.Model):
         ordering = ['equipment_id']
         verbose_name = 'Boiler Equipment Limit'
         verbose_name_plural = 'Boiler Equipment Limits'
+        constraints = [
+            models.UniqueConstraint(
+                fields=["equipment_id", "effective_from"],
+                name="uniq_boiler_limit_equipment_effective_from",
+            ),
+            models.UniqueConstraint(
+                fields=["equipment_id"],
+                condition=Q(effective_from__isnull=True),
+                name="uniq_boiler_limit_equipment_default",
+            ),
+        ]
 
     def __str__(self):
         return f"Limits for {self.equipment_id}"

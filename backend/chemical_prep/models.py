@@ -1,4 +1,5 @@
 from django.db import models
+from django.db.models import Q
 from django.conf import settings
 from django.core.validators import MinValueValidator
 import uuid
@@ -334,3 +335,56 @@ class ChemicalDashboardConfig(models.Model):
 
     def __str__(self):
         return "Chemical dashboard config"
+
+
+class ChemicalDailyLimit(models.Model):
+    """Date-wise chemical daily limit settings (quantity and price)."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    equipment_name = models.CharField(
+        max_length=255,
+        help_text="Assigned equipment name for this limit.",
+    )
+    chemical_name = models.CharField(
+        max_length=255,
+        help_text="Assigned chemical name for this limit.",
+    )
+    effective_from = models.DateField(
+        blank=True,
+        null=True,
+        help_text="Date from which this limit applies. Leave blank to apply to all dates.",
+    )
+    quantity = models.FloatField(
+        validators=[MinValueValidator(0)],
+        blank=True,
+        null=True,
+        help_text="Daily chemical quantity limit",
+    )
+    price = models.FloatField(
+        validators=[MinValueValidator(0)],
+        blank=True,
+        null=True,
+        help_text="Chemical price",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "chemical_daily_limits"
+        ordering = ["-effective_from", "-updated_at"]
+        verbose_name = "Chemical Daily Limit"
+        verbose_name_plural = "Chemical Daily Limits"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["equipment_name", "chemical_name", "effective_from"],
+                name="uniq_chemical_daily_limit_eq_chem_effective_from",
+            ),
+            models.UniqueConstraint(
+                fields=["equipment_name", "chemical_name"],
+                condition=Q(effective_from__isnull=True),
+                name="uniq_chemical_daily_limit_eq_chem_default_single",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.equipment_name} / {self.chemical_name}: {self.effective_from or 'default'}"

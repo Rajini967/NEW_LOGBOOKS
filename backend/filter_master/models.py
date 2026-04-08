@@ -1,5 +1,5 @@
 import uuid
-from datetime import date
+from datetime import date, timedelta
 
 from django.conf import settings
 from django.core.validators import MinValueValidator
@@ -194,6 +194,11 @@ class FilterSchedule(models.Model):
     )
     schedule_type = models.CharField(max_length=32, choices=SCHEDULE_TYPE_CHOICES)
     frequency_days = models.PositiveIntegerField(blank=True, null=True)
+    tolerance_days = models.IntegerField(
+        blank=True,
+        null=True,
+        help_text="Days added to nominal due before marking overdue: positive = grace after due date, negative = overdue effective earlier.",
+    )
     next_due_date = models.DateField(blank=True, null=True)
     last_done_date = models.DateField(blank=True, null=True)
     is_approved = models.BooleanField(default=False)
@@ -219,18 +224,37 @@ class FilterSchedule(models.Model):
         verbose_name = "Filter Schedule"
         verbose_name_plural = "Filter Schedules"
 
+    @classmethod
+    def past_grace_end_before(cls, queryset, today: date):
+        """Filter rows whose grace end (due + tolerance) is strictly before ``today`` (PostgreSQL)."""
+        tbl = cls._meta.db_table
+        return queryset.extra(
+            where=[
+                f'({tbl}.next_due_date + COALESCE({tbl}.tolerance_days, 0) * interval \'1 day\')::date < %s'
+            ],
+            params=[today],
+        )
+
     def __str__(self) -> str:  # pragma: no cover - trivial
         return f"{self.assignment} - {self.schedule_type}"
 
-    def mark_overdue_if_needed(self, today: date | None = None) -> None:
-        """Update status to overdue when next_due_date is in the past."""
+    def grace_end_date(self) -> date | None:
+        """Nominal due plus tolerance (when overdue starts)."""
         if not self.next_due_date:
+            return None
+        tol = int(self.tolerance_days or 0)
+        return self.next_due_date + timedelta(days=tol)
+
+    def mark_overdue_if_needed(self, today: date | None = None) -> None:
+        """Update status to overdue when grace end date is in the past."""
+        end = self.grace_end_date()
+        if not end:
             return
         if today is None:
             today = date.today()
         if self.status == "completed":
             return
-        if self.next_due_date < today and self.status != "overdue":
+        if end < today and self.status != "overdue":
             self.status = "overdue"
 
 

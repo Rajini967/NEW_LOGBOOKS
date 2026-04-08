@@ -1,4 +1,5 @@
 from django.db import models
+from django.db.models import Q
 from django.conf import settings
 from django.core.validators import MinValueValidator
 import uuid
@@ -281,7 +282,6 @@ class ChillerEquipmentLimit(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     equipment_id = models.CharField(
         max_length=100,
-        unique=True,
         db_index=True,
         help_text="Chiller equipment identifier (e.g. equipment_number)"
     )
@@ -323,25 +323,6 @@ class ChillerEquipmentLimit(models.Model):
         null=True,
         help_text="Cooling tower 3 daily water consumption limit (liters)"
     )
-    # Chemical category - daily limits in kg per cooling tower (CT-1, CT-2, CT-3)
-    daily_chemical_ct1_kg = models.FloatField(
-        validators=[MinValueValidator(0)],
-        blank=True,
-        null=True,
-        help_text="Cooling tower 1 daily chemical consumption limit (kg)"
-    )
-    daily_chemical_ct2_kg = models.FloatField(
-        validators=[MinValueValidator(0)],
-        blank=True,
-        null=True,
-        help_text="Cooling tower 2 daily chemical consumption limit (kg)"
-    )
-    daily_chemical_ct3_kg = models.FloatField(
-        validators=[MinValueValidator(0)],
-        blank=True,
-        null=True,
-        help_text="Cooling tower 3 daily chemical consumption limit (kg)"
-    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -350,6 +331,17 @@ class ChillerEquipmentLimit(models.Model):
         ordering = ["equipment_id"]
         verbose_name = "Chiller Equipment Limit"
         verbose_name_plural = "Chiller Equipment Limits"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["equipment_id", "effective_from"],
+                name="uniq_chiller_limit_equipment_effective_from",
+            ),
+            models.UniqueConstraint(
+                fields=["equipment_id"],
+                condition=Q(effective_from__isnull=True),
+                name="uniq_chiller_limit_equipment_default",
+            ),
+        ]
 
     def __str__(self):
         return f"Limits for {self.equipment_id}"

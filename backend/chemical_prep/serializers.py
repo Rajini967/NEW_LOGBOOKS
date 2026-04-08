@@ -1,5 +1,6 @@
 from rest_framework import serializers
-from .models import Chemical, ChemicalStock, ChemicalPreparation, ChemicalAssignment
+from django.utils import timezone
+from .models import Chemical, ChemicalStock, ChemicalPreparation, ChemicalAssignment, ChemicalDailyLimit
 
 
 class ChemicalSerializer(serializers.ModelSerializer):
@@ -239,4 +240,48 @@ class ChemicalPreparationSerializer(serializers.ModelSerializer):
             return get_tolerance_status(obj.timestamp, obj.equipment_name or "", "chemical")
         except Exception:
             return "none"
+
+
+class ChemicalDailyLimitSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ChemicalDailyLimit
+        fields = [
+            "id",
+            "equipment_name",
+            "chemical_name",
+            "effective_from",
+            "quantity",
+            "price",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
+
+    def validate_effective_from(self, value):
+        if value and value > timezone.localdate():
+            raise serializers.ValidationError("Effective from date cannot be in the future.")
+        return value
+
+    def validate(self, attrs):
+        equipment_name = (
+            attrs.get("equipment_name", getattr(self.instance, "equipment_name", None)) or ""
+        ).strip()
+        if not equipment_name:
+            raise serializers.ValidationError({"equipment_name": ["Equipment name is required."]})
+        chemical_name = (
+            attrs.get("chemical_name", getattr(self.instance, "chemical_name", None)) or ""
+        ).strip()
+        if not chemical_name:
+            raise serializers.ValidationError({"chemical_name": ["Chemical name is required."]})
+
+        effective_from = attrs.get("effective_from", getattr(self.instance, "effective_from", None))
+        qs = ChemicalDailyLimit.objects.filter(
+            equipment_name=equipment_name,
+            chemical_name=chemical_name,
+        )
+        if self.instance is not None:
+            qs = qs.exclude(pk=self.instance.pk)
+        if effective_from is None and qs.filter(effective_from__isnull=True).exists():
+            raise serializers.ValidationError({"effective_from": ["Default (blank date) limit already exists for this equipment and chemical."]})
+        return attrs
 

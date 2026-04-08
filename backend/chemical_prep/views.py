@@ -8,6 +8,8 @@ import calendar
 from django.db import models
 from django.db.models import Q
 from django.utils import timezone
+from django.http import Http404
+from uuid import UUID
 from core.log_slot_utils import (
     get_interval_for_equipment,
     get_slot_range,
@@ -18,12 +20,13 @@ from core.log_slot_utils import (
     filter_missing_slots_before_earliest_downtime,
 )
 from equipment.models import EquipmentCategory
-from .models import Chemical, ChemicalStock, ChemicalPreparation, ChemicalAssignment, ChemicalDashboardConfig
+from .models import Chemical, ChemicalStock, ChemicalPreparation, ChemicalAssignment, ChemicalDashboardConfig, ChemicalDailyLimit
 from .serializers import (
     ChemicalSerializer,
     ChemicalStockSerializer,
     ChemicalAssignmentSerializer,
     ChemicalPreparationSerializer,
+    ChemicalDailyLimitSerializer,
 )
 from accounts.permissions import (
     CanApproveChemicalAssignment,
@@ -73,75 +76,86 @@ def _resolve_chemical_for_cost(chemical_name):
     return None
 
 
-def _chemical_totals_for_queryset(qs):
-    """Given a queryset of ChemicalPreparation, return (total_consumption_kg, total_cost_rs)."""
-    groups = defaultdict(lambda: {"qty_g": 0.0, "chemical_id": None, "chemical_name": ""})
-    for prep in qs.select_related("chemical").only(
-        "chemical_id", "chemical_name", "chemical_qty"
-    ):
-        if prep.chemical_id:
-            key = ("id", str(prep.chemical_id))
-            display_name = prep.chemical.name if prep.chemical else (prep.chemical_name or "—")
-        else:
-            name_key = (prep.chemical_name or "").strip() or "—"
-            key = ("name", name_key)
-            display_name = name_key
-        groups[key]["qty_g"] += float(prep.chemical_qty or 0)
-        groups[key]["chemical_id"] = str(prep.chemical_id) if prep.chemical_id else None
-        groups[key]["chemical_name"] = display_name
-    total_consumption_kg = 0.0
-    total_cost_rs = 0.0
-    for (_kt, _kv), data in groups.items():
-        consumption_kg = round(data["qty_g"] / 1000.0, 4)
-        total_consumption_kg += consumption_kg
-        cid = data["chemical_id"]
-        if cid:
-            stock = (
-                ChemicalStock.objects.filter(chemical_id=cid)
-                .order_by("-updated_at")
-                .first()
-            )
-            if stock and stock.price_per_unit is not None:
-                total_cost_rs += round(consumption_kg * float(stock.price_per_unit), 2)
-        else:
-            chem = _resolve_chemical_for_cost(data["chemical_name"])
-            if chem:
-                stock = (
-                    ChemicalStock.objects.filter(chemical=chem)
-                    .order_by("-updated_at")
-                    .first()
-                )
-                if stock and stock.price_per_unit is not None:
-                    total_cost_rs += round(consumption_kg * float(stock.price_per_unit), 2)
-    return (round(total_consumption_kg, 2), round(total_cost_rs, 2))
+def _manual_actual_totals(start_d, end_d, equipment_name=None, chemical_name=None):
+    """Actuals from manual_chemical_consumption table for given date range."""
+    from reports.models import ManualChemicalConsumption
 
-
-def _projected_totals_from_stock(equipment_name=None):
-    """
-    Derive projected consumption (kg) and projected cost (Rs)
-    from current chemical stock, optionally filtered by equipment.
-
-    Business rule:
-    - For each ChemicalStock entry, use available_qty_kg as projected quantity.
-    - Projected cost = available_qty_kg * price_per_unit (when price is set).
-    - When equipment_name is provided, restrict to chemicals assigned to that equipment.
-    """
-    stock_qs = ChemicalStock.objects.select_related("chemical")
+    qs = ManualChemicalConsumption.objects.filter(date__gte=start_d, date__lte=end_d)
     if equipment_name:
-        chem_ids = ChemicalAssignment.objects.filter(
-            equipment_name__iexact=equipment_name
-        ).values_list("chemical_id", flat=True)
-        stock_qs = stock_qs.filter(chemical_id__in=list(chem_ids))
+        qs = qs.filter(equipment_name__iexact=equipment_name)
+    if chemical_name:
+        qs = qs.filter(chemical_name__iexact=chemical_name)
 
-    total_qty_kg = 0.0
-    total_cost_rs = 0.0
-    for stock in stock_qs:
-        qty_kg = float(stock.available_qty_kg or 0.0)
-        total_qty_kg += qty_kg
-        if stock.price_per_unit is not None:
-            total_cost_rs += qty_kg * float(stock.price_per_unit)
+    total_qty = 0.0
+    total_cost = 0.0
+    for row in qs.only("quantity_kg", "price_rs"):
+        qty = float(row.quantity_kg or 0.0)
+        total_qty += qty
+        # price_rs is persisted as computed amount for the row.
+        total_cost += float(row.price_rs or 0.0)
+    return round(total_qty, 2), round(total_cost, 2)
 
-    return round(total_qty_kg, 2), round(total_cost_rs, 2)
+
+def _manual_actual_by_chemical(start_d, end_d, equipment_name=None, chemical_name=None):
+    """By-chemical breakdown from manual_chemical_consumption table."""
+    from reports.models import ManualChemicalConsumption
+
+    qs = ManualChemicalConsumption.objects.filter(date__gte=start_d, date__lte=end_d)
+    if equipment_name:
+        qs = qs.filter(equipment_name__iexact=equipment_name)
+    if chemical_name:
+        qs = qs.filter(chemical_name__iexact=chemical_name)
+
+    grouped = defaultdict(lambda: {"qty": 0.0, "cost": 0.0})
+    for row in qs.only("chemical_name", "quantity_kg", "price_rs"):
+        name = (row.chemical_name or "").strip() or "—"
+        qty = float(row.quantity_kg or 0.0)
+        grouped[name]["qty"] += qty
+        # price_rs is persisted as computed amount for the row.
+        grouped[name]["cost"] += float(row.price_rs or 0.0)
+
+    out = []
+    for name, vals in grouped.items():
+        out.append({
+            "chemical_id": None,
+            "chemical_name": name,
+            "consumption_kg": round(vals["qty"], 2),
+            "cost_rs": round(vals["cost"], 2),
+        })
+    out.sort(key=lambda x: (-(x["consumption_kg"] or 0), x["chemical_name"]))
+    return out
+
+
+def _projected_totals_from_daily_limits(start_d, end_d, equipment_name=None, chemical_name=None):
+    """Projected totals from chemical_daily_limits by applying date-wise rows."""
+    limits = ChemicalDailyLimit.objects.all()
+    if equipment_name:
+        limits = limits.filter(equipment_name__iexact=equipment_name)
+    if chemical_name:
+        limits = limits.filter(chemical_name__iexact=chemical_name)
+
+    grouped = defaultdict(lambda: {"default": None, "by_date": {}})
+    for row in limits:
+        key = ((row.equipment_name or "").strip(), (row.chemical_name or "").strip())
+        if row.effective_from is None:
+            grouped[key]["default"] = row
+        else:
+            grouped[key]["by_date"][row.effective_from] = row
+
+    total_qty = 0.0
+    total_cost = 0.0
+    days = (end_d - start_d).days + 1
+    for i in range(max(days, 0)):
+        d = start_d + timedelta(days=i)
+        for data in grouped.values():
+            row = data["by_date"].get(d) or data["default"]
+            if row is None:
+                continue
+            qty = float(row.quantity or 0.0)
+            price = float(row.price or 0.0)
+            total_qty += qty
+            total_cost += qty * price
+    return round(total_qty, 2), round(total_cost, 2)
 
 
 def get_available_stock_for_chemical(chemical_id):
@@ -937,27 +951,42 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=["get"], url_path="equipment_names")
     def equipment_names(self, request):
         """
-        GET Returns distinct equipment names for dashboard dropdown: from approved
-        chemical assignments and from approved preparations. Only approved equipments are shown.
+        GET Returns distinct equipment names for dashboard dropdown
+        from approved chemical assignments only.
         """
-        # Equipment from approved chemical assignments only (so dropdown shows only approved equipment)
-        from_assignments = set(
+        names = sorted(
             ChemicalAssignment.objects.filter(is_active=True, status="approved")
             .exclude(equipment_name__isnull=True)
             .exclude(equipment_name="")
             .values_list("equipment_name", flat=True)
             .distinct()
         )
-        # Equipment from approved preparations (in case logs exist without assignment)
-        from_preparations = set(
-            ChemicalPreparation.objects.filter(status="approved")
-            .exclude(equipment_name__isnull=True)
-            .exclude(equipment_name="")
-            .values_list("equipment_name", flat=True)
-            .distinct()
-        )
-        names = sorted(from_assignments | from_preparations)
         return Response({"equipment_names": names})
+
+    @action(detail=False, methods=["get"], url_path="chemical_names")
+    def chemical_names(self, request):
+        """
+        GET ?equipment_name=...
+        Returns distinct chemical names for dashboard dropdown
+        from approved chemical assignments only.
+        """
+        equipment_name = (request.query_params.get("equipment_name") or "").strip() or None
+
+        assignments_qs = ChemicalAssignment.objects.filter(is_active=True, status="approved")
+        if equipment_name:
+            assignments_qs = assignments_qs.filter(equipment_name__iexact=equipment_name)
+
+        names_set = set()
+        for row in assignments_qs.select_related("chemical").only("chemical_name", "chemical__name"):
+            name = ""
+            if getattr(row, "chemical_id", None) and row.chemical is not None:
+                name = (row.chemical.name or "").strip()
+            if not name:
+                name = (row.chemical_name or "").strip()
+            if name:
+                names_set.add(name)
+        names = sorted(names_set)
+        return Response({"chemical_names": names})
 
     @action(detail=False, methods=["get"], url_path="dashboard_summary")
     def dashboard_summary(self, request):
@@ -985,6 +1014,7 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         equipment_name = (request.query_params.get("equipment_name") or "").strip() or None
+        chemical_name = (request.query_params.get("chemical_name") or "").strip() or None
 
         if period_type == "day":
             period_start = timezone.make_aware(
@@ -1029,68 +1059,20 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
             )
             days_in_period = 366 if calendar.isleap(ref_date.year) else 365
 
-        qs = ChemicalPreparation.objects.filter(
-            timestamp__gte=period_start,
-            timestamp__lte=period_end,
-            status__in=["approved", "pending", "draft"],
-        ).exclude(chemical_qty__isnull=True).exclude(chemical_qty=0)
-        if equipment_name:
-            qs = qs.filter(equipment_name__iexact=equipment_name)
-
-        groups = defaultdict(lambda: {"qty_g": 0.0, "chemical_id": None, "chemical_name": ""})
-
-        for prep in qs.select_related("chemical").only(
-            "chemical_id", "chemical_name", "chemical_qty"
-        ):
-            if prep.chemical_id:
-                key = ("id", str(prep.chemical_id))
-                display_name = prep.chemical.name if prep.chemical else (prep.chemical_name or "—")
-            else:
-                name_key = (prep.chemical_name or "").strip() or "—"
-                key = ("name", name_key)
-                display_name = name_key
-            groups[key]["qty_g"] += float(prep.chemical_qty or 0)
-            groups[key]["chemical_id"] = str(prep.chemical_id) if prep.chemical_id else None
-            groups[key]["chemical_name"] = display_name
-
-        by_chemical = []
-        total_consumption_kg = 0.0
-        total_cost_rs = 0.0
-
-        for (_key_type, key_val), data in groups.items():
-            consumption_kg = round(data["qty_g"] / 1000.0, 4)
-            total_consumption_kg += consumption_kg
-            cost_rs = None
-            cid = data["chemical_id"]
-            if cid:
-                stock = (
-                    ChemicalStock.objects.filter(chemical_id=cid)
-                    .order_by("-updated_at")
-                    .first()
-                )
-                if stock and stock.price_per_unit is not None:
-                    cost_rs = round(consumption_kg * float(stock.price_per_unit), 2)
-                    total_cost_rs += cost_rs
-            else:
-                chem = _resolve_chemical_for_cost(data["chemical_name"])
-                if chem:
-                    stock = (
-                        ChemicalStock.objects.filter(chemical=chem)
-                        .order_by("-updated_at")
-                        .first()
-                    )
-                    if stock and stock.price_per_unit is not None:
-                        cost_rs = round(consumption_kg * float(stock.price_per_unit), 2)
-                        total_cost_rs += cost_rs
-
-            by_chemical.append({
-                "chemical_id": data["chemical_id"],
-                "chemical_name": data["chemical_name"] or "—",
-                "consumption_kg": consumption_kg,
-                "cost_rs": cost_rs,
-            })
-
-        by_chemical.sort(key=lambda x: (-(x["consumption_kg"] or 0), x["chemical_name"]))
+        start_d = period_start.date()
+        end_d = period_end.date()
+        by_chemical = _manual_actual_by_chemical(
+            start_d=start_d,
+            end_d=end_d,
+            equipment_name=equipment_name,
+            chemical_name=chemical_name,
+        )
+        total_consumption_kg, total_cost_rs = _manual_actual_totals(
+            start_d=start_d,
+            end_d=end_d,
+            equipment_name=equipment_name,
+            chemical_name=chemical_name,
+        )
 
         payload = {
             "period_type": period_type,
@@ -1102,8 +1084,11 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
             "total_cost_rs": round(total_cost_rs, 2),
         }
 
-        projected_qty_kg, projected_cost_rs = _projected_totals_from_stock(
-            equipment_name=equipment_name
+        projected_qty_kg, projected_cost_rs = _projected_totals_from_daily_limits(
+            start_d=start_d,
+            end_d=end_d,
+            equipment_name=equipment_name,
+            chemical_name=chemical_name,
         )
         if projected_qty_kg:
             payload["projected_consumption_kg"] = projected_qty_kg
@@ -1138,35 +1123,28 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         equipment_name = (request.query_params.get("equipment_name") or "").strip() or None
+        chemical_name = (request.query_params.get("chemical_name") or "").strip() or None
         days_param = request.query_params.get("days")
         series_days = int(days_param) if days_param and str(days_param).isdigit() else 1
         series_days = max(1, min(31, series_days))
-
-        proj_total_qty_kg, proj_total_cost_rs = _projected_totals_from_stock(
-            equipment_name=equipment_name
-        )
 
         series = []
         try:
             if period_type == "day":
                 for i in range(series_days - 1, -1, -1):
                     d = ref_date - timedelta(days=i)
-                    day_start = timezone.make_aware(datetime.combine(d, datetime.min.time()))
-                    day_end = timezone.make_aware(
-                        datetime.combine(d, datetime.max.time().replace(microsecond=999999))
+                    actual_kg, actual_rs = _manual_actual_totals(
+                        start_d=d,
+                        end_d=d,
+                        equipment_name=equipment_name,
+                        chemical_name=chemical_name,
                     )
-                    qs = (
-                        ChemicalPreparation.objects.filter(
-                            timestamp__gte=day_start,
-                            timestamp__lte=day_end,
-                            status__in=["approved", "pending", "draft"],
-                        )
-                        .exclude(chemical_qty__isnull=True)
-                        .exclude(chemical_qty=0)
+                    proj_total_qty_kg, proj_total_cost_rs = _projected_totals_from_daily_limits(
+                        start_d=d,
+                        end_d=d,
+                        equipment_name=equipment_name,
+                        chemical_name=chemical_name,
                     )
-                    if equipment_name:
-                        qs = qs.filter(equipment_name__iexact=equipment_name)
-                    actual_kg, actual_rs = _chemical_totals_for_queryset(qs)
                     series.append({
                         "date": d.isoformat(),
                         "label": d.strftime("%d %b"),
@@ -1180,25 +1158,18 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
                 _, last_day = calendar.monthrange(ref_date.year, ref_date.month)
                 start_d = date(ref_date.year, ref_date.month, 1)
                 end_d = date(ref_date.year, ref_date.month, last_day)
-                month_start = timezone.make_aware(datetime.combine(start_d, datetime.min.time()))
-                month_end = timezone.make_aware(
-                    datetime.combine(
-                        end_d,
-                        datetime.max.time().replace(microsecond=999999),
-                    )
+                actual_kg, actual_rs = _manual_actual_totals(
+                    start_d=start_d,
+                    end_d=end_d,
+                    equipment_name=equipment_name,
+                    chemical_name=chemical_name,
                 )
-                qs = (
-                    ChemicalPreparation.objects.filter(
-                        timestamp__gte=month_start,
-                        timestamp__lte=month_end,
-                        status__in=["approved", "pending", "draft"],
-                    )
-                    .exclude(chemical_qty__isnull=True)
-                    .exclude(chemical_qty=0)
+                proj_total_qty_kg, proj_total_cost_rs = _projected_totals_from_daily_limits(
+                    start_d=start_d,
+                    end_d=end_d,
+                    equipment_name=equipment_name,
+                    chemical_name=chemical_name,
                 )
-                if equipment_name:
-                    qs = qs.filter(equipment_name__iexact=equipment_name)
-                actual_kg, actual_rs = _chemical_totals_for_queryset(qs)
                 series.append({
                     "date": start_d.isoformat(),
                     "label": start_d.strftime("%b %Y"),
@@ -1208,22 +1179,20 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
                     "projected_cost_rs": proj_total_cost_rs,
                 })
             else:
-                year_start = timezone.make_aware(datetime(ref_date.year, 1, 1))
-                year_end = timezone.make_aware(
-                    datetime(ref_date.year, 12, 31, 23, 59, 59, 999999)
+                start_d = date(ref_date.year, 1, 1)
+                end_d = date(ref_date.year, 12, 31)
+                actual_kg, actual_rs = _manual_actual_totals(
+                    start_d=start_d,
+                    end_d=end_d,
+                    equipment_name=equipment_name,
+                    chemical_name=chemical_name,
                 )
-                qs = (
-                    ChemicalPreparation.objects.filter(
-                        timestamp__gte=year_start,
-                        timestamp__lte=year_end,
-                        status__in=["approved", "pending", "draft"],
-                    )
-                    .exclude(chemical_qty__isnull=True)
-                    .exclude(chemical_qty=0)
+                proj_total_qty_kg, proj_total_cost_rs = _projected_totals_from_daily_limits(
+                    start_d=start_d,
+                    end_d=end_d,
+                    equipment_name=equipment_name,
+                    chemical_name=chemical_name,
                 )
-                if equipment_name:
-                    qs = qs.filter(equipment_name__iexact=equipment_name)
-                actual_kg, actual_rs = _chemical_totals_for_queryset(qs)
                 series.append({
                     "date": date(ref_date.year, 1, 1).isoformat(),
                     "label": str(ref_date.year),
@@ -1417,3 +1386,48 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
         
         serializer = self.get_serializer(prep)
         return Response(serializer.data)
+
+
+class ChemicalDailyLimitViewSet(viewsets.ModelViewSet):
+    """Date-wise chemical daily limits for Settings page."""
+
+    permission_classes = [IsAuthenticated]
+    serializer_class = ChemicalDailyLimitSerializer
+    queryset = ChemicalDailyLimit.objects.all()
+
+    def get_permissions(self):
+        if self.action in ("create", "update", "partial_update", "destroy"):
+            return [IsAuthenticated(), CanManageChemicalInventory()]
+        return [IsAuthenticated()]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        equipment_name = (self.request.query_params.get("equipment_name") or "").strip()
+        if equipment_name:
+            qs = qs.filter(equipment_name=equipment_name)
+        chemical_name = (self.request.query_params.get("chemical_name") or "").strip()
+        if chemical_name:
+            qs = qs.filter(chemical_name=chemical_name)
+        return qs
+
+    def get_object(self):
+        """
+        Backward-compatible lookup:
+        - Prefer UUID primary key
+        - Fallback to latest row for legacy non-UUID lookups
+        """
+        lookup_value = self.kwargs.get(self.lookup_url_kwarg or self.lookup_field)
+        queryset = self.filter_queryset(self.get_queryset())
+
+        try:
+            obj = queryset.get(pk=UUID(str(lookup_value)))
+            self.check_object_permissions(self.request, obj)
+            return obj
+        except (ValueError, TypeError, ChemicalDailyLimit.DoesNotExist):
+            pass
+
+        obj = queryset.order_by("-effective_from", "-updated_at", "-created_at").first()
+        if obj is None:
+            raise Http404
+        self.check_object_permissions(self.request, obj)
+        return obj

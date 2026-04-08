@@ -303,11 +303,17 @@ class FilterScheduleViewSet(viewsets.ModelViewSet):
         overdue_param = self.request.query_params.get("overdue")
         if overdue_param == "true":
             today = date.today()
-            # Ensure status reflects overdue state for crossed due dates
-            FilterSchedule.objects.filter(is_approved=True, next_due_date__lt=today).exclude(
-                status__in=["completed", "overdue"]
-            ).update(status="overdue")
-            qs = qs.filter(is_approved=True, next_due_date__lt=today).exclude(status="completed")
+            to_mark = FilterSchedule.past_grace_end_before(
+                FilterSchedule.objects.filter(is_approved=True)
+                .exclude(next_due_date__isnull=True)
+                .exclude(status__in=["completed", "overdue"]),
+                today,
+            )
+            to_mark.update(status="overdue")
+            qs = FilterSchedule.past_grace_end_before(
+                qs.filter(is_approved=True).exclude(next_due_date__isnull=True).exclude(status="completed"),
+                today,
+            )
         return qs
 
     @action(detail=False, methods=["get"], url_path="overdue-summary")
@@ -316,13 +322,20 @@ class FilterScheduleViewSet(viewsets.ModelViewSet):
         Return counts of overdue schedules grouped by schedule type.
         """
         today = date.today()
-        # Ensure status reflects overdue state for crossed due dates
-        FilterSchedule.objects.filter(is_approved=True, next_due_date__lt=today).exclude(
-            status__in=["completed", "overdue"]
-        ).update(status="overdue")
+        to_mark = FilterSchedule.past_grace_end_before(
+            FilterSchedule.objects.filter(is_approved=True)
+            .exclude(next_due_date__isnull=True)
+            .exclude(status__in=["completed", "overdue"]),
+            today,
+        )
+        to_mark.update(status="overdue")
         qs = (
-            FilterSchedule.objects.filter(is_approved=True, next_due_date__lt=today)
-            .exclude(status="completed")
+            FilterSchedule.past_grace_end_before(
+                FilterSchedule.objects.filter(is_approved=True)
+                .exclude(next_due_date__isnull=True)
+                .exclude(status="completed"),
+                today,
+            )
             .values("schedule_type")
             .annotate(count=Count("id"))
         )

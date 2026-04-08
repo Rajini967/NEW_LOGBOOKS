@@ -128,3 +128,66 @@ class BoilerMissingSlotsRangeTests(APITestCase):
         ts = row.get("last_reading_timestamp")
         if ts:
             self.assertLessEqual(ts[:10], historical_day.date().isoformat())
+
+
+class BoilerTankLevelLimitTests(APITestCase):
+    """NLT 200 Ltr / NLT 2 KL for operation activity (serializer)."""
+
+    def setUp(self):
+        self.operator = User.objects.create_user(
+            email="boiler-tank-op@example.com",
+            password="testpass123",
+            role=UserRole.OPERATOR,
+            name="Tank Op",
+            is_active=True,
+        )
+        self.client.force_authenticate(user=self.operator)
+        self.url = reverse("boiler-log-list")
+
+    def _base_operation_payload(self, **overrides):
+        payload = {
+            "equipment_id": "BL-TANK-BASE",
+            "remarks": "Operation with valid tank levels",
+            "activity_type": "operation",
+            "fo_hsd_ng_day_tank_level": 250,
+            "feed_water_tank_level": 2.5,
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_operation_rejects_fo_day_tank_below_200(self):
+        response = self.client.post(
+            self.url,
+            self._base_operation_payload(
+                equipment_id="BL-TANK-FO-LOW",
+                fo_hsd_ng_day_tank_level=199,
+            ),
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("fo_hsd_ng_day_tank_level", response.data)
+
+    def test_operation_rejects_feed_water_tank_below_2_kl(self):
+        response = self.client.post(
+            self.url,
+            self._base_operation_payload(
+                equipment_id="BL-TANK-FW-LOW",
+                feed_water_tank_level=1.9,
+            ),
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("feed_water_tank_level", response.data)
+
+    def test_maintenance_without_tank_levels_succeeds(self):
+        response = self.client.post(
+            self.url,
+            {
+                "equipment_id": "BL-TANK-MAINT",
+                "remarks": "Scheduled maintenance",
+                "activity_type": "maintenance",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(BoilerLog.objects.filter(equipment_id="BL-TANK-MAINT").count(), 1)

@@ -12,7 +12,7 @@ from rest_framework.response import Response
 from .models import Report, ManualChillerConsumption, ManualBoilerConsumption, ManualChemicalConsumption
 from .utils import log_audit_event
 from .dashboard_queries import get_dashboard_metrics
-from chiller_logs.views import _get_limit_for_date
+from chiller_logs.views import _get_chiller_limit_for_electricity_cost_date, _get_limit_for_date
 from boiler_logs.views import _get_boiler_limit_for_date
 
 # Max date range for daily_consumption (days)
@@ -165,6 +165,8 @@ def daily_consumption(request):
             entry_date = datetime.strptime(date_str, "%Y-%m-%d").date()
         except ValueError:
             return Response({"error": "date must be YYYY-MM-DD"}, status=status.HTTP_400_BAD_REQUEST)
+        if entry_date > timezone.localdate():
+            return Response({"error": "future date is not allowed"}, status=status.HTTP_400_BAD_REQUEST)
 
         if type_param == "chiller":
             equipment_id = (data.get("equipment_id") or "").strip()
@@ -175,9 +177,6 @@ def daily_consumption(request):
                 water_ct1_l = float(data.get("water_ct1_l") or 0)
                 water_ct2_l = float(data.get("water_ct2_l") or 0)
                 water_ct3_l = float(data.get("water_ct3_l") or 0)
-                chemical_ct1_kg = float(data.get("chemical_ct1_kg") or 0)
-                chemical_ct2_kg = float(data.get("chemical_ct2_kg") or 0)
-                chemical_ct3_kg = float(data.get("chemical_ct3_kg") or 0)
             except (TypeError, ValueError):
                 return Response(
                     {"error": "Consumption values must be numeric"},
@@ -194,12 +193,10 @@ def daily_consumption(request):
                     warnings.append(f"Cooling Tower 2 – Water exceeds limit ({limit.daily_water_ct2_liters} L).")
                 if limit.daily_water_ct3_liters is not None and water_ct3_l > limit.daily_water_ct3_liters:
                     warnings.append(f"Cooling Tower 3 – Water exceeds limit ({limit.daily_water_ct3_liters} L).")
-                if limit.daily_chemical_ct1_kg is not None and chemical_ct1_kg > limit.daily_chemical_ct1_kg:
-                    warnings.append(f"Cooling Tower 1 – Chemical exceeds limit ({limit.daily_chemical_ct1_kg} kg).")
-                if limit.daily_chemical_ct2_kg is not None and chemical_ct2_kg > limit.daily_chemical_ct2_kg:
-                    warnings.append(f"Cooling Tower 2 – Chemical exceeds limit ({limit.daily_chemical_ct2_kg} kg).")
-                if limit.daily_chemical_ct3_kg is not None and chemical_ct3_kg > limit.daily_chemical_ct3_kg:
-                    warnings.append(f"Cooling Tower 3 – Chemical exceeds limit ({limit.daily_chemical_ct3_kg} kg).")
+            cost_limit = _get_chiller_limit_for_electricity_cost_date(equipment_id, entry_date)
+            actual_electricity_cost_rs = None
+            if cost_limit is not None and getattr(cost_limit, "electricity_rate_rs_per_kwh", None) is not None:
+                actual_electricity_cost_rs = round(power_kwh * float(cost_limit.electricity_rate_rs_per_kwh), 2)
             obj, created = ManualChillerConsumption.objects.update_or_create(
                 equipment_id=equipment_id,
                 date=entry_date,
@@ -208,9 +205,7 @@ def daily_consumption(request):
                     "water_ct1_l": water_ct1_l,
                     "water_ct2_l": water_ct2_l,
                     "water_ct3_l": water_ct3_l,
-                    "chemical_ct1_kg": chemical_ct1_kg,
-                    "chemical_ct2_kg": chemical_ct2_kg,
-                    "chemical_ct3_kg": chemical_ct3_kg,
+                    "actual_electricity_cost_rs": actual_electricity_cost_rs,
                 },
             )
             log_audit_event(
@@ -228,9 +223,7 @@ def daily_consumption(request):
                 "water_ct1_l": obj.water_ct1_l,
                 "water_ct2_l": obj.water_ct2_l,
                 "water_ct3_l": obj.water_ct3_l,
-                "chemical_ct1_kg": obj.chemical_ct1_kg,
-                "chemical_ct2_kg": obj.chemical_ct2_kg,
-                "chemical_ct3_kg": obj.chemical_ct3_kg,
+                "actual_electricity_cost_rs": obj.actual_electricity_cost_rs,
             }
             if warnings:
                 payload["warnings"] = warnings
@@ -242,7 +235,6 @@ def daily_consumption(request):
             try:
                 power_kwh = float(data.get("power_kwh") or 0)
                 water_l = float(data.get("water_l") or 0)
-                chemical_kg = float(data.get("chemical_kg") or 0)
                 diesel_l = float(data.get("diesel_l") or 0)
                 furnace_oil_l = float(data.get("furnace_oil_l") or 0)
                 brigade_kg = float(data.get("brigade_kg") or 0)
@@ -259,8 +251,6 @@ def daily_consumption(request):
                     warnings.append(f"Daily power consumption exceeds limit ({limit.daily_power_limit_kw} kWh).")
                 if limit.daily_water_limit_liters is not None and water_l > limit.daily_water_limit_liters:
                     warnings.append(f"Water exceeds limit ({limit.daily_water_limit_liters} L).")
-                if limit.daily_chemical_limit_kg is not None and chemical_kg > limit.daily_chemical_limit_kg:
-                    warnings.append(f"Chemical exceeds limit ({limit.daily_chemical_limit_kg} kg).")
                 if limit.daily_diesel_limit_liters is not None and diesel_l > limit.daily_diesel_limit_liters:
                     warnings.append(f"Diesel exceeds limit ({limit.daily_diesel_limit_liters} L).")
                 if limit.daily_furnace_oil_limit_liters is not None and furnace_oil_l > limit.daily_furnace_oil_limit_liters:
@@ -269,17 +259,20 @@ def daily_consumption(request):
                     warnings.append(f"Brigade exceeds limit ({limit.daily_brigade_limit_kg} kg).")
                 if limit.daily_steam_limit_kg_hr is not None and steam_kg_hr > limit.daily_steam_limit_kg_hr:
                     warnings.append(f"Steam exceeds limit ({limit.daily_steam_limit_kg_hr} kg/hr).")
+            actual_electricity_cost_rs = None
+            if limit is not None and getattr(limit, "electricity_rate_rs_per_kwh", None) is not None:
+                actual_electricity_cost_rs = round(power_kwh * float(limit.electricity_rate_rs_per_kwh), 2)
             obj, created = ManualBoilerConsumption.objects.update_or_create(
                 equipment_id=equipment_id,
                 date=entry_date,
                 defaults={
                     "power_kwh": power_kwh,
                     "water_l": water_l,
-                    "chemical_kg": chemical_kg,
                     "diesel_l": diesel_l,
                     "furnace_oil_l": furnace_oil_l,
                     "brigade_kg": brigade_kg,
                     "steam_kg_hr": steam_kg_hr,
+                    "actual_electricity_cost_rs": actual_electricity_cost_rs,
                 },
             )
             log_audit_event(
@@ -295,28 +288,42 @@ def daily_consumption(request):
                 "equipment_id": obj.equipment_id,
                 "power_kwh": obj.power_kwh,
                 "water_l": obj.water_l,
-                "chemical_kg": obj.chemical_kg,
                 "diesel_l": obj.diesel_l,
                 "furnace_oil_l": obj.furnace_oil_l,
                 "brigade_kg": obj.brigade_kg,
                 "steam_kg_hr": obj.steam_kg_hr,
+                "actual_electricity_cost_rs": obj.actual_electricity_cost_rs,
             }
             if warnings:
                 payload["warnings"] = warnings
             return Response(payload)
         if type_param == "chemical":
+            equipment_name = str(data.get("equipment_id") or data.get("equipment_name") or "").strip()
+            chemical_name = str(data.get("chemical_name") or "").strip()
             obj, created = ManualChemicalConsumption.objects.update_or_create(
+                equipment_name=equipment_name,
+                chemical_name=chemical_name,
                 date=entry_date,
-                defaults={"chemical_kg": float(data.get("chemical_kg") or 0)},
+                defaults={
+                    "quantity_kg": float(data.get("quantity_kg") or data.get("chemical_kg") or 0),
+                    "price_rs": float(data.get("price_rs") or 0),
+                },
             )
             log_audit_event(
                 user=request.user,
                 event_type="consumption_updated",
                 object_type="chemical_consumption",
-                object_id=obj.date.isoformat(),
+                object_id=f"{obj.equipment_name}_{obj.chemical_name}_{obj.date.isoformat()}",
                 field_name="updated" if not created else "created",
             )
-            return Response({"date": obj.date.isoformat(), "chemical_kg": obj.chemical_kg})
+            return Response({
+                "date": obj.date.isoformat(),
+                "equipment_name": obj.equipment_name,
+                "chemical_name": obj.chemical_name,
+                "quantity_kg": obj.quantity_kg,
+                "chemical_kg": obj.quantity_kg,
+                "price_rs": obj.price_rs,
+            })
         return Response({"error": "type must be chiller, boiler, or chemical"}, status=status.HTTP_400_BAD_REQUEST)
 
     # GET
@@ -324,6 +331,7 @@ def daily_consumption(request):
     if err is not None:
         return err
     equipment_id = (request.query_params.get("equipment_id") or "").strip() or None
+    chemical_name = (request.query_params.get("chemical_name") or "").strip() or None
     type_param = (request.query_params.get("type") or "").strip().lower() or None
 
     if start_date > end_date:
@@ -385,9 +393,11 @@ def daily_consumption(request):
                         "water_ct1_l": round(m.water_ct1_l, 2),
                         "water_ct2_l": round(m.water_ct2_l, 2),
                         "water_ct3_l": round(m.water_ct3_l, 2),
-                        "chemical_ct1_kg": round(m.chemical_ct1_kg, 2),
-                        "chemical_ct2_kg": round(m.chemical_ct2_kg, 2),
-                        "chemical_ct3_kg": round(m.chemical_ct3_kg, 2),
+                        "actual_electricity_cost_rs": (
+                            round(float(m.actual_electricity_cost_rs), 2)
+                            if m.actual_electricity_cost_rs is not None
+                            else None
+                        ),
                     })
                 elif eid and (eid, d) in log_by_date:
                     row = log_by_date[(eid, d)]
@@ -399,9 +409,6 @@ def daily_consumption(request):
                         "water_ct1_l": round(float(row["water_ct1_l"] or 0), 2),
                         "water_ct2_l": round(float(row["water_ct2_l"] or 0), 2),
                         "water_ct3_l": round(float(row["water_ct3_l"] or 0), 2),
-                        "chemical_ct1_kg": 0,
-                        "chemical_ct2_kg": 0,
-                        "chemical_ct3_kg": 0,
                     })
                 elif eid:
                     chiller_list.append({
@@ -412,9 +419,6 @@ def daily_consumption(request):
                         "water_ct1_l": 0,
                         "water_ct2_l": 0,
                         "water_ct3_l": 0,
-                        "chemical_ct1_kg": 0,
-                        "chemical_ct2_kg": 0,
-                        "chemical_ct3_kg": 0,
                     })
             if not equipment_id:
                 chiller_list = []
@@ -429,9 +433,6 @@ def daily_consumption(request):
                         "water_ct1_l": round(float(row["water_ct1_l"] or 0), 2),
                         "water_ct2_l": round(float(row["water_ct2_l"] or 0), 2),
                         "water_ct3_l": round(float(row["water_ct3_l"] or 0), 2),
-                        "chemical_ct1_kg": 0,
-                        "chemical_ct2_kg": 0,
-                        "chemical_ct3_kg": 0,
                     })
                 chiller_by_key = {(r["equipment_id"], r["date"]): r for r in chiller_list}
                 for m in ManualChillerConsumption.objects.filter(date__gte=start_date, date__lte=end_date):
@@ -443,9 +444,11 @@ def daily_consumption(request):
                         "water_ct1_l": round(m.water_ct1_l, 2),
                         "water_ct2_l": round(m.water_ct2_l, 2),
                         "water_ct3_l": round(m.water_ct3_l, 2),
-                        "chemical_ct1_kg": round(m.chemical_ct1_kg, 2),
-                        "chemical_ct2_kg": round(m.chemical_ct2_kg, 2),
-                        "chemical_ct3_kg": round(m.chemical_ct3_kg, 2),
+                        "actual_electricity_cost_rs": (
+                            round(float(m.actual_electricity_cost_rs), 2)
+                            if m.actual_electricity_cost_rs is not None
+                            else None
+                        ),
                     }
                 chiller_list = list(chiller_by_key.values())
                 chiller_list.sort(key=lambda r: (r["equipment_id"], r["date"]))
@@ -478,7 +481,6 @@ def daily_consumption(request):
                 .annotate(
                     power_kwh=Sum("daily_power_consumption_kwh"),
                     water_l=Sum("daily_water_consumption_liters"),
-                    chemical_kg=Sum("daily_chemical_consumption_kg"),
                     diesel_l=Sum("daily_diesel_consumption_liters"),
                     furnace_oil_l=Sum("daily_furnace_oil_consumption_liters"),
                     brigade_kg=Sum("daily_brigade_consumption_kg"),
@@ -498,11 +500,15 @@ def daily_consumption(request):
                         "equipment_number": m.equipment_id,
                         "power_kwh": round(m.power_kwh, 2),
                         "water_l": round(m.water_l, 2),
-                        "chemical_kg": round(m.chemical_kg, 2),
                         "diesel_l": round(m.diesel_l, 2),
                         "furnace_oil_l": round(m.furnace_oil_l, 2),
                         "brigade_kg": round(m.brigade_kg, 2),
                         "steam_kg_hr": round(m.steam_kg_hr, 2),
+                        "actual_electricity_cost_rs": (
+                            round(float(m.actual_electricity_cost_rs), 2)
+                            if m.actual_electricity_cost_rs is not None
+                            else None
+                        ),
                     })
                 elif eid and (eid, d) in log_by_date:
                     row = log_by_date[(eid, d)]
@@ -512,7 +518,6 @@ def daily_consumption(request):
                         "equipment_number": row["equipment_id"],
                         "power_kwh": round(float(row["power_kwh"] or 0), 2),
                         "water_l": round(float(row["water_l"] or 0), 2),
-                        "chemical_kg": round(float(row["chemical_kg"] or 0), 2),
                         "diesel_l": round(float(row["diesel_l"] or 0), 2),
                         "furnace_oil_l": round(float(row["furnace_oil_l"] or 0), 2),
                         "brigade_kg": round(float(row["brigade_kg"] or 0), 2),
@@ -525,7 +530,6 @@ def daily_consumption(request):
                         "equipment_number": eid,
                         "power_kwh": 0,
                         "water_l": 0,
-                        "chemical_kg": 0,
                         "diesel_l": 0,
                         "furnace_oil_l": 0,
                         "brigade_kg": 0,
@@ -541,7 +545,6 @@ def daily_consumption(request):
                         "equipment_number": row["equipment_id"],
                         "power_kwh": round(float(row["power_kwh"] or 0), 2),
                         "water_l": round(float(row["water_l"] or 0), 2),
-                        "chemical_kg": round(float(row["chemical_kg"] or 0), 2),
                         "diesel_l": round(float(row["diesel_l"] or 0), 2),
                         "furnace_oil_l": round(float(row["furnace_oil_l"] or 0), 2),
                         "brigade_kg": round(float(row["brigade_kg"] or 0), 2),
@@ -555,11 +558,15 @@ def daily_consumption(request):
                         "equipment_number": m.equipment_id,
                         "power_kwh": round(m.power_kwh, 2),
                         "water_l": round(m.water_l, 2),
-                        "chemical_kg": round(m.chemical_kg, 2),
                         "diesel_l": round(m.diesel_l, 2),
                         "furnace_oil_l": round(m.furnace_oil_l, 2),
                         "brigade_kg": round(m.brigade_kg, 2),
                         "steam_kg_hr": round(m.steam_kg_hr, 2),
+                        "actual_electricity_cost_rs": (
+                            round(float(m.actual_electricity_cost_rs), 2)
+                            if m.actual_electricity_cost_rs is not None
+                            else None
+                        ),
                     }
                 boiler_list = list(boiler_by_key.values())
                 boiler_list.sort(key=lambda r: (r["equipment_id"], r["date"]))
@@ -572,10 +579,15 @@ def daily_consumption(request):
         try:
             from chemical_prep.models import ChemicalPreparation
 
-            manual_by_date = {m.date: m for m in ManualChemicalConsumption.objects.filter(
+            manual_qs = ManualChemicalConsumption.objects.filter(
                 date__gte=start_date,
                 date__lte=end_date,
-            )}
+            )
+            if equipment_id:
+                manual_qs = manual_qs.filter(equipment_name=equipment_id)
+            if chemical_name:
+                manual_qs = manual_qs.filter(chemical_name=chemical_name)
+            manual_by_date = {m.date: m for m in manual_qs}
 
             log_qs = (
                 ChemicalPreparation.objects.filter(
@@ -594,15 +606,24 @@ def daily_consumption(request):
             for d in all_dates:
                 if d in manual_by_date:
                     m = manual_by_date[d]
-                    chemical_list.append({"date": d.isoformat(), "chemical_kg": round(m.chemical_kg, 2)})
+                    chemical_list.append({
+                        "date": d.isoformat(),
+                        "equipment_name": m.equipment_name,
+                        "chemical_name": m.chemical_name,
+                        "quantity_kg": round(m.quantity_kg, 2),
+                        "chemical_kg": round(m.quantity_kg, 2),
+                        "price_rs": round(m.price_rs, 2),
+                    })
                 elif d in log_by_date:
                     row = log_by_date[d]
                     chemical_list.append({
                         "date": d.isoformat(),
+                        "quantity_kg": round(float(row["total_g"] or 0) / 1000.0, 2),
                         "chemical_kg": round(float(row["total_g"] or 0) / 1000.0, 2),
+                        "price_rs": 0,
                     })
                 else:
-                    chemical_list.append({"date": d.isoformat(), "chemical_kg": 0})
+                    chemical_list.append({"date": d.isoformat(), "quantity_kg": 0, "chemical_kg": 0, "price_rs": 0})
             result["chemical"] = chemical_list
         except Exception:
             result["chemical"] = []
@@ -822,10 +843,10 @@ def equipment_status(request):
                     "equipment_number": eq.equipment_number,
                     "type": "boiler",
                     "status": status,
-                    "t1": log.feed_water_temp,
-                    "t2": log.steam_temp,
-                    "p1": log.steam_pressure,
-                    "p2": getattr(log, "boiler_steam_pressure", None) or getattr(log, "steam_pressure_after_prv", None),
+                    "t1": log.fo_pre_heater_temp,
+                    "t2": log.stack_temperature,
+                    "p1": log.boiler_steam_pressure,
+                    "p2": log.steam_pressure_after_prv,
                 })
             result_ids.add(str(eq.id))
     except Exception:

@@ -262,6 +262,7 @@ class FilterScheduleSerializer(serializers.ModelSerializer):
             "assignment",
             "schedule_type",
             "frequency_days",
+            "tolerance_days",
             "next_due_date",
             "last_done_date",
             "is_approved",

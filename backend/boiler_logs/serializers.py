@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from django.utils import timezone
 from .models import BoilerLog, BoilerEquipmentLimit
 from reports.utils import log_limit_change
 
@@ -17,8 +18,6 @@ class BoilerLogSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'equipment_id', 'site_id',
             'activity_type', 'activity_from_date', 'activity_to_date', 'activity_from_time', 'activity_to_time',
-            'feed_water_temp', 'oil_temp', 'steam_temp',
-            'steam_pressure', 'steam_flow_lph',
             'fo_hsd_ng_day_tank_level', 'feed_water_tank_level',
             'fo_pre_heater_temp', 'burner_oil_pressure', 'burner_heater_temp',
             'boiler_steam_pressure', 'stack_temperature', 'steam_pressure_after_prv',
@@ -69,17 +68,34 @@ class BoilerLogSerializer(serializers.ModelSerializer):
         if not str(remarks).strip():
             raise serializers.ValidationError({"remarks": ["Remarks are required."]})
 
-        activity_type = attrs.get("activity_type") if "activity_type" in attrs else getattr(self.instance, "activity_type", "operation")
+        activity_type = attrs.get("activity_type") if "activity_type" in attrs else (
+            getattr(self.instance, "activity_type", "operation") if self.instance else "operation"
+        )
         if (activity_type or "operation") == "operation":
-            required = ["feed_water_temp", "oil_temp", "steam_temp", "steam_pressure"]
-            missing = [f for f in required if attrs.get(f, getattr(self.instance, f, None)) in (None, "")]
-            if missing:
-                raise serializers.ValidationError({f: ["This field is required when activity_type is operation."] for f in missing})
+
+            def _merged(field: str):
+                if field in attrs:
+                    return attrs[field]
+                if self.instance is not None:
+                    return getattr(self.instance, field, None)
+                return None
+
+            fo = _merged("fo_hsd_ng_day_tank_level")
+            if fo is not None and fo < 200:
+                raise serializers.ValidationError(
+                    {"fo_hsd_ng_day_tank_level": ["Value must be not less than 200 Ltr."]}
+                )
+            fw = _merged("feed_water_tank_level")
+            if fw is not None and fw < 2:
+                raise serializers.ValidationError(
+                    {"feed_water_tank_level": ["Value must be not less than 2 KL."]}
+                )
+
         return super().validate(attrs)
 
 
 BOILER_LIMIT_FIELDS = [
-    'daily_power_limit_kw', 'daily_water_limit_liters', 'daily_chemical_limit_kg',
+    'daily_power_limit_kw', 'daily_water_limit_liters',
     'daily_diesel_limit_liters', 'daily_furnace_oil_limit_liters', 'daily_brigade_limit_kg',
     'daily_steam_limit_kg_hr',
     'electricity_rate_rs_per_kwh', 'diesel_rate_rs_per_liter', 'furnace_oil_rate_rs_per_liter', 'brigade_rate_rs_per_kg',
@@ -91,7 +107,7 @@ class BoilerEquipmentLimitSerializer(serializers.ModelSerializer):
         model = BoilerEquipmentLimit
         fields = [
             'id', 'equipment_id', 'client_id', 'effective_from',
-            'daily_power_limit_kw', 'daily_water_limit_liters', 'daily_chemical_limit_kg',
+            'daily_power_limit_kw', 'daily_water_limit_liters',
             'daily_diesel_limit_liters', 'daily_furnace_oil_limit_liters', 'daily_brigade_limit_kg',
             'daily_steam_limit_kg_hr',
             'electricity_rate_rs_per_kwh', 'diesel_rate_rs_per_liter', 'furnace_oil_rate_rs_per_liter', 'brigade_rate_rs_per_kg',
@@ -102,6 +118,11 @@ class BoilerEquipmentLimitSerializer(serializers.ModelSerializer):
     def _get_user(self):
         request = self.context.get("request")
         return request.user if request and getattr(request, "user", None) else None
+
+    def validate_effective_from(self, value):
+        if value and value > timezone.localdate():
+            raise serializers.ValidationError("Effective from date cannot be in the future.")
+        return value
 
     def create(self, validated_data):
         instance = super().create(validated_data)

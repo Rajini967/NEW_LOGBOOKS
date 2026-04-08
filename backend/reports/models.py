@@ -3,6 +3,7 @@ Report Model - Centralized storage for all approved reports
 """
 from django.db import models
 from django.conf import settings
+from django.core.validators import MinValueValidator
 import uuid
 
 
@@ -158,9 +159,12 @@ class ManualChillerConsumption(models.Model):
     water_ct1_l = models.FloatField(default=0, blank=True)
     water_ct2_l = models.FloatField(default=0, blank=True)
     water_ct3_l = models.FloatField(default=0, blank=True)
-    chemical_ct1_kg = models.FloatField(default=0, blank=True)
-    chemical_ct2_kg = models.FloatField(default=0, blank=True)
-    chemical_ct3_kg = models.FloatField(default=0, blank=True)
+    actual_electricity_cost_rs = models.FloatField(
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0)],
+        help_text="Snapshot at save: power_kwh × electricity_rate_rs_per_kwh from effective chiller limit (Rs)",
+    )
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -178,11 +182,16 @@ class ManualBoilerConsumption(models.Model):
     date = models.DateField(db_index=True)
     power_kwh = models.FloatField(default=0, blank=True)
     water_l = models.FloatField(default=0, blank=True)
-    chemical_kg = models.FloatField(default=0, blank=True)
     diesel_l = models.FloatField(default=0, blank=True)
     furnace_oil_l = models.FloatField(default=0, blank=True)
     brigade_kg = models.FloatField(default=0, blank=True)
     steam_kg_hr = models.FloatField(default=0, blank=True)
+    actual_electricity_cost_rs = models.FloatField(
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0)],
+        help_text="Snapshot at save: power_kwh × electricity_rate_rs_per_kwh from effective boiler limit (Rs)",
+    )
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -195,14 +204,18 @@ class ManualBoilerConsumption(models.Model):
 
 
 class ManualChemicalConsumption(models.Model):
-    """Manual daily chemical consumption (site-wide per date)."""
-    date = models.DateField(unique=True, db_index=True)
-    chemical_kg = models.FloatField(default=0, blank=True)
+    """Manual daily chemical consumption per equipment and chemical."""
+    equipment_name = models.CharField(max_length=255, db_index=True, blank=True, default="")
+    chemical_name = models.CharField(max_length=255, db_index=True, blank=True, default="")
+    date = models.DateField(db_index=True)
+    quantity_kg = models.FloatField(default=0, blank=True)
+    price_rs = models.FloatField(default=0, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = "manual_chemical_consumption"
+        unique_together = [("equipment_name", "chemical_name", "date")]
         ordering = ["-date"]
 
     def __str__(self):
-        return f"Chemical {self.date}"
+        return f"Chemical {self.equipment_name}/{self.chemical_name} {self.date}"

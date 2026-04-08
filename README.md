@@ -239,9 +239,8 @@ This proves “daily limit is working”.
    - Entry 1: `starter_energy_kwh = 40` (should save)
    - Entry 2: `starter_energy_kwh = 20` (should fail: exceeded)
 
-Repeat for water/chemical limits using:
+Repeat for water limits using:
 - water: `daily_water_consumption_ct1_liters` etc.
-- chemical: `cooling_tower_chemical_qty_per_day`, `chilled_water_pump_chemical_qty_kg`, `cooling_tower_fan_chemical_qty_kg`
 
 ### 7) Role tests (security)
 
@@ -320,9 +319,6 @@ API:
 - **Cooling Tower 1 – Water limit (L)** → `daily_water_ct1_liters`
 - **Cooling Tower 2 – Water limit (L)** → `daily_water_ct2_liters`
 - **Cooling Tower 3 – Water limit (L)** → `daily_water_ct3_liters`
-- **Cooling Tower-1 – Chemical limit (kg)** → `daily_chemical_ct1_kg`
-- **Chilled Water Pump – Chemical limit (kg)** → `daily_chemical_ct2_kg`
-- **Cooling Tower Fan – Chemical limit (kg)** → `daily_chemical_ct3_kg`
 
 ### Example: fill ALL fields (one chiller)
 
@@ -332,9 +328,6 @@ For equipment `CH-01`, enter these example values (any `0+` number is valid; bla
 - `daily_water_ct1_liters`: `5000`
 - `daily_water_ct2_liters`: `4200`
 - `daily_water_ct3_liters`: `3800`
-- `daily_chemical_ct1_kg`: `2.0`
-- `daily_chemical_ct2_kg`: `1.5`
-- `daily_chemical_ct3_kg`: `1.0`
 
 Click **Save limits**, then do a hard refresh and re-open Settings:
 - Re-select `CH-01`
@@ -357,7 +350,6 @@ Backend validates at log create/update using:
 It aggregates totals for the same equipment and date:
 - power: sum of `starter_energy_kwh`
 - water CT1/CT2/CT3: sum of `daily_water_consumption_ct1_liters` etc.
-- chemical CT1/CT2/CT3: sums of `cooling_tower_chemical_qty_per_day`, `chilled_water_pump_chemical_qty_kg`, `cooling_tower_fan_chemical_qty_kg`
 
 If totals exceed the configured limit, it returns a validation error like:
 - “Daily power limit (…) exceeded for this chiller.”
@@ -384,17 +376,6 @@ Note: Chiller logs are also constrained by the “one entry per time slot per eq
 Repeat similarly for:
 - `daily_water_ct2_liters` ↔ `daily_water_consumption_ct2_liters`
 - `daily_water_ct3_liters` ↔ `daily_water_consumption_ct3_liters`
-
-#### 3) Chemical limits (3 fields)
-
-1. Set `daily_chemical_ct2_kg = 1.0` (Chilled Water Pump – Chemical limit) for `CH-01`.
-2. Create log on date \(D\) with `chilled_water_pump_chemical_qty_kg = 0.7` (ok).
-3. Create another log on date \(D\) with `chilled_water_pump_chemical_qty_kg = 0.5`.
-4. Expected: second save fails with “Cooling tower 2 daily chemical consumption limit exceeded.”
-
-Repeat similarly for:
-- `daily_chemical_ct1_kg` ↔ `cooling_tower_chemical_qty_per_day`
-- `daily_chemical_ct3_kg` ↔ `cooling_tower_fan_chemical_qty_kg`
 
 ---
 

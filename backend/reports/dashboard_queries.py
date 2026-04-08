@@ -115,12 +115,19 @@ def get_total_log_entries() -> int:
 def get_active_filter_alerts(today) -> int:
     from filter_master.models import FilterSchedule
 
-    FilterSchedule.objects.filter(
-        is_approved=True, next_due_date__lt=today
-    ).exclude(status__in=["completed", "overdue"]).update(status="overdue")
-    overdue_qs = FilterSchedule.objects.filter(
-        is_approved=True, next_due_date__lt=today
-    ).exclude(status="completed")
+    to_mark = FilterSchedule.past_grace_end_before(
+        FilterSchedule.objects.filter(is_approved=True)
+        .exclude(next_due_date__isnull=True)
+        .exclude(status__in=["completed", "overdue"]),
+        today,
+    )
+    to_mark.update(status="overdue")
+    overdue_qs = FilterSchedule.past_grace_end_before(
+        FilterSchedule.objects.filter(is_approved=True)
+        .exclude(next_due_date__isnull=True)
+        .exclude(status="completed"),
+        today,
+    )
     return overdue_qs.count()
 
 
@@ -143,10 +150,10 @@ def get_average_pressure_bar(now) -> float | None:
     pressure_count += int(chiller_agg["c"] or 0)
 
     boiler_agg = BoilerLog.objects.filter(timestamp__gte=cutoff_24h).exclude(
-        steam_pressure__isnull=True
-    ).exclude(steam_pressure=0).aggregate(
-        s=Sum("steam_pressure"),
-        c=Count("steam_pressure"),
+        boiler_steam_pressure__isnull=True
+    ).exclude(boiler_steam_pressure=0).aggregate(
+        s=Sum("boiler_steam_pressure"),
+        c=Count("boiler_steam_pressure"),
     )
     pressure_sum += float(boiler_agg["s"] or 0)
     pressure_count += int(boiler_agg["c"] or 0)
