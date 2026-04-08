@@ -1,5 +1,27 @@
 import api from "../client";
 
+/** Backend rejects when (date_to - date_from).days >= 31 — max inclusive span is 30 delta days. */
+const DAILY_CONSUMPTION_CHUNK_MAX_DELTA_DAYS = 30;
+
+function toLocalYyyyMmDd(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function addCalendarDaysYmd(ymd: string, deltaDays: number): string {
+  const d = new Date(`${ymd.slice(0, 10)}T12:00:00`);
+  d.setDate(d.getDate() + deltaDays);
+  return toLocalYyyyMmDd(d);
+}
+
+function ymdInclusiveDaySpan(dateFrom: string, dateTo: string): number {
+  const a = new Date(`${dateFrom.slice(0, 10)}T12:00:00`).getTime();
+  const b = new Date(`${dateTo.slice(0, 10)}T12:00:00`).getTime();
+  return Math.round((b - a) / 86400000);
+}
+
 export const reportsAPI = {
   list: async (params?: { type?: string }) => {
     const response = await api.get("/reports/", { params });
@@ -95,6 +117,88 @@ export const dashboardSummaryAPI = {
       params: params ?? {},
     });
     return response.data;
+  },
+  /**
+   * Same as getDailyConsumption but splits long ranges into chunks under the server's 31-day cap.
+   * Use for dashboard totals (e.g. year view); keeps single request for day/month-sized ranges.
+   */
+  getDailyConsumptionBatched: async (params?: {
+    date_from?: string;
+    date_to?: string;
+    equipment_id?: string;
+    chemical_name?: string;
+    type?: "chiller" | "boiler" | "chemical";
+  }) => {
+    const rawFrom = params?.date_from?.slice(0, 10);
+    const rawTo = params?.date_to?.slice(0, 10);
+    if (!rawFrom || !rawTo) {
+      const response = await api.get("/reports/daily_consumption/", { params: params ?? {} });
+      return response.data;
+    }
+    if (rawFrom > rawTo || ymdInclusiveDaySpan(rawFrom, rawTo) < 31) {
+      const response = await api.get("/reports/daily_consumption/", {
+        params: params ?? {},
+      });
+      return response.data;
+    }
+
+    const type = params?.type;
+    const chillerMap = new Map<string, Record<string, unknown>>();
+    const boilerMap = new Map<string, Record<string, unknown>>();
+    const chemicalMap = new Map<string, Record<string, unknown>>();
+
+    let chunkStart = rawFrom;
+    while (chunkStart <= rawTo) {
+      let chunkEnd = addCalendarDaysYmd(chunkStart, DAILY_CONSUMPTION_CHUNK_MAX_DELTA_DAYS);
+      if (chunkEnd > rawTo) chunkEnd = rawTo;
+      const response = await api.get("/reports/daily_consumption/", {
+        params: { ...params, date_from: chunkStart, date_to: chunkEnd },
+      });
+      const data = response.data ?? {};
+
+      if (!type || type === "chiller") {
+        for (const row of Array.isArray(data.chiller) ? data.chiller : []) {
+          const r = row as Record<string, unknown>;
+          chillerMap.set(`${r.equipment_id}|${r.date}`, r);
+        }
+      }
+      if (!type || type === "boiler") {
+        for (const row of Array.isArray(data.boiler) ? data.boiler : []) {
+          const r = row as Record<string, unknown>;
+          boilerMap.set(`${r.equipment_id}|${r.date}`, r);
+        }
+      }
+      if (!type || type === "chemical") {
+        for (const row of Array.isArray(data.chemical) ? data.chemical : []) {
+          const r = row as Record<string, unknown>;
+          chemicalMap.set(
+            `${r.equipment_name ?? r.equipment_id}|${r.chemical_name}|${r.date}`,
+            r,
+          );
+        }
+      }
+
+      chunkStart = addCalendarDaysYmd(chunkEnd, 1);
+    }
+
+    const sortChillerBoiler = (a: Record<string, unknown>, b: Record<string, unknown>) => {
+      const ea = String(a.equipment_id ?? "");
+      const eb = String(b.equipment_id ?? "");
+      if (ea !== eb) return ea.localeCompare(eb);
+      return String(a.date ?? "").localeCompare(String(b.date ?? ""));
+    };
+
+    const out: Record<string, unknown> = {};
+    if (!type || type === "chiller") {
+      out.chiller = Array.from(chillerMap.values()).sort(sortChillerBoiler);
+    }
+    if (!type || type === "boiler") {
+      out.boiler = Array.from(boilerMap.values()).sort(sortChillerBoiler);
+    }
+    if (!type || type === "chemical") {
+      out.chemical = Array.from(chemicalMap.values());
+    }
+    return out;
   },
   saveDailyConsumption: async (payload: {
     type: "chiller" | "boiler" | "chemical";

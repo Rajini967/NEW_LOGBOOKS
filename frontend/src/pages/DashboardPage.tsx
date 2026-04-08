@@ -90,6 +90,89 @@ type OverdueFilterGroup = {
   earliestDue?: string;
 };
 
+function num0(v: unknown): number {
+  const n = Number(v ?? 0);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/** YYYY-MM-DD in the local calendar (avoids UTC day shift from toISOString). */
+function toLocalYyyyMmDd(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/**
+ * Projected water (L) for the selected period using the same "exact configured dates" rules as
+ * chiller/boiler dashboard projected power and fuel (no carry-forward of limits from earlier effective_from).
+ */
+function projectedWaterLitersExactRange(
+  startYmd: string,
+  endYmd: string,
+  chillerLimits: unknown[],
+  boilerLimits: unknown[],
+): number {
+  const inRange = (eff: string) => Boolean(eff) && eff >= startYmd && eff <= endYmd;
+
+  const chill = (chillerLimits || []).filter((row) => {
+    const r = row as Record<string, unknown>;
+    const eid = String(r?.equipment_id ?? '').trim();
+    const eff = String(r?.effective_from ?? '').trim();
+    return Boolean(eid) && inRange(eff);
+  });
+  chill.sort((a, b) => {
+    const ra = a as Record<string, unknown>;
+    const rb = b as Record<string, unknown>;
+    const ea = String(ra.equipment_id);
+    const eb = String(rb.equipment_id);
+    if (ea !== eb) return ea.localeCompare(eb);
+    const da = String(ra.effective_from);
+    const db = String(rb.effective_from);
+    if (da !== db) return da.localeCompare(db);
+    return num0(rb.id) - num0(ra.id);
+  });
+  let chillerSum = 0;
+  const seenC = new Set<string>();
+  for (const row of chill) {
+    const r = row as Record<string, unknown>;
+    const key = `${r.equipment_id}|${r.effective_from}`;
+    if (seenC.has(key)) continue;
+    seenC.add(key);
+    chillerSum +=
+      num0(r.daily_water_ct1_liters) + num0(r.daily_water_ct2_liters) + num0(r.daily_water_ct3_liters);
+  }
+
+  const boil = (boilerLimits || []).filter((row) => {
+    const r = row as Record<string, unknown>;
+    const eid = String(r?.equipment_id ?? '').trim();
+    const eff = String(r?.effective_from ?? '').trim();
+    return Boolean(eid) && inRange(eff);
+  });
+  boil.sort((a, b) => {
+    const ra = a as Record<string, unknown>;
+    const rb = b as Record<string, unknown>;
+    const ea = String(ra.equipment_id);
+    const eb = String(rb.equipment_id);
+    if (ea !== eb) return ea.localeCompare(eb);
+    const da = String(ra.effective_from);
+    const db = String(rb.effective_from);
+    if (da !== db) return da.localeCompare(db);
+    return num0(rb.id) - num0(ra.id);
+  });
+  let boilerSum = 0;
+  const seenB = new Set<string>();
+  for (const row of boil) {
+    const r = row as Record<string, unknown>;
+    const key = `${r.equipment_id}|${r.effective_from}`;
+    if (seenB.has(key)) continue;
+    seenB.add(key);
+    boilerSum += num0(r.daily_water_limit_liters);
+  }
+
+  return Number((chillerSum + boilerSum).toFixed(2));
+}
+
 export default function DashboardPage() {
   const { user } = useAuth();
   const { missedByLogType, loading: missedReadingsLoading } = useMissedReadingsByType();
@@ -241,90 +324,30 @@ export default function DashboardPage() {
 
   useEffect(() => {
     let cancelled = false;
-    const daysInSelectedPeriod = (period: 'day' | 'month' | 'year', dateStr: string) => {
-      const d = new Date(`${dateStr}T00:00:00`);
-      if (period === 'day') return 1;
-      if (period === 'month') return new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
-      return new Date(d.getFullYear(), 11, 31).getDate() === 31 &&
-        new Date(d.getFullYear(), 1, 29).getMonth() === 1
-        ? 366
-        : 365;
-    };
 
     (async () => {
       try {
-        const days = daysInSelectedPeriod(overviewPeriodType, overviewDate);
-        const d = new Date(`${overviewDate}T00:00:00`);
+        const d = new Date(`${overviewDate}T12:00:00`);
         const start =
           overviewPeriodType === 'day'
             ? overviewDate
             : overviewPeriodType === 'month'
-              ? new Date(d.getFullYear(), d.getMonth(), 1).toISOString().slice(0, 10)
-              : new Date(d.getFullYear(), 0, 1).toISOString().slice(0, 10);
+              ? toLocalYyyyMmDd(new Date(d.getFullYear(), d.getMonth(), 1))
+              : toLocalYyyyMmDd(new Date(d.getFullYear(), 0, 1));
         const end =
           overviewPeriodType === 'day'
             ? overviewDate
             : overviewPeriodType === 'month'
-              ? new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().slice(0, 10)
-              : new Date(d.getFullYear(), 11, 31).toISOString().slice(0, 10);
+              ? toLocalYyyyMmDd(new Date(d.getFullYear(), d.getMonth() + 1, 0))
+              : toLocalYyyyMmDd(new Date(d.getFullYear(), 11, 31));
 
         const [chillerLimitsRaw, boilerLimitsRaw, chillerConsumption, boilerConsumption] = await Promise.all([
           chillerLimitsAPI.list(),
           boilerLimitsAPI.list(),
-          dashboardSummaryAPI.getDailyConsumption({ type: 'chiller', date_from: start, date_to: end }),
-          dashboardSummaryAPI.getDailyConsumption({ type: 'boiler', date_from: start, date_to: end }),
+          dashboardSummaryAPI.getDailyConsumptionBatched({ type: 'chiller', date_from: start, date_to: end }),
+          dashboardSummaryAPI.getDailyConsumptionBatched({ type: 'boiler', date_from: start, date_to: end }),
         ]);
         if (cancelled) return;
-
-        const chillerByEquipment = new Map<string, any[]>();
-        for (const row of (chillerLimitsRaw as any[]) || []) {
-          const eid = String(row?.equipment_id ?? '').trim();
-          if (!eid) continue;
-          if (!chillerByEquipment.has(eid)) chillerByEquipment.set(eid, []);
-          chillerByEquipment.get(eid)!.push(row);
-        }
-        let chillerPerDay = 0;
-        chillerByEquipment.forEach((rows) => {
-          let selected: any | null = null;
-          for (const row of rows) {
-            const eff = String(row?.effective_from ?? '').trim();
-            if (!eff) {
-              if (!selected) selected = row;
-              continue;
-            }
-            if (eff <= overviewDate && (!selected || String(selected?.effective_from ?? '') < eff)) {
-              selected = row;
-            }
-          }
-          if (!selected) return;
-          chillerPerDay += numberOrZero(selected.daily_water_ct1_liters)
-            + numberOrZero(selected.daily_water_ct2_liters)
-            + numberOrZero(selected.daily_water_ct3_liters);
-        });
-
-        const boilerByEquipment = new Map<string, any[]>();
-        for (const row of (boilerLimitsRaw as any[]) || []) {
-          const eid = String(row?.equipment_id ?? '').trim();
-          if (!eid) continue;
-          if (!boilerByEquipment.has(eid)) boilerByEquipment.set(eid, []);
-          boilerByEquipment.get(eid)!.push(row);
-        }
-        let boilerPerDay = 0;
-        boilerByEquipment.forEach((rows) => {
-          let selected: any | null = null;
-          for (const row of rows) {
-            const eff = String(row?.effective_from ?? '').trim();
-            if (!eff) {
-              if (!selected) selected = row;
-              continue;
-            }
-            if (eff <= overviewDate && (!selected || String(selected?.effective_from ?? '') < eff)) {
-              selected = row;
-            }
-          }
-          if (!selected) return;
-          boilerPerDay += numberOrZero(selected.daily_water_limit_liters);
-        });
 
         const chillerRows = Array.isArray((chillerConsumption as any)?.chiller) ? (chillerConsumption as any).chiller : [];
         const boilerRows = Array.isArray((boilerConsumption as any)?.boiler) ? (boilerConsumption as any).boiler : [];
@@ -337,7 +360,9 @@ export default function DashboardPage() {
           0
         ) + boilerRows.reduce((sum: number, row: any) => sum + numberOrZero(row?.water_l), 0);
         setOverviewActualWaterLiters(Number(waterActual.toFixed(2)));
-        setOverviewProjectedWaterLiters(Number(((chillerPerDay + boilerPerDay) * days).toFixed(2)));
+        setOverviewProjectedWaterLiters(
+          projectedWaterLitersExactRange(start, end, (chillerLimitsRaw as unknown[]) || [], (boilerLimitsRaw as unknown[]) || []),
+        );
       } catch {
         if (!cancelled) {
           setOverviewActualWaterLiters(0);
