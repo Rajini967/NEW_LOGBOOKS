@@ -68,8 +68,10 @@ import {
   assignmentAreaCategoryKey,
   assignmentAreaCategoryLabel,
   assignmentIdsWithAnyApprovedSchedules,
+  normalizeAssignmentId,
   dueDatesForInstalled,
   emptyScheduleFreq,
+  equipmentUuidFromFilterAssignmentRow,
   equipmentUuidForFilterLogRow,
   formatAssignmentEquipmentLabel,
   pickAssignmentForEquipmentColumn,
@@ -270,17 +272,38 @@ const FilterLogBookPage: React.FC = () => {
     }
   };
 
+  /** Same rules as Filter Register assign modal: approved equipment only, exclude chiller category. */
+  const loadApprovedEquipmentNonChiller = useCallback(async () => {
+    const categories = (await equipmentCategoryAPI.list()) as { id: string; name: string }[];
+    const chillerCategoryIds = new Set(
+      categories
+        .filter((c) => /^chiller(s)?$/i.test((c.name || "").trim()))
+        .map((c) => c.id),
+    );
+    const raw = (await equipmentAPI.listAllPages({ status: "approved" })) as any[];
+    return (raw || []).filter(
+      (item: any) =>
+        item?.is_active !== false &&
+        item?.status === "approved" &&
+        !chillerCategoryIds.has(item?.category),
+    );
+  }, []);
+
   /** Load filter_id -> equipment interval map for missed-reading resolution */
   const loadFilterIdToEquipmentInterval = async () => {
     try {
-      const assignments = (await filterAssignmentAPI.list()) as FilterAssignmentRow[];
+      const assignments = (await filterAssignmentAPI.listAllPages()) as FilterAssignmentRow[];
       setFilterAssignmentsLookup((assignments || []) as FilterAssignmentRow[]);
-      const equipmentIds = [...new Set((assignments || []).map((a) => a.equipment).filter(Boolean))] as string[];
+      const equipmentIds = [
+        ...new Set(
+          (assignments || []).map((a) => equipmentUuidFromFilterAssignmentRow(a as any)).filter(Boolean),
+        ),
+      ] as string[];
       if (equipmentIds.length === 0) {
         setFilterIdToEquipmentInterval(new Map());
         return;
       }
-      const allEquipment = (await equipmentAPI.listAllPages()) as any[];
+      const allEquipment = await loadApprovedEquipmentNonChiller();
       const eqIntervalMap = new Map<
         string,
         {
@@ -292,8 +315,10 @@ const FilterLogBookPage: React.FC = () => {
       >();
       for (const e of allEquipment || []) {
         if (e?.id) {
-          eqIntervalMap.set(e.id, {
-            equipment_id: e.id,
+          const idStr = String(e.id).trim();
+          const k = idStr.toLowerCase();
+          eqIntervalMap.set(k, {
+            equipment_id: idStr,
             log_entry_interval: e.log_entry_interval ?? null,
             shift_duration_hours: e.shift_duration_hours ?? null,
             tolerance_minutes: e.tolerance_minutes ?? null,
@@ -319,14 +344,15 @@ const FilterLogBookPage: React.FC = () => {
         }
       }
       for (const a of assignments || []) {
-        if (a.filter_id && a.equipment) {
-          const interval = eqIntervalMap.get(a.equipment);
+        const eqPk = equipmentUuidFromFilterAssignmentRow(a as any);
+        if (a.filter_id && eqPk) {
+          const interval = eqIntervalMap.get(eqPk.trim().toLowerCase());
           if (interval) {
             // Same filter_id on multiple equipment: do not map filter_id → one arbitrary row.
             if (filterIdAssignmentCount.get(a.filter_id) === 1) {
               filterToInterval.set(a.filter_id, interval);
             }
-            filterToInterval.set(a.equipment, interval);
+            filterToInterval.set(eqPk, interval);
           }
         }
       }
@@ -338,35 +364,92 @@ const FilterLogBookPage: React.FC = () => {
   };
 
   const loadEquipment = async () => {
+    let assignments: any[] = [];
     try {
-      const assignments = (await filterAssignmentAPI.list()) as any[];
-      let approvedSchedules: { assignment: string; schedule_type: string }[] = [];
-      try {
-        approvedSchedules = (await filterScheduleAPI.listAll({
-          approval: "approved",
-        })) as { assignment: string; schedule_type: string }[];
-      } catch {
-        approvedSchedules = [];
+      assignments = ((await filterAssignmentAPI.listAllPages()) as any[]) || [];
+    } catch (e) {
+      console.error("Filter assignments load failed:", e);
+    }
+    let equipmentMaster: any[] = [];
+    try {
+      equipmentMaster = await loadApprovedEquipmentNonChiller();
+    } catch (e) {
+      console.error("Equipment master load failed:", e);
+    }
+    let approvedSchedules: { assignment?: unknown; schedule_type?: string }[] = [];
+    try {
+      approvedSchedules =
+        ((await filterScheduleAPI.listAllPages({ approval: "approved" })) as any[]) || [];
+    } catch (e) {
+      console.error("Filter schedules load failed:", e);
+    }
+
+    try {
+      const masterById = new Map<string, { equipment_number?: string; name?: string; id?: string }>();
+      for (const e of equipmentMaster || []) {
+        if (e?.id != null) masterById.set(String(e.id).trim().toLowerCase(), e as any);
       }
-      const eligibleAssignmentIds = assignmentIdsWithAnyApprovedSchedules(approvedSchedules);
-      const activeAssignments = (assignments || []).filter(
-        (a) => a?.is_active !== false && a?.id && eligibleAssignmentIds.has(a.id),
+      const masterGet = (eqId: string) => masterById.get(eqId.trim().toLowerCase());
+      const equipOptionKey = (eqId: string) => eqId.trim().toLowerCase();
+
+      const eligibleAssignmentIds = assignmentIdsWithAnyApprovedSchedules(approvedSchedules as any);
+      // Equipment dropdown: only assignments that already have at least one approved schedule.
+      const activeAssignments = (assignments || []).filter((a) => {
+        const eqPk = equipmentUuidFromFilterAssignmentRow(a);
+        return a?.is_active !== false && a?.id && !!eqPk;
+      });
+      activeAssignments.sort((a, b) => {
+        const aOk = eligibleAssignmentIds.has(normalizeAssignmentId(a.id)) ? 0 : 1;
+        const bOk = eligibleAssignmentIds.has(normalizeAssignmentId(b.id)) ? 0 : 1;
+        if (aOk !== bOk) return aOk - bOk;
+        return `${a.equipment_number} ${a.equipment_name}`.localeCompare(
+          `${b.equipment_number} ${b.equipment_name}`,
+        );
+      });
+
+      const byEquipmentId = new Map<string, EquipmentOption>();
+
+      for (const a of activeAssignments) {
+        const id = equipmentUuidFromFilterAssignmentRow(a);
+        if (!id) continue;
+        const hasApprovedSchedule = eligibleAssignmentIds.has(normalizeAssignmentId(a.id));
+        if (!hasApprovedSchedule) continue;
+        const rowKey = equipOptionKey(id);
+        if (!byEquipmentId.has(rowKey)) {
+          const m = masterGet(id);
+          byEquipmentId.set(rowKey, {
+            id: String(m?.id ?? id.trim()),
+            equipment_number: String(a.equipment_number ?? m?.equipment_number ?? ""),
+            name: String(a.equipment_name ?? m?.name ?? ""),
+          });
+        }
+      }
+
+      // Approved schedules carry assignment_info; use it directly (see FiltersDashboardSection).
+      for (const s of approvedSchedules || []) {
+        const info = (s as any)?.assignment_info as
+          | { equipment_id?: string; equipment_number?: string; equipment_name?: string }
+          | undefined;
+        const eqId = info?.equipment_id != null ? String(info.equipment_id).trim() : "";
+        if (!eqId) continue;
+        const rowKey = equipOptionKey(eqId);
+        if (byEquipmentId.has(rowKey)) continue;
+        const m = masterGet(eqId);
+        byEquipmentId.set(rowKey, {
+          id: String(m?.id ?? eqId),
+          equipment_number: String(info?.equipment_number ?? m?.equipment_number ?? ""),
+          name: String(info?.equipment_name ?? m?.name ?? ""),
+        });
+      }
+
+      const options = Array.from(byEquipmentId.values()).sort((a, b) =>
+        `${a.equipment_number} ${a.name}`.localeCompare(`${b.equipment_number} ${b.name}`),
       );
 
-      const seen = new Set<string>();
-      const options: EquipmentOption[] = [];
       const seenFilterId = new Set<string>();
       const filterOpts: FilterIdFilterOption[] = [];
       for (const a of activeAssignments) {
-        const id = a?.equipment;
-        if (id && !seen.has(id)) {
-          seen.add(id);
-          options.push({
-            id,
-            equipment_number: a.equipment_number ?? "",
-            name: a.equipment_name ?? "",
-          });
-        }
+        if (!eligibleAssignmentIds.has(normalizeAssignmentId(a.id))) continue;
         const fid = a?.filter_id as string | undefined;
         if (fid && !seenFilterId.has(fid)) {
           seenFilterId.add(fid);
@@ -376,14 +459,11 @@ const FilterLogBookPage: React.FC = () => {
           });
         }
       }
-      options.sort((a, b) =>
-        `${a.equipment_number} ${a.name}`.localeCompare(`${b.equipment_number} ${b.name}`)
-      );
       filterOpts.sort((a, b) => a.filter_id.localeCompare(b.filter_id));
       setEquipmentOptions(options);
       setFilterIdFilterOptions(filterOpts);
     } catch (error) {
-      console.error("Error loading equipment from assignments:", error);
+      console.error("Error building filter log equipment options:", error);
       setEquipmentOptions([]);
       setFilterIdFilterOptions([]);
     }
@@ -417,7 +497,7 @@ const FilterLogBookPage: React.FC = () => {
   const onEquipmentSelectedForTagInfo = async (equipmentUuid: string) => {
     setSelectedEquipmentUuid(equipmentUuid);
     try {
-      const assignments = (await filterAssignmentAPI.list({
+      const assignments = (await filterAssignmentAPI.listAllPages({
         equipment: equipmentUuid,
       })) as FilterAssignmentRow[];
       const activeList = (assignments || []).filter((a) => a.is_active !== false);
@@ -992,7 +1072,7 @@ const FilterLogBookPage: React.FC = () => {
       setSelectedEquipmentUuid(timingMeta.equipment_id);
       void (async () => {
         try {
-          const assigns = (await filterAssignmentAPI.list({
+          const assigns = (await filterAssignmentAPI.listAllPages({
             equipment: timingMeta.equipment_id!,
           })) as FilterAssignmentRow[];
           const list = assigns.filter((a) => a.is_active !== false);

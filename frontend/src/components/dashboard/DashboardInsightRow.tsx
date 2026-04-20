@@ -180,7 +180,7 @@ function hslPaletteFromTriplet(triplet: string, count: number): string[] {
 }
 
 /** Recharts default tooltip is tall/padded; use a dense popover so hover/click feels compact */
-function makeCompactChartTooltip(
+export function makeCompactChartTooltip(
   formatTooltip: (value: number, name: string) => [string, string]
 ): React.FC<{
   active?: boolean;
@@ -247,8 +247,8 @@ function InsightChart({
 
   const marginBottom = chartData.length > 1 ? 36 : 8;
   const showBarLabels = chartData.length > 0 && chartData.length <= 12;
-  const marginTop = showBarLabels ? 22 : 8;
-  const yTop = showBarLabels ? Math.max(yMax * 1.14, yMax + 1e-9) : yMax;
+  const marginTop = showBarLabels ? 30 : 8;
+  const yTop = showBarLabels ? Math.max(yMax * 1.24, yMax + 1e-9) : yMax;
 
   const commonAxis = {
     x: (
@@ -355,17 +355,25 @@ function InsightChart({
       );
 
     case 'area-dual':
+      {
+      const areaData =
+        chartData.length === 1
+          ? [
+              { ...chartData[0], name: '' },
+              { ...chartData[0], name: chartData[0].name },
+            ]
+          : chartData;
       return (
         <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={chartData} margin={{ top: 8, right: 12, left: 4, bottom: marginBottom }}>
+          <AreaChart data={areaData} margin={{ top: 8, right: 12, left: 4, bottom: marginBottom }}>
             <defs>
               <linearGradient id={gidActual} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={barColor} stopOpacity={0.45} />
-                <stop offset="100%" stopColor={barColor} stopOpacity={0.08} />
+                <stop offset="0%" stopColor={barColor} stopOpacity={0.75} />
+                <stop offset="100%" stopColor={barColor} stopOpacity={0.22} />
               </linearGradient>
               <linearGradient id={gidTarget} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={comparisonColorCss} stopOpacity={0.35} />
-                <stop offset="100%" stopColor={comparisonColorCss} stopOpacity={0.06} />
+                <stop offset="0%" stopColor={comparisonColorCss} stopOpacity={0.65} />
+                <stop offset="100%" stopColor={comparisonColorCss} stopOpacity={0.18} />
               </linearGradient>
             </defs>
             <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
@@ -377,22 +385,26 @@ function InsightChart({
               type="monotone"
               dataKey="actual"
               name={barLabel}
+              stackId="total"
               stroke={barColor}
-              strokeWidth={2}
+              strokeWidth={1}
               fill={`url(#${gidActual})`}
+              activeDot={false}
             />
             <Area
               type="monotone"
               dataKey="target"
               name={lineLabel}
+              stackId="total"
               stroke={comparisonColorCss}
-              strokeWidth={2}
-              strokeDasharray="6 4"
+              strokeWidth={1}
               fill={`url(#${gidTarget})`}
+              activeDot={false}
             />
           </AreaChart>
         </ResponsiveContainer>
       );
+      }
 
     case 'line-dual':
       return (
@@ -617,7 +629,7 @@ export function DashboardInsightRow({
     rowVariant === 'elevated' && 'border-border/80 bg-card shadow-sm',
     rowVariant === 'soft' && 'border-transparent bg-gradient-to-br from-muted/40 to-card ring-1 ring-border/60',
     rowVariant === 'card' &&
-      'rounded-xl border border-border bg-card shadow-[0_1px_3px_hsl(220_15%_10%/0.08)] dark:shadow-[0_1px_3px_hsl(0_0%_0%/0.4)]'
+    'rounded-xl border border-border bg-card shadow-[0_1px_3px_hsl(220_15%_10%/0.08)] dark:shadow-[0_1px_3px_hsl(0_0%_0%/0.4)]'
   );
 
   const subtitleBar = cn(

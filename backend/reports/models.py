@@ -78,6 +78,8 @@ class AuditEvent(models.Model):
         ("log_correction", "Log Correction"),
         ("log_created", "Log Created"),
         ("log_deleted", "Log Deleted"),
+        ("log_approved", "Log Approved"),
+        ("log_rejected", "Log Rejected"),
         ("entity_created", "Entity Created"),
         ("entity_updated", "Entity Updated"),
         ("entity_deleted", "Entity Deleted"),
@@ -112,6 +114,13 @@ class AuditEvent(models.Model):
     class Meta:
         db_table = "audit_events"
         ordering = ["-timestamp"]
+        indexes = [
+            models.Index(fields=["-timestamp"]),
+            models.Index(fields=["event_type", "-timestamp"]),
+            models.Index(fields=["object_type", "-timestamp"]),
+            models.Index(fields=["object_id", "-timestamp"]),
+            models.Index(fields=["user", "-timestamp"]),
+        ]
 
     def __str__(self) -> str:  # pragma: no cover - trivial
         return f"{self.event_type} on {self.object_type}:{self.object_id or ''}"

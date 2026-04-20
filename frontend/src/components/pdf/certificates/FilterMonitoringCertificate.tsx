@@ -1,5 +1,6 @@
 import React from 'react';
 import { Document, Page, View, Text, StyleSheet } from '@react-pdf/renderer';
+import { format } from 'date-fns';
 import { PDFHeader } from '../PDFHeader';
 
 /** Column widths — must total 100% (landscape A4). */
@@ -84,6 +85,12 @@ const styles = StyleSheet.create({
   footer: {
     marginTop: 16,
     fontSize: 9,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+  },
+  footerRight: {
+    textAlign: 'right',
   },
 });
 
@@ -112,6 +119,7 @@ export interface FilterMonitoringLog {
 interface FilterMonitoringData {
   approvedBy?: string;
   printedBy?: string;
+  recordingFrequency?: string;
   logs: FilterMonitoringLog[];
 }
 
@@ -125,6 +133,29 @@ export function FilterMonitoringCertificate({ data }: FilterMonitoringCertificat
     (first?.equipmentDisplayName && String(first.equipmentDisplayName).trim()) ||
     first?.equipmentId ||
     '—';
+  const signDateForRow = (log: FilterMonitoringLog): string => {
+    const d = (log.date || '').trim();
+    const t = (log.time || '').trim();
+    if (d && t) return `${d} ${t}`;
+    return d || t || '';
+  };
+  const doneByForRow = (log: FilterMonitoringLog): string => {
+    const name = (log.checkedBy || '').trim();
+    const dt = signDateForRow(log);
+    if (!name) return '—';
+    return dt ? `${name} - ${dt}` : name;
+  };
+  const approvedByForRow = (log: FilterMonitoringLog): string => {
+    const name = (log.approvedByName || '').trim();
+    const dt = signDateForRow(log);
+    if (!name) return '—';
+    return dt ? `${name} - ${dt}` : name;
+  };
+  const printedBySignDate = (() => {
+    const by = (data.printedBy || '').trim();
+    if (!by) return '—';
+    return `${by} - ${format(new Date(), 'dd/MM/yy HH:mm:ss')}`;
+  })();
 
   const renderRow = (log: FilterMonitoringLog, index: number, isHeader: boolean) => (
     <View key={isHeader ? 'hdr' : `row-${index}`} style={[styles.tableRow, isHeader && styles.tableHeader]}>
@@ -184,7 +215,7 @@ export function FilterMonitoringCertificate({ data }: FilterMonitoringCertificat
         style={[styles.tableCell, styles.tableCellLeft, { width: W.doneBy }, isHeader && styles.cellHeader]}
         wrap
       >
-        {isHeader ? 'Done by' : log.checkedBy || '—'}
+        {isHeader ? 'Done By (Sign and Date)' : doneByForRow(log)}
       </Text>
       <Text
         style={[
@@ -196,34 +227,15 @@ export function FilterMonitoringCertificate({ data }: FilterMonitoringCertificat
         ]}
         wrap
       >
-        {isHeader ? 'Approved by' : log.approvedByName || '—'}
+        {isHeader ? 'Approved By (Sign and Date)' : approvedByForRow(log)}
       </Text>
-    </View>
-  );
-
-  const emptyRow = (key: string) => (
-    <View key={key} style={styles.tableRow}>
-      <Text style={[styles.tableCell, { width: W.date }]}> </Text>
-      <Text style={[styles.tableCell, { width: W.time }]}> </Text>
-      <Text style={[styles.tableCell, { width: W.equipment }]}> </Text>
-      <Text style={[styles.tableCell, { width: W.category }]}> </Text>
-      <Text style={[styles.tableCell, { width: W.filterNo }]}> </Text>
-      <Text style={[styles.tableCell, { width: W.micron }]}> </Text>
-      <Text style={[styles.tableCell, { width: W.fsize }]}> </Text>
-      <Text style={[styles.tableCell, { width: W.installed }]}> </Text>
-      <Text style={[styles.tableCell, { width: W.intDue }]}> </Text>
-      <Text style={[styles.tableCell, { width: W.clnDue }]}> </Text>
-      <Text style={[styles.tableCell, { width: W.repDue }]}> </Text>
-      <Text style={[styles.tableCell, { width: W.remarks }]}> </Text>
-      <Text style={[styles.tableCell, { width: W.doneBy }]}> </Text>
-      <Text style={[styles.tableCell, styles.tableCellLast, { width: W.apprBy }]}> </Text>
     </View>
   );
 
   return (
     <Document>
       <Page size="A4" orientation="landscape" style={styles.page}>
-        <PDFHeader />
+        <PDFHeader reportTitle="FILTER LOG BOOK REPORT" />
 
         <Text style={styles.title}>RAW DATA FOR FILTER MONITORING</Text>
         <Text style={styles.subtitle}>Equipment: {equipTitle}</Text>
@@ -234,13 +246,11 @@ export function FilterMonitoringCertificate({ data }: FilterMonitoringCertificat
         <View style={styles.table}>
           {renderRow(data.logs[0] || ({} as FilterMonitoringLog), -1, true)}
           {data.logs.map((log, index) => renderRow(log, index, false))}
-          {Array.from({ length: Math.max(0, 8 - data.logs.length) }).map((_, i) =>
-            emptyRow(`empty-${i}`),
-          )}
         </View>
 
         <View style={styles.footer}>
-          <Text>Printed by: {data.printedBy || '—'}</Text>
+          <Text>Recording Frequency: {data.recordingFrequency || 'Once in every 01 hour'}</Text>
+          <Text style={styles.footerRight}>Printed By (Sign and Date): {printedBySignDate}</Text>
         </View>
       </Page>
     </Document>

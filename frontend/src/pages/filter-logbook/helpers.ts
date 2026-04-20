@@ -33,8 +33,31 @@ export interface FilterAssignmentRow {
   tag_info?: string | null;
   area_category?: string | null;
   equipment?: string;
+  /** Present on some API shapes; prefer with `equipment` for PK resolution. */
+  equipment_id?: string;
   equipment_number?: string;
   equipment_name?: string;
+}
+
+const EQUIPMENT_UUID_IN_STRING_RE =
+  /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
+
+/**
+ * Resolve equipment UUID from a filter-assignment row (PK string, nested `{ id }`, or hyperlinked URL).
+ */
+export function equipmentUuidFromFilterAssignmentRow(a: {
+  equipment?: unknown;
+  equipment_id?: unknown;
+}): string {
+  const raw = a?.equipment_id ?? a?.equipment;
+  if (raw == null) return "";
+  if (typeof raw === "object" && raw !== null && "id" in raw) {
+    return equipmentUuidFromFilterAssignmentRow({ equipment: (raw as { id: unknown }).id });
+  }
+  const s = String(raw).trim();
+  const m = s.match(EQUIPMENT_UUID_IN_STRING_RE);
+  if (m) return m[1].toLowerCase();
+  return s.toLowerCase();
 }
 
 export interface FilterLog {
@@ -181,7 +204,10 @@ export function pickAssignmentForEquipmentColumn(
   if (!rows.length) return null;
 
   if (raw) {
-    let pool = rows.filter((a) => a.equipment && a.equipment.toLowerCase() === raw.toLowerCase());
+    const rawLc = raw.toLowerCase();
+    let pool = rows.filter(
+      (a) => equipmentUuidFromFilterAssignmentRow(a).toLowerCase() === rawLc,
+    );
     if (pool.length && filterNo) {
       const byF = pool.filter((a) => a.filter_id === filterNo);
       if (byF.length) pool = byF;
@@ -237,18 +263,24 @@ export function formatFilterSize(a: FilterAssignmentRow): string {
   return "";
 }
 
-export function assignmentIdsWithAnyApprovedSchedules(
-  schedules: { assignment: string; schedule_type: string }[],
-): Set<string> {
-  const byAssignment = new Map<string, Set<string>>();
-  for (const s of schedules) {
-    if (!s?.assignment) continue;
-    if (!byAssignment.has(s.assignment)) byAssignment.set(s.assignment, new Set());
-    byAssignment.get(s.assignment)!.add(s.schedule_type);
+/**
+ * Canonical assignment PK for comparing schedule rows to assignment list (case, nested object).
+ */
+export function normalizeAssignmentId(v: unknown): string {
+  if (v == null) return "";
+  if (typeof v === "object" && v !== null && "id" in v) {
+    return normalizeAssignmentId((v as { id: unknown }).id);
   }
+  return String(v).trim().toLowerCase();
+}
+
+export function assignmentIdsWithAnyApprovedSchedules(
+  schedules: { assignment?: unknown; schedule_type?: string }[],
+): Set<string> {
   const out = new Set<string>();
-  for (const [aid] of byAssignment) {
-    out.add(aid);
+  for (const s of schedules) {
+    const aid = normalizeAssignmentId(s?.assignment);
+    if (aid) out.add(aid);
   }
   return out;
 }

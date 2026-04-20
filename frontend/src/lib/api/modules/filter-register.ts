@@ -15,6 +15,53 @@ function scheduleQueryParams(params?: Record<string, unknown>) {
   return query;
 }
 
+/** Walk DRF pages so filter assignments are complete (scoped lists were truncated to page 1). */
+async function fetchAllFilterAssignmentPages(params?: {
+  equipment?: string;
+}): Promise<Record<string, unknown>[]> {
+  const all: Record<string, unknown>[] = [];
+  for (let page = 1; ; page += 1) {
+    const query: Record<string, string | number> = { page };
+    if (params?.equipment) {
+      query.equipment = params.equipment;
+    }
+    const response = await api.get("/filter-assignments/", { params: query });
+    const d = response.data as
+      | Record<string, unknown>[]
+      | { results?: Record<string, unknown>[]; next?: string | null };
+    if (Array.isArray(d)) {
+      return d;
+    }
+    const results = d?.results ?? [];
+    all.push(...results);
+    if (!d?.next || results.length === 0) break;
+  }
+  return all;
+}
+
+/** Walk DRF pages for schedules (e.g. all approved rows), not only the first page. */
+async function fetchAllFilterSchedulePages(
+  params?: Record<string, unknown>,
+): Promise<Record<string, unknown>[]> {
+  const all: Record<string, unknown>[] = [];
+  const base = scheduleQueryParams(params) ?? {};
+  for (let page = 1; ; page += 1) {
+    const response = await api.get("/filter-schedules/", {
+      params: { ...base, page },
+    });
+    const d = response.data as
+      | Record<string, unknown>[]
+      | { results?: Record<string, unknown>[]; next?: string | null };
+    if (Array.isArray(d)) {
+      return d;
+    }
+    const results = d?.results ?? [];
+    all.push(...results);
+    if (!d?.next || results.length === 0) break;
+  }
+  return all;
+}
+
 export const filterCategoryAPI = {
   list: async () => {
     const response = await api.get("/filter-categories/");
@@ -64,6 +111,7 @@ export const filterAssignmentAPI = {
     const response = await api.get("/filter-assignments/", { params });
     return unwrapPaginated<Record<string, unknown>>(response.data);
   },
+  listAllPages: async (params?: { equipment?: string }) => fetchAllFilterAssignmentPages(params),
   create: async (data: unknown) => {
     const response = await api.post("/filter-assignments/", data);
     return response.data;
@@ -80,6 +128,8 @@ export const filterScheduleAPI = {
     const response = await api.get("/filter-schedules/", { params: scheduleQueryParams(params) });
     return unwrapPaginated<Record<string, unknown>>(response.data);
   },
+  /** Full schedule list across pages (listAll is only the first DRF page). */
+  listAllPages: async (params?: Record<string, unknown>) => fetchAllFilterSchedulePages(params),
   create: async (data: unknown) => {
     const response = await api.post("/filter-schedules/", data);
     return response.data;

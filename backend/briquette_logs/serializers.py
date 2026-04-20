@@ -94,7 +94,7 @@ class BriquetteLogSerializer(serializers.ModelSerializer):
         try:
             from core.log_slot_utils import get_tolerance_status
 
-            return get_tolerance_status(obj.timestamp, obj.equipment_id or "", "boiler")
+            return get_tolerance_status(obj.timestamp, obj.equipment_id or "", "briquette")
         except Exception:
             return "none"
 

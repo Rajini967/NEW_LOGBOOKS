@@ -35,7 +35,7 @@ import {
   Printer,
   X,
 } from 'lucide-react';
-import { format } from 'date-fns';
+import { format, parseISO } from 'date-fns';
 import { jsPDF } from 'jspdf';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
@@ -56,6 +56,7 @@ import {
   type MonitoringPDFData,
 } from '@/lib/pdf-generator';
 import {
+  api,
   reportsAPI,
   chemicalPrepAPI,
   chillerLogAPI,
@@ -176,7 +177,12 @@ const mapChillerLogForMonitoringPdf = (l: any) => ({
   coolingTowerFanChemicalName: l.cooling_tower_fan_chemical_name,
   coolingTowerFanChemicalQtyKg: l.cooling_tower_fan_chemical_qty_kg,
   operatorSign: l.operator_sign,
-  verifiedBy: l.verified_by,
+  approvedBy: (() => {
+    const name = l.approved_by_name ? String(l.approved_by_name).trim() : '';
+    const ts = l.approved_at ? new Date(l.approved_at) : null;
+    const dt = ts && !Number.isNaN(ts.getTime()) ? format(ts, 'dd/MM/yy HH:mm:ss') : '';
+    return dt ? `${name} - ${dt}` : name;
+  })(),
   comment: l.comment,
   remarks: l.remarks,
   checkedBy: l.operator_name,
@@ -192,6 +198,7 @@ function buildChillerMonitoringPdfPayload(
   targetEquipmentId: string,
   approvedBy?: string,
   printedBy?: string,
+  recordingFrequency?: string,
 ): MonitoringPDFData | null {
   const logsForEquip = mappedForEquipment.filter(
     (row) =>
@@ -219,10 +226,19 @@ function buildChillerMonitoringPdfPayload(
   if (onDay.length === 0) {
     return null;
   }
+  const approvedByFromSource = (() => {
+    const name = sourceLog?.approved_by_name ? String(sourceLog.approved_by_name).trim() : '';
+    const ts = sourceLog?.approved_at ? new Date(sourceLog.approved_at) : null;
+    const dt = ts && !Number.isNaN(ts.getTime()) ? format(ts, 'dd/MM/yy HH:mm:ss') : '';
+    if (name && dt) return `${name} - ${dt}`;
+    return approvedBy || name || '';
+  })();
+
   return {
     logs: logsForEquip,
-    approvedBy,
+    approvedBy: approvedByFromSource,
     printedBy,
+    recordingFrequency,
     reportDate: reportDateStr,
   };
 }
@@ -266,6 +282,51 @@ function buildBriquetteMonitoringPdfPayload(
     logs: sorted,
     approvedBy,
     printedBy,
+    reportDate: reportDateStr,
+  };
+}
+
+/** Boiler monitoring PDF: lock columns to selected report calendar day. */
+function buildBoilerMonitoringPdfPayload(
+  sourceLog: any,
+  mappedForEquipment: ReturnType<typeof mapBoilerLogForMonitoringPdf>[],
+  targetEquipmentId: string,
+  approvedBy?: string,
+  printedBy?: string,
+  recordingFrequency?: string,
+): MonitoringPDFData | null {
+  const logsForEquip = mappedForEquipment.filter(
+    (row) => String(row.equipmentId ?? '') === String(targetEquipmentId),
+  );
+  let reportDateStr: string | undefined;
+  if (sourceLog?.timestamp) {
+    const d = new Date(sourceLog.timestamp);
+    if (!Number.isNaN(d.getTime())) {
+      reportDateStr = format(d, 'yyyy-MM-dd');
+    }
+  }
+  if (!reportDateStr && logsForEquip.length > 0) {
+    const days = [...new Set(logsForEquip.map((l) => format(l.timestamp, 'yyyy-MM-dd')))]
+      .filter(Boolean)
+      .sort()
+      .reverse();
+    reportDateStr = days[0];
+  }
+  if (!reportDateStr) {
+    return null;
+  }
+  const onDay = logsForEquip.filter((l) => format(l.timestamp, 'yyyy-MM-dd') === reportDateStr);
+  if (onDay.length === 0) {
+    return null;
+  }
+  const sorted = [...onDay].sort(
+    (a, b) => (a.timestamp?.getTime?.() ?? 0) - (b.timestamp?.getTime?.() ?? 0),
+  );
+  return {
+    logs: sorted,
+    approvedBy,
+    printedBy,
+    recordingFrequency,
     reportDate: reportDateStr,
   };
 }
@@ -353,7 +414,11 @@ const mapChemicalLogForMonitoringPdf = (l: any) => ({
   equipmentType: 'chemical',
   equipmentName: l.equipment_name,
   chemicalName: l.chemical_name,
-  chemicalPercent: l.chemical_percent,
+  chemicalPercent:
+    l.chemical_percent ??
+    l.chemical_concentration ??
+    l.chemical_concentration_percent ??
+    null,
   solutionConcentration: l.solution_concentration,
   waterQty: l.water_qty,
   chemicalQty: l.chemical_qty,
@@ -499,20 +564,13 @@ async function enrichFilterMonitoringLogsForPdf(logs: any[]): Promise<any[]> {
 const isApprovedReportRow = (row: any): boolean =>
   String(row?.status ?? '').toLowerCase() === 'approved';
 
-/**
- * E Log Book monitoring PDFs were merging every approved log for the equipment/day.
- * Non–super-admin users must only export the log row for the selected report (same as list RBAC).
- * Super admin keeps the full multi-column daily grid for that equipment/date.
- */
 function filterUtilityMonitoringLogsForPdfRole<T extends { id?: string }>(
   mappedLogs: T[],
-  report: Report,
-  userRole: string | undefined,
+  _report: Report,
+  _userRole: string | undefined,
 ): T[] {
-  if (userRole === 'super_admin') return mappedLogs;
-  const sid = report.originalData?.sourceId;
-  if (!sid) return mappedLogs;
-  return mappedLogs.filter((l) => String(l.id ?? '') === String(sid));
+  // Keep all equipment/day logs so monitoring PDFs render full time-slot grids.
+  return mappedLogs;
 }
 
 // TODO: Replace with API call to fetch reports
@@ -541,6 +599,17 @@ const typeLabels = {
 };
 
 const auditEventLabels: Record<string, string> = {
+  manual_login: 'Manual Login',
+  manual_logout: 'Manual Logout',
+  auto_logout: 'Auto Logout',
+  login_failed_blank_email: 'Login failed — blank email',
+  login_failed_blank_password: 'Login failed — blank password',
+  login_failed_invalid_password: 'Login failed — invalid password',
+  login_failed_unknown_email: 'Login failed — unknown email',
+  login_failed_account_locked: 'Login denied — account locked',
+  login_failed_inactive_user: 'Login denied — inactive or deleted',
+  login: 'Login',
+  logout: 'Logout',
   limit_update: 'Limit Update',
   config_update: 'Config Update',
   log_update: 'Log Update',
@@ -548,6 +617,7 @@ const auditEventLabels: Record<string, string> = {
   log_corrected: 'Log Corrected',
   log_created: 'Log Created',
   log_deleted: 'Log Deleted',
+  log_approved: 'Log Approved',
   log_rejected: 'Log Rejected',
   entity_created: 'Entity Created',
   entity_updated: 'Entity Updated',
@@ -557,9 +627,934 @@ const auditEventLabels: Record<string, string> = {
   consumption_updated: 'Consumption Updated',
   user_created: 'User created',
   password_changed: 'Password changed',
-  user_locked: 'User locked',
-  user_unlocked: 'User unlocked',
+  password_reuse_rejected: 'Password reuse rejected (last 3 passwords)',
+  user_locked: 'Account lock applied',
+  user_unlocked: 'Account lock cleared',
+  role_changed: 'Role changed',
+  access_scope_changed: 'Department / equipment scope changed',
 };
+
+/** User Activity filter: option text matches API `event_type` and the Event name column (e.g. manual_login). */
+const USER_ACTIVITY_EVENT_TYPE_CODES = [
+  'manual_login',
+  'manual_logout',
+  'auto_logout',
+  'login_failed_blank_email',
+  'login_failed_blank_password',
+  'login_failed_invalid_password',
+  'login_failed_unknown_email',
+  'login_failed_account_locked',
+  'login_failed_inactive_user',
+  'user_created',
+  'password_changed',
+  'password_reuse_rejected',
+  'user_locked',
+  'user_unlocked',
+  'role_changed',
+  'access_scope_changed',
+] as const;
+
+const userActivityEventFilterOptions: { value: string; label: string }[] =
+  USER_ACTIVITY_EVENT_TYPE_CODES.map((code) => ({ value: code, label: code }));
+
+function escapeHtml(s: string): string {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function escapeAttr(s: string): string {
+  return escapeHtml(s).replace(/'/g, '&#39;');
+}
+
+/**
+ * Build UTC ISO-8601 from HTML date (YYYY-MM-DD) + time (HH:mm) interpreted in the browser's local zone.
+ * The API stores `created_at` in UTC; naive strings were previously interpreted as UTC on the server,
+ * which broke filtering when local wall time ≠ UTC.
+ */
+function localDateTimeToUtcIsoForApi(
+  dateYmd: string,
+  timeHm: string,
+  bound: 'from' | 'to',
+): string | null {
+  if (!dateYmd) return null;
+  const parts = dateYmd.split('-').map((x) => parseInt(x, 10));
+  if (parts.length !== 3 || parts.some((n) => Number.isNaN(n))) return null;
+  const [y, mo, d] = parts;
+
+  const t = (timeHm && timeHm.trim()) ? timeHm.trim() : '';
+  let hh = 0;
+  let mm = 0;
+  let ss = 0;
+  let ms = 0;
+
+  if (bound === 'from') {
+    if (t) {
+      const [hStr, mStr, sStr] = t.split(':');
+      hh = parseInt(hStr, 10) || 0;
+      mm = parseInt(mStr, 10) || 0;
+      ss = parseInt(sStr || '0', 10) || 0;
+    }
+  } else {
+    if (t) {
+      const [hStr, mStr, sStr] = t.split(':');
+      hh = parseInt(hStr, 10) || 0;
+      mm = parseInt(mStr, 10) || 0;
+      ss = parseInt(sStr || '59', 10) || 59;
+      ms = 999;
+    } else {
+      hh = 23;
+      mm = 59;
+      ss = 59;
+      ms = 999;
+    }
+  }
+
+  const local = new Date(y, mo - 1, d, hh, mm, ss, ms);
+  if (Number.isNaN(local.getTime())) return null;
+  return local.toISOString();
+}
+
+/** Query params for /reports/user-activity/ (datetime bounds when dates are set). */
+function buildUserActivityFilterParams(
+  fromDate: string,
+  fromTime: string,
+  toDate: string,
+  toTime: string,
+  eventType: string,
+): {
+  from_datetime?: string;
+  to_datetime?: string;
+  event_type?: string;
+} {
+  const params: { from_datetime?: string; to_datetime?: string; event_type?: string } = {};
+  const fromIso = localDateTimeToUtcIsoForApi(fromDate, fromTime, 'from');
+  if (fromIso) params.from_datetime = fromIso;
+  const toIso = localDateTimeToUtcIsoForApi(toDate, toTime, 'to');
+  if (toIso) params.to_datetime = toIso;
+  if (eventType !== 'all') params.event_type = eventType;
+  return params;
+}
+
+/** Query params for /reports/audit/ with optional time bounds. */
+function buildAuditFilterParams(
+  fromDate: string,
+  fromTime: string,
+  toDate: string,
+  toTime: string,
+  eventType: string,
+  objectType: string,
+): {
+  from_date?: string;
+  to_date?: string;
+  from_datetime?: string;
+  to_datetime?: string;
+  event_type?: string;
+  object_type?: string;
+} {
+  const params: {
+    from_date?: string;
+    to_date?: string;
+    from_datetime?: string;
+    to_datetime?: string;
+    event_type?: string;
+    object_type?: string;
+  } = {};
+  if (fromDate) params.from_date = fromDate;
+  if (toDate) params.to_date = toDate;
+  const fromIso = localDateTimeToUtcIsoForApi(fromDate, fromTime, 'from');
+  if (fromIso) params.from_datetime = fromIso;
+  const toIso = localDateTimeToUtcIsoForApi(toDate, toTime, 'to');
+  if (toIso) params.to_datetime = toIso;
+  if (eventType !== 'all') params.event_type = eventType;
+  if (objectType !== 'all' && objectType.trim()) params.object_type = objectType.trim();
+  return params;
+}
+
+type UserActivityPrintHeaderMeta = {
+  clientLine: string;
+  manufacturedBy: string;
+  systemTitle: string;
+  fromDateTime: string;
+  toDateTime: string;
+  logoLeft: string;
+  logoRight: string;
+  logoLeftLabel: string;
+  logoRightLabel: string;
+  /** Display name for the "PRINTED BY" footer line. */
+  printedBy?: string;
+};
+
+async function loadUserActivityPrintHeaderMeta(
+  activityFromDate: string,
+  activityFromTime: string,
+  activityToDate: string,
+  activityToTime: string,
+): Promise<UserActivityPrintHeaderMeta> {
+  const logoLeft = String(import.meta.env.VITE_AUDIT_REPORT_LOGO_LEFT || '').trim();
+  const logoRight = String(import.meta.env.VITE_AUDIT_REPORT_LOGO_RIGHT || '').trim();
+  const defaultClient = String(import.meta.env.VITE_AUDIT_REPORT_CLIENT || '').trim()
+    || "M/s. DR. REDDY'S LABORATORIES LTD, FTO UNIT-09, VISAKHAPATNAM, AP";
+  const defaultManufacturedBy = String(import.meta.env.VITE_AUDIT_REPORT_MANUFACTURED_BY || '').trim()
+    || 'M/s. RAJ HI-PURITY SYSTEMS LIMITED';
+  const logoLeftLabel = String(import.meta.env.VITE_AUDIT_REPORT_LOGO_LEFT_LABEL || '').trim()
+    || "Dr.Reddy's";
+  const logoRightLabel = String(import.meta.env.VITE_AUDIT_REPORT_LOGO_RIGHT_LABEL || '').trim()
+    || 'Praj HiPurity Systems';
+
+  const clientLine = defaultClient;
+  const manufacturedBy = defaultManufacturedBy;
+  const systemTitle = 'DIGITAL LOG BOOK';
+
+  const fromHms = ((activityFromTime && activityFromTime.trim()) || '00:00:00');
+  const toHms = ((activityToTime && activityToTime.trim()) || '23:59:59');
+  const fromDateTime = activityFromDate
+    ? format(parseISO(`${activityFromDate}T${fromHms}`), 'dd/MM/yyyy HH:mm:ss')
+    : '—';
+  const toDateTime = activityToDate
+    ? format(parseISO(`${activityToDate}T${toHms}`), 'dd/MM/yyyy HH:mm:ss')
+    : '—';
+
+  return {
+    clientLine,
+    manufacturedBy,
+    systemTitle,
+    fromDateTime,
+    toDateTime,
+    logoLeft,
+    logoRight,
+    logoLeftLabel,
+    logoRightLabel,
+  };
+}
+
+function buildStandardReportHeader(title: string, meta: UserActivityPrintHeaderMeta): string {
+  const leftImgs = meta.logoLeft
+    ? `<img class="header-logo" src="${escapeAttr(meta.logoLeft)}" alt="" /><div class="header-logo-label">${escapeHtml(meta.logoLeftLabel)}</div>`
+    : `<div class="header-logo-label">${escapeHtml(meta.logoLeftLabel)}</div>`;
+  const rightImgs = meta.logoRight
+    ? `<img class="header-logo" src="${escapeAttr(meta.logoRight)}" alt="" /><div class="header-logo-label">${escapeHtml(meta.logoRightLabel)}</div>`
+    : `<div class="header-logo-label">${escapeHtml(meta.logoRightLabel)}</div>`;
+
+  return `
+    <div class="audit-header">
+      <div class="audit-header-top">
+        <div class="ah-left">${leftImgs}</div>
+        <div class="ah-center">
+          <p class="line1">${escapeHtml(title)}</p>
+          <p class="line2">${escapeHtml(meta.systemTitle)}</p>
+        </div>
+        <div class="ah-right">${rightImgs}</div>
+      </div>
+      <div class="audit-header-meta">
+        <div class="meta-grid">
+          <span class="meta-lab">CLIENT:-</span>
+          <span class="meta-val">${escapeHtml(meta.clientLine)}</span>
+          <span class="meta-lab">MANUFACTURED BY:-</span>
+          <span class="meta-val">${escapeHtml(meta.manufacturedBy)}</span>
+          <span class="meta-lab">SYSTEM TITLE:-</span>
+          <span class="meta-val">${escapeHtml(meta.systemTitle)}</span>
+          <span class="meta-lab">FROM DATE &amp; TIME:-</span>
+          <span class="meta-val">${escapeHtml(meta.fromDateTime)}</span>
+          <span class="meta-lab">TO DATE &amp; TIME:-</span>
+          <span class="meta-val">${escapeHtml(meta.toDateTime)}</span>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function standardReportPrintCss(tableFontSize = 11): string {
+  return `
+    body {
+      font-family: Arial, Helvetica, sans-serif;
+      margin: 0;
+      padding: 16px;
+      font-size: 11px;
+      line-height: 1.35;
+      color: #000;
+    }
+    .audit-header {
+      border: 1px solid #000;
+      margin: 0 0 16px 0;
+    }
+    .audit-header-top {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      border-bottom: 3px double #000;
+    }
+    .ah-left {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      justify-content: flex-start;
+    }
+    .ah-center {
+      text-align: center;
+      padding: 0 8px;
+    }
+    .ah-center .line1 {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .ah-center .line2 {
+      margin: 6px 0 0 0;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
+    .ah-right {
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      align-items: center;
+    }
+    .header-logo {
+      max-height: 48px;
+      max-width: 160px;
+      object-fit: contain;
+    }
+    .header-logo-label {
+      font-size: 10px;
+      font-weight: 700;
+      text-align: center;
+      line-height: 1.1;
+      max-width: 180px;
+    }
+    .audit-header-meta {
+      padding: 10px 12px 12px;
+    }
+    .meta-grid {
+      display: grid;
+      grid-template-columns: minmax(220px, 32%) 1fr;
+      column-gap: 10px;
+      row-gap: 6px;
+      font-size: 10px;
+      text-transform: uppercase;
+    }
+    .meta-lab { font-weight: 700; }
+    .meta-val { font-weight: 400; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    th, td {
+      border: 1px solid #ccc;
+      padding: 6px 8px;
+      font-size: ${tableFontSize}px;
+    }
+    th { background: #f5f5f5; }
+    .ua-print-footer {
+      margin-top: 22px;
+      padding: 8px 0 4px;
+      border-top: 1px solid #000;
+      color: #000;
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }
+    .ua-print-footer-inner {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 16px;
+      font-size: 10px;
+      line-height: 1.35;
+    }
+    .ua-print-footer-left {
+      text-align: left;
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+    .ua-print-footer-lab {
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
+    .ua-print-footer-val {
+      font-weight: 400;
+      text-transform: none;
+    }
+    .ua-print-footer-right {
+      text-align: right;
+      flex: 0 1 auto;
+      max-width: 52%;
+    }
+    @media print {
+      @page { margin: 10mm; }
+      body { padding: 12px; }
+    }
+  `;
+}
+
+function buildStandardReportFooter(printedBy: string): string {
+  const by = escapeHtml((printedBy || '').trim() || '—');
+  const printedAt = escapeHtml(format(new Date(), 'dd/MM/yyyy HH:mm:ss'));
+  return `
+    <div class="ua-print-footer">
+      <div class="ua-print-footer-inner">
+        <div class="ua-print-footer-left">
+          <span class="ua-print-footer-lab">PRINTED BY :-</span>
+          <span class="ua-print-footer-val"> ${by}</span>
+        </div>
+        <div class="ua-print-footer-right">
+          <span class="ua-print-footer-lab">PRINTED DATE AND TIME :-</span>
+          <span class="ua-print-footer-val"> ${printedAt}</span>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function buildUserActivityPrintDocument(rows: UserActivityRow[], meta: UserActivityPrintHeaderMeta): string {
+  const printedByRaw = (meta.printedBy != null && String(meta.printedBy).trim()) || '—';
+  const printedBy = escapeHtml(printedByRaw);
+  const printedAt = escapeHtml(format(new Date(), 'dd/MM/yyyy HH:mm:ss'));
+
+  const leftImgs = meta.logoLeft
+    ? `<img class="header-logo" src="${escapeAttr(meta.logoLeft)}" alt="" /><div class="header-logo-label">${escapeHtml(meta.logoLeftLabel)}</div>`
+    : `<div class="header-logo-label">${escapeHtml(meta.logoLeftLabel)}</div>`;
+  const rightImgs = meta.logoRight
+    ? `<img class="header-logo" src="${escapeAttr(meta.logoRight)}" alt="" /><div class="header-logo-label">${escapeHtml(meta.logoRightLabel)}</div>`
+    : `<div class="header-logo-label">${escapeHtml(meta.logoRightLabel)}</div>`;
+
+  const rowsHtml = rows
+    .map(
+      (row) => `
+                        <tr>
+                          <td>${escapeHtml(row.created_at ? format(new Date(row.created_at), 'dd/MM/yy HH:mm:ss') : '')}</td>
+                          <td>${escapeHtml(row.user_email)}</td>
+                          <td><code>${escapeHtml(row.event_type)}</code></td>
+                          <td>${escapeHtml(row.ip_address || '')}</td>
+                        </tr>
+                      `,
+    )
+    .join('');
+
+  // Blank <title> avoids Chrome/Edge putting "User Activity Report" in the print preview header bar.
+  return `
+                    <!DOCTYPE html>
+                    <html>
+                      <head>
+                        <meta charset="utf-8" />
+                        <title>&#8203;</title>
+                        <style>
+                          body {
+                            font-family: Arial, Helvetica, sans-serif;
+                            margin: 0;
+                            padding: 20px;
+                            font-size: 11px;
+                            line-height: 1.35;
+                            color: #000;
+                          }
+                          .audit-header {
+                            border: 1px solid #000;
+                            margin: 0 0 16px 0;
+                          }
+                          .audit-header-top {
+                            display: grid;
+                            grid-template-columns: 1fr auto 1fr;
+                            align-items: center;
+                            gap: 10px;
+                            padding: 10px 12px;
+                            border-bottom: 3px double #000;
+                          }
+                          .ah-left {
+                            display: flex;
+                            flex-direction: column;
+                            align-items: center;
+                            gap: 4px;
+                            justify-content: flex-start;
+                          }
+                          .ah-center {
+                            text-align: center;
+                            padding: 0 8px;
+                          }
+                          .ah-center .line1 {
+                            margin: 0;
+                            font-size: 15px;
+                            font-weight: 700;
+                            letter-spacing: 0.04em;
+                            text-transform: uppercase;
+                          }
+                          .ah-center .line2 {
+                            margin: 6px 0 0 0;
+                            font-size: 12px;
+                            font-weight: 700;
+                            letter-spacing: 0.03em;
+                            text-transform: uppercase;
+                          }
+                          .ah-right {
+                            display: flex;
+                            flex-direction: column;
+                            justify-content: flex-end;
+                            align-items: center;
+                          }
+                          .header-logo {
+                            max-height: 48px;
+                            max-width: 160px;
+                            object-fit: contain;
+                          }
+                          .header-logo-label {
+                            font-size: 10px;
+                            font-weight: 700;
+                            text-align: center;
+                            line-height: 1.1;
+                            max-width: 180px;
+                          }
+                          .audit-header-meta {
+                            padding: 10px 12px 12px;
+                          }
+                          .meta-grid {
+                            display: grid;
+                            grid-template-columns: minmax(220px, 32%) 1fr;
+                            column-gap: 10px;
+                            row-gap: 6px;
+                            font-size: 10px;
+                            text-transform: uppercase;
+                          }
+                          .meta-lab {
+                            font-weight: 700;
+                          }
+                          .meta-val {
+                            font-weight: 400;
+                          }
+                          table.data {
+                            width: 100%;
+                            border-collapse: collapse;
+                          }
+                          table.data th,
+                          table.data td {
+                            border: 1px solid #999;
+                            padding: 7px 9px;
+                            font-size: 11px;
+                          }
+                          table.data th {
+                            background: #f0f0f0;
+                            text-transform: uppercase;
+                            font-weight: 700;
+                          }
+                          .ua-print-footer {
+                            margin-top: 22px;
+                            padding: 8px 0 4px;
+                            border-top: 1px solid #000;
+                            font-family: Arial, Helvetica, sans-serif;
+                            color: #000;
+                            -webkit-print-color-adjust: exact;
+                            print-color-adjust: exact;
+                            page-break-inside: avoid;
+                            break-inside: avoid;
+                          }
+                          .ua-print-footer-inner {
+                            display: flex;
+                            justify-content: space-between;
+                            align-items: flex-end;
+                            gap: 16px;
+                            font-size: 10px;
+                            line-height: 1.35;
+                          }
+                          .ua-print-footer-left {
+                            text-align: left;
+                            flex: 1 1 auto;
+                            min-width: 0;
+                          }
+                          .ua-print-footer-lab {
+                            font-weight: 700;
+                            letter-spacing: 0.03em;
+                            text-transform: uppercase;
+                          }
+                          .ua-print-footer-val {
+                            font-weight: 400;
+                            text-transform: none;
+                          }
+                          .ua-print-footer-right {
+                            text-align: right;
+                            flex: 0 1 auto;
+                            max-width: 52%;
+                          }
+                          @media print {
+                            @page {
+                              margin: 10mm;
+                            }
+                            body {
+                              padding: 12px;
+                            }
+                          }
+                        </style>
+                      </head>
+                      <body>
+                        <div class="audit-header">
+                          <div class="audit-header-top">
+                            <div class="ah-left">${leftImgs}</div>
+                            <div class="ah-center">
+                              <p class="line1">User Activity Report</p>
+                              <p class="line2">${escapeHtml(meta.systemTitle)}</p>
+                            </div>
+                            <div class="ah-right">${rightImgs}</div>
+                          </div>
+                          <div class="audit-header-meta">
+                            <div class="meta-grid">
+                              <span class="meta-lab">CLIENT:-</span>
+                              <span class="meta-val">${escapeHtml(meta.clientLine)}</span>
+                              <span class="meta-lab">MANUFACTURED BY:-</span>
+                              <span class="meta-val">${escapeHtml(meta.manufacturedBy)}</span>
+                              <span class="meta-lab">SYSTEM TITLE:-</span>
+                              <span class="meta-val">${escapeHtml(meta.systemTitle)}</span>
+                              <span class="meta-lab">FROM DATE &amp; TIME:-</span>
+                              <span class="meta-val">${escapeHtml(meta.fromDateTime)}</span>
+                              <span class="meta-lab">TO DATE &amp; TIME:-</span>
+                              <span class="meta-val">${escapeHtml(meta.toDateTime)}</span>
+                            </div>
+                          </div>
+                        </div>
+                        <table class="data">
+                          <thead>
+                            <tr>
+                              <th>Date/Time</th>
+                              <th>User Email</th>
+                              <th>Event name</th>
+                              <th>IP Address</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            ${rowsHtml}
+                          </tbody>
+                        </table>
+                        <div class="ua-print-footer">
+                          <div class="ua-print-footer-inner">
+                            <div class="ua-print-footer-left">
+                              <span class="ua-print-footer-lab">PRINTED BY :-</span>
+                              <span class="ua-print-footer-val"> ${printedBy}</span>
+                            </div>
+                            <div class="ua-print-footer-right">
+                              <span class="ua-print-footer-lab">PRINTED DATE AND TIME :-</span>
+                              <span class="ua-print-footer-val"> ${printedAt}</span>
+                            </div>
+                          </div>
+                        </div>
+                      </body>
+                    </html>
+                  `;
+}
+
+async function generateUserActivityPdfBlob(
+  rows: UserActivityRow[],
+  meta: UserActivityPrintHeaderMeta,
+  printedBy: string,
+): Promise<Blob> {
+  const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+  const margin = 24;
+  const contentW = pageW - margin * 2;
+
+  const drawHeader = () => {
+    const top = margin;
+    const h = 98;
+    doc.setDrawColor(0);
+    doc.rect(margin, top, contentW, h);
+    doc.line(margin, top + 34, margin + contentW, top + 34);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.text(meta.logoLeftLabel || "Dr.Reddy's", margin + 10, top + 18);
+    doc.text(meta.logoRightLabel || 'P HiPurity Systems', margin + contentW - 122, top + 18);
+
+    doc.setFontSize(12);
+    doc.text('USER ACTIVITY REPORT', margin + contentW / 2, top + 15, { align: 'center' });
+    doc.setFontSize(9);
+    doc.text(meta.systemTitle || 'DIGITAL LOG BOOK', margin + contentW / 2, top + 26, { align: 'center' });
+
+    const rowsMeta: [string, string][] = [
+      ['CLIENT :-', meta.clientLine || '—'],
+      ['MANUFACTURED BY :-', meta.manufacturedBy || '—'],
+      ['SYSTEM TITLE :-', meta.systemTitle || 'DIGITAL LOG BOOK'],
+      ['FROM DATE & TIME :-', meta.fromDateTime || '—'],
+      ['TO DATE & TIME :-', meta.toDateTime || '—'],
+    ];
+    doc.setFontSize(7.4);
+    let y = top + 47;
+    rowsMeta.forEach(([label, value]) => {
+      doc.setFont('helvetica', 'bold');
+      doc.text(label, margin + 6, y);
+      doc.setFont('helvetica', 'normal');
+      const clipped = doc.splitTextToSize(String(value), contentW - 130);
+      doc.text(clipped[0] || '', margin + 102, y);
+      y += 11;
+    });
+  };
+
+  const drawTableHeader = (y: number) => {
+    const cols = [90, 120, 190, contentW - (90 + 120 + 190)];
+    const labels = ['DATE/TIME', 'USER EMAIL', 'EVENT NAME', 'IP ADDRESS'];
+    let x = margin;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    labels.forEach((lab, i) => {
+      doc.rect(x, y, cols[i], 18);
+      doc.text(lab, x + 4, y + 12);
+      x += cols[i];
+    });
+    return cols;
+  };
+
+  drawHeader();
+  let y = margin + 106;
+  const cols = drawTableHeader(y);
+  y += 18;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.2);
+
+  const rowHeight = 16;
+  rows.forEach((row) => {
+    if (y + rowHeight > pageH - 68) {
+      doc.addPage();
+      y = margin;
+      const continued = format(new Date(), 'M/d/yy, h:mm a');
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.text(continued, margin, y + 8);
+      y += 14;
+      drawTableHeader(y);
+      y += 18;
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.2);
+    }
+
+    const cells = [
+      row.created_at ? format(new Date(row.created_at), 'dd/MM/yy HH:mm:ss') : '',
+      row.user_email || '',
+      row.event_type || '',
+      row.ip_address || '',
+    ];
+    let x = margin;
+    cells.forEach((text, i) => {
+      doc.rect(x, y, cols[i], rowHeight);
+      const clipped = doc.splitTextToSize(String(text), cols[i] - 6);
+      doc.text(clipped[0] || '', x + 3, y + 11);
+      x += cols[i];
+    });
+    y += rowHeight;
+  });
+
+  const footerY = pageH - 34;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.text('PRINTED BY :-', margin, footerY);
+  doc.setFont('helvetica', 'normal');
+  doc.text(String(printedBy || '—'), margin + 62, footerY);
+
+  const printedAt = format(new Date(), 'dd/MM/yyyy HH:mm:ss');
+  doc.setFont('helvetica', 'bold');
+  doc.text('PRINTED DATE AND TIME :-', pageW - margin - 178, footerY);
+  doc.setFont('helvetica', 'normal');
+  doc.text(printedAt, pageW - margin - 58, footerY);
+
+  return doc.output('blob');
+}
+
+function drawStandardPdfHeader(
+  doc: jsPDF,
+  title: string,
+  meta: UserActivityPrintHeaderMeta,
+  margin: number,
+  contentW: number,
+): void {
+  const top = margin;
+  const h = 98;
+  doc.setDrawColor(0);
+  doc.rect(margin, top, contentW, h);
+  doc.line(margin, top + 34, margin + contentW, top + 34);
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.text(meta.logoLeftLabel || "Dr.Reddy's", margin + 10, top + 18);
+  doc.text(meta.logoRightLabel || 'P HiPurity Systems', margin + contentW - 122, top + 18);
+
+  doc.setFontSize(12);
+  doc.text(title, margin + contentW / 2, top + 15, { align: 'center' });
+  doc.setFontSize(9);
+  doc.text(meta.systemTitle || 'DIGITAL LOG BOOK', margin + contentW / 2, top + 26, { align: 'center' });
+
+  const rowsMeta: [string, string][] = [
+    ['CLIENT :-', meta.clientLine || '—'],
+    ['MANUFACTURED BY :-', meta.manufacturedBy || '—'],
+    ['SYSTEM TITLE :-', meta.systemTitle || 'DIGITAL LOG BOOK'],
+    ['FROM DATE & TIME :-', meta.fromDateTime || '—'],
+    ['TO DATE & TIME :-', meta.toDateTime || '—'],
+  ];
+  doc.setFontSize(7.4);
+  let y = top + 47;
+  rowsMeta.forEach(([label, value]) => {
+    doc.setFont('helvetica', 'bold');
+    doc.text(label, margin + 6, y);
+    doc.setFont('helvetica', 'normal');
+    const clipped = doc.splitTextToSize(String(value), contentW - 130);
+    doc.text(clipped[0] || '', margin + 102, y);
+    y += 11;
+  });
+}
+
+function drawStandardPdfFooter(
+  doc: jsPDF,
+  printedBy: string,
+  margin: number,
+  pageW: number,
+  pageH: number,
+): void {
+  const footerY = pageH - 34;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.text('PRINTED BY :-', margin, footerY);
+  doc.setFont('helvetica', 'normal');
+  doc.text(String(printedBy || '—'), margin + 62, footerY);
+
+  const printedAt = format(new Date(), 'dd/MM/yyyy HH:mm:ss');
+  doc.setFont('helvetica', 'bold');
+  doc.text('PRINTED DATE AND TIME :-', pageW - margin - 178, footerY);
+  doc.setFont('helvetica', 'normal');
+  doc.text(printedAt, pageW - margin - 58, footerY);
+}
+
+async function generateUserManagementPdfBlob(
+  rows: UserReport[],
+  meta: UserActivityPrintHeaderMeta,
+  printedBy: string,
+): Promise<Blob> {
+  const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+  const margin = 24;
+  const contentW = pageW - margin * 2;
+  const cols = [150, 70, 55, 90, 90, 92];
+  const labels = ['EMAIL', 'ROLE', 'STATUS', 'DATE JOINED', 'FIRST LOGIN', 'LAST LOGOUT'];
+
+  const drawTableHeader = (y: number) => {
+    let x = margin;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    labels.forEach((lab, i) => {
+      doc.rect(x, y, cols[i], 18);
+      doc.text(lab, x + 4, y + 12);
+      x += cols[i];
+    });
+  };
+
+  drawStandardPdfHeader(doc, 'USER MANAGEMENT REPORT', meta, margin, contentW);
+  let y = margin + 106;
+  drawTableHeader(y);
+  y += 18;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.2);
+
+  const rowHeight = 16;
+  rows.forEach((u) => {
+    if (y + rowHeight > pageH - 68) {
+      doc.addPage();
+      drawStandardPdfHeader(doc, 'USER MANAGEMENT REPORT', meta, margin, contentW);
+      y = margin + 106;
+      drawTableHeader(y);
+      y += 18;
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.2);
+    }
+    const cells = [
+      u.email || '',
+      u.role_display || '',
+      u.is_active ? 'Active' : 'Inactive',
+      u.created_at ? format(new Date(u.created_at), 'dd/MM/yy HH:mm:ss') : '',
+      u.first_login ? format(new Date(u.first_login), 'dd/MM/yy HH:mm:ss') : '',
+      u.last_logout ? format(new Date(u.last_logout), 'dd/MM/yy HH:mm:ss') : '',
+    ];
+    let x = margin;
+    cells.forEach((text, i) => {
+      doc.rect(x, y, cols[i], rowHeight);
+      const clipped = doc.splitTextToSize(String(text), cols[i] - 6);
+      doc.text(clipped[0] || '', x + 3, y + 11);
+      x += cols[i];
+    });
+    y += rowHeight;
+  });
+
+  drawStandardPdfFooter(doc, printedBy, margin, pageW, pageH);
+  return doc.output('blob');
+}
+
+async function generateAuditTrailPdfBlob(
+  rows: AuditEventRow[],
+  meta: UserActivityPrintHeaderMeta,
+  printedBy: string,
+  equipmentMap: Record<string, string>,
+): Promise<Blob> {
+  const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+  const margin = 24;
+  const contentW = pageW - margin * 2;
+  const cols = [62, 92, 58, 70, 55, 50, 80, 80];
+  const labels = ['DATE/TIME', 'USER EMAIL', 'EVENT', 'OBJECT TYPE', 'OBJECT ID', 'FIELD', 'OLD VALUE', 'NEW VALUE'];
+
+  const drawTableHeader = (y: number) => {
+    let x = margin;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    labels.forEach((lab, i) => {
+      doc.rect(x, y, cols[i], 18);
+      doc.text(lab, x + 3, y + 12);
+      x += cols[i];
+    });
+  };
+
+  drawStandardPdfHeader(doc, 'AUDIT TRAIL REPORT', meta, margin, contentW);
+  let y = margin + 106;
+  drawTableHeader(y);
+  y += 18;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(6.7);
+
+  const rowHeight = 16;
+  rows.forEach((row) => {
+    if (y + rowHeight > pageH - 68) {
+      doc.addPage();
+      // Requirement: show Audit Trail header only on first page.
+      y = margin;
+      drawTableHeader(y);
+      y += 18;
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(6.7);
+    }
+    const cells = [
+      row.timestamp ? format(new Date(row.timestamp), 'dd/MM/yy HH:mm:ss') : '',
+      row.user_email || row.target_user_email || '',
+      auditEventLabels[row.event_type] ?? row.event_type,
+      displayAuditObjectType(row),
+      displayAuditObjectId(row, equipmentMap),
+      displayAuditFieldName(row.field_name),
+      String(row.old_value || ''),
+      String(row.new_value || ''),
+    ];
+    let x = margin;
+    cells.forEach((text, i) => {
+      doc.rect(x, y, cols[i], rowHeight);
+      const clipped = doc.splitTextToSize(String(text || ''), cols[i] - 5);
+      doc.text(clipped[0] || '', x + 2, y + 11);
+      x += cols[i];
+    });
+    y += rowHeight;
+  });
+
+  drawStandardPdfFooter(doc, printedBy, margin, pageW, pageH);
+  return doc.output('blob');
+}
 
 const humanizeToken = (value: string) =>
   value
@@ -596,7 +1591,9 @@ const isLogAuditEvent = (eventType: string): boolean => {
     normalized === 'log_deleted' ||
     normalized === 'log_update' ||
     normalized === 'log_correction' ||
-    normalized === 'log_corrected'
+    normalized === 'log_corrected' ||
+    normalized === 'log_approved' ||
+    normalized === 'log_rejected'
   );
 };
 
@@ -709,7 +1706,7 @@ const displayAuditObjectId = (
 };
 
 export default function ReportsPage() {
-  const { user } = useAuth();
+  const { user, sessionSettings } = useAuth();
 
   const [activeTab, setActiveTab] = useState<
     'approved' | 'user-management' | 'user-activity' | 'audit-trail'
@@ -797,16 +1794,19 @@ export default function ReportsPage() {
   const [activityRows, setActivityRows] = useState<UserActivityRow[]>([]);
   const [activityLoading, setActivityLoading] = useState(false);
   const [activityFromDate, setActivityFromDate] = useState<string>('');
+  const [activityFromTime, setActivityFromTime] = useState<string>('');
   const [activityToDate, setActivityToDate] = useState<string>('');
+  const [activityToTime, setActivityToTime] = useState<string>('');
   const [activityEventType, setActivityEventType] = useState<string>('all');
 
   const [auditRows, setAuditRows] = useState<AuditEventRow[]>([]);
   const [auditLoading, setAuditLoading] = useState(false);
   const [auditFromDate, setAuditFromDate] = useState<string>('');
+  const [auditFromTime, setAuditFromTime] = useState<string>('');
   const [auditToDate, setAuditToDate] = useState<string>('');
+  const [auditToTime, setAuditToTime] = useState<string>('');
   const [auditEventType, setAuditEventType] = useState<string>('all');
   const [auditObjectType, setAuditObjectType] = useState<string>('all');
-  const [auditObjectId, setAuditObjectId] = useState<string>('');
   const [auditViewRow, setAuditViewRow] = useState<AuditEventRow | null>(null);
   const [auditEquipmentLabelMap, setAuditEquipmentLabelMap] = useState<Record<string, string>>({});
 
@@ -828,6 +1828,16 @@ export default function ReportsPage() {
   const canSeeUserReports = !isManagerRole && (isSupervisor || isAdmin);
   const canSeeActivity = !isManagerRole && (isSupervisor || isAdmin);
   const canSeeAudit = !isManagerRole && (isSupervisor || isAdmin);
+
+  const monitoringRecordingFrequency = useMemo(() => {
+    const interval = String(sessionSettings?.log_entry_interval || 'hourly').toLowerCase();
+    if (interval === 'daily') return 'Once in every 24 hours';
+    if (interval === 'shift') {
+      const shiftHrs = Number(sessionSettings?.shift_duration_hours || 8);
+      return `Once in every ${String(shiftHrs).padStart(2, '0')} hours (shift)`;
+    }
+    return 'Once in every 01 hour';
+  }, [sessionSettings?.log_entry_interval, sessionSettings?.shift_duration_hours]);
 
   useEffect(() => {
     (async () => {
@@ -918,6 +1928,16 @@ export default function ReportsPage() {
     },
     [auditEquipmentLabelMap],
   );
+
+  const auditObjectTypeOptions = useMemo(() => {
+    const types = new Set<string>();
+    for (const row of auditRows) {
+      const raw = String(row.object_type || '').trim();
+      if (raw) types.add(raw);
+    }
+    return Array.from(types).sort((a, b) => a.localeCompare(b));
+  }, [auditRows]);
+
   const canSyncBriquetteReports = !isManagerRole && (user?.role === 'super_admin' || isAdmin);
 
   const reportCreatedByOptions = useMemo(() => {
@@ -1098,6 +2118,8 @@ export default function ReportsPage() {
     async (params?: {
       from_date?: string;
       to_date?: string;
+      from_datetime?: string;
+      to_datetime?: string;
       user?: string;
       event_type?: string;
     }) => {
@@ -1119,14 +2141,29 @@ export default function ReportsPage() {
     async (params?: {
       from_date?: string;
       to_date?: string;
+      from_datetime?: string;
+      to_datetime?: string;
       user?: string;
       object_type?: string;
+      object_id?: string;
       event_type?: string;
     }) => {
       try {
         setAuditLoading(true);
         const data = await reportsAPI.listAuditEvents(params);
-        setAuditRows(data);
+        // Fallback filtering by precise timestamp in case backend only applies date bounds.
+        const fromTs = params?.from_datetime ? new Date(params.from_datetime).getTime() : null;
+        const toTs = params?.to_datetime ? new Date(params.to_datetime).getTime() : null;
+        const filtered = (fromTs == null && toTs == null)
+          ? data
+          : (Array.isArray(data) ? data : []).filter((row: any) => {
+              const ts = row?.timestamp ? new Date(row.timestamp).getTime() : NaN;
+              if (Number.isNaN(ts)) return false;
+              if (fromTs != null && ts < fromTs) return false;
+              if (toTs != null && ts > toTs) return false;
+              return true;
+            });
+        setAuditRows(filtered);
       } catch (error: any) {
         console.error('Error loading audit trail report:', {
           error,
@@ -1163,7 +2200,7 @@ export default function ReportsPage() {
       y += 24;
 
       const rows: Array<[string, string]> = [
-        ['Date/Time', row.timestamp ? format(new Date(row.timestamp), 'dd/MM/yy HH:mm') : ''],
+        ['Date/Time', row.timestamp ? format(new Date(row.timestamp), 'dd/MM/yy HH:mm:ss') : ''],
         ['User Email', row.user_email ?? row.target_user_email ?? ''],
         ['Event', auditEventLabels[row.event_type] ?? row.event_type],
         ['Object Type', displayAuditObjectType(row)],
@@ -1193,7 +2230,7 @@ export default function ReportsPage() {
   const handleAuditPrint = (row: AuditEventRow) => {
     const rowHtml = `
       <tr>
-        <td>${row.timestamp ? format(new Date(row.timestamp), 'dd/MM/yy HH:mm') : ''}</td>
+        <td>${row.timestamp ? format(new Date(row.timestamp), 'dd/MM/yy HH:mm:ss') : ''}</td>
         <td>${row.user_email ?? row.target_user_email ?? ''}</td>
         <td>${auditEventLabels[row.event_type] ?? row.event_type}</td>
         <td>${displayAuditObjectType(row)}</td>
@@ -1286,11 +2323,9 @@ export default function ReportsPage() {
     const params = new URLSearchParams(window.location.search);
     const tab = params.get('tab');
     const object_type = params.get('object_type');
-    const object_id = params.get('object_id');
     if (tab === 'audit-trail') {
       setActiveTab('audit-trail');
       if (object_type) setAuditObjectType(object_type);
-      if (object_id) setAuditObjectId(object_id);
     }
   }, []);
 
@@ -1303,12 +2338,14 @@ export default function ReportsPage() {
     } else if (activeTab === 'user-activity' && canSeeActivity && activityRows.length === 0) {
       loadUserActivity();
     } else if (activeTab === 'audit-trail' && canSeeAudit && auditRows.length === 0) {
-      const params: Record<string, string> = {};
-      if (auditFromDate) params.from_date = auditFromDate;
-      if (auditToDate) params.to_date = auditToDate;
-      if (auditEventType !== 'all') params.event_type = auditEventType;
-      if (auditObjectType !== 'all' && auditObjectType.trim()) params.object_type = auditObjectType.trim();
-      if (auditObjectId.trim()) params.object_id = auditObjectId.trim();
+      const params = buildAuditFilterParams(
+        auditFromDate,
+        auditFromTime,
+        auditToDate,
+        auditToTime,
+        auditEventType,
+        auditObjectType,
+      );
       loadAuditEvents(params);
     }
   }, [
@@ -1320,48 +2357,15 @@ export default function ReportsPage() {
     activityRows.length,
     auditRows.length,
     auditFromDate,
+    auditFromTime,
     auditToDate,
+    auditToTime,
     auditEventType,
     auditObjectType,
-    auditObjectId,
     loadUserReports,
     loadUserActivity,
     loadAuditEvents,
   ]);
-
-  // Poll user activity periodically when the User Activity tab is active
-  useEffect(() => {
-    if (!(activeTab === 'user-activity' && canSeeActivity)) {
-      return;
-    }
-
-    const buildParams = () => {
-      const params: any = {};
-      if (activityFromDate) params.from_date = activityFromDate;
-      if (activityToDate) params.to_date = activityToDate;
-      if (activityEventType !== 'all') params.event_type = activityEventType;
-      return params;
-    };
-
-    const params = buildParams();
-    loadUserActivity(params);
-
-    const intervalId = window.setInterval(() => {
-      loadUserActivity(buildParams());
-    }, 30000); // 30 seconds
-
-    return () => {
-      window.clearInterval(intervalId);
-    };
-  }, [
-    activeTab,
-    canSeeActivity,
-    activityFromDate,
-    activityToDate,
-    activityEventType,
-    loadUserActivity,
-  ]);
-
 
   const handleApprove = async () => {
     if (!selectedReport) return;
@@ -1890,6 +2894,7 @@ export default function ReportsPage() {
             equipId,
             report.approvedBy,
             user?.name || user?.email || '',
+            monitoringRecordingFrequency,
           );
           if (!chillerPdfData) {
             toast.error('No approved operation readings for this equipment on this date.');
@@ -1914,7 +2919,21 @@ export default function ReportsPage() {
             toast.error('No logs found for this equipment');
             return;
           }
-          const boilerPdfData: MonitoringPDFData = { logs: allLogs, approvedBy: report.approvedBy, printedBy: user?.name || user?.email || '' };
+          const equipId =
+            targetEquipmentId ||
+            String(log.equipment_id ?? log.equipmentId ?? allLogs[0]?.equipmentId ?? '');
+          const boilerPdfData = buildBoilerMonitoringPdfPayload(
+            log,
+            allLogs,
+            equipId,
+            report.approvedBy,
+            user?.name || user?.email || '',
+            monitoringRecordingFrequency,
+          );
+          if (!boilerPdfData) {
+            toast.error('No approved boiler readings for this equipment on this date.');
+            return;
+          }
           const blob = await generateBoilerMonitoringPDF(boilerPdfData);
           downloadPDF(blob, 'Boiler Monitoring.pdf');
           toast.success('PDF generated successfully');
@@ -1967,7 +2986,12 @@ export default function ReportsPage() {
             toast.error('No logs found for this equipment');
             return;
           }
-          const chemicalPdfData: MonitoringPDFData = { logs: allLogs, approvedBy: report.approvedBy, printedBy: user?.name || user?.email || '' };
+          const chemicalPdfData: MonitoringPDFData = {
+            logs: allLogs,
+            approvedBy: report.approvedBy,
+            printedBy: user?.name || user?.email || '',
+            recordingFrequency: monitoringRecordingFrequency,
+          };
           const blob = await generateChemicalMonitoringPDF(chemicalPdfData);
           downloadPDF(blob, 'Chemical Monitoring.pdf');
           toast.success('PDF generated successfully');
@@ -1990,7 +3014,12 @@ export default function ReportsPage() {
             return;
           }
           allLogs = await enrichFilterMonitoringLogsForPdf(allLogs);
-          const filterPdfData: MonitoringPDFData = { logs: allLogs, approvedBy: report.approvedBy, printedBy: user?.name || user?.email || '' };
+          const filterPdfData: MonitoringPDFData = {
+            logs: allLogs,
+            approvedBy: report.approvedBy,
+            printedBy: user?.name || user?.email || '',
+            recordingFrequency: monitoringRecordingFrequency,
+          };
           const blob = await generateFilterMonitoringPDF(filterPdfData);
           downloadPDF(blob, 'Filter Monitoring.pdf');
           toast.success('PDF generated successfully');
@@ -2349,6 +3378,7 @@ export default function ReportsPage() {
             equipId,
             report.approvedBy,
             user?.name || user?.email || '',
+            monitoringRecordingFrequency,
           );
           if (!chillerPdfData) {
             toast.error('No approved operation readings for this equipment on this date.');
@@ -2377,7 +3407,21 @@ export default function ReportsPage() {
             toast.error('No logs found for this equipment');
             return;
           }
-          const boilerPdfData: MonitoringPDFData = { logs: allLogs, approvedBy: report.approvedBy, printedBy: user?.name || user?.email || '' };
+          const equipId =
+            targetEquipmentId ||
+            String(log.equipment_id ?? log.equipmentId ?? allLogs[0]?.equipmentId ?? '');
+          const boilerPdfData = buildBoilerMonitoringPdfPayload(
+            log,
+            allLogs,
+            equipId,
+            report.approvedBy,
+            user?.name || user?.email || '',
+            monitoringRecordingFrequency,
+          );
+          if (!boilerPdfData) {
+            toast.error('No approved boiler readings for this equipment on this date.');
+            return;
+          }
           const blob = await generateBoilerMonitoringPDF(boilerPdfData);
           const success = printPDF(blob);
           if (success) {
@@ -2438,7 +3482,12 @@ export default function ReportsPage() {
             toast.error('No logs found for this equipment');
             return;
           }
-          const chemicalPdfData: MonitoringPDFData = { logs: allLogs, approvedBy: report.approvedBy, printedBy: user?.name || user?.email || '' };
+          const chemicalPdfData: MonitoringPDFData = {
+            logs: allLogs,
+            approvedBy: report.approvedBy,
+            printedBy: user?.name || user?.email || '',
+            recordingFrequency: monitoringRecordingFrequency,
+          };
           const blob = await generateChemicalMonitoringPDF(chemicalPdfData);
           const success = printPDF(blob);
           if (success) {
@@ -2465,7 +3514,12 @@ export default function ReportsPage() {
             return;
           }
           allLogs = await enrichFilterMonitoringLogsForPdf(allLogs);
-          const filterPdfData: MonitoringPDFData = { logs: allLogs, approvedBy: report.approvedBy, printedBy: user?.name || user?.email || '' };
+          const filterPdfData: MonitoringPDFData = {
+            logs: allLogs,
+            approvedBy: report.approvedBy,
+            printedBy: user?.name || user?.email || '',
+            recordingFrequency: monitoringRecordingFrequency,
+          };
           const blob = await generateFilterMonitoringPDF(filterPdfData);
           const success = printPDF(blob);
           if (success) {
@@ -3237,84 +4291,17 @@ export default function ReportsPage() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => {
-                  const rowsHtml = filteredUserReports
-                    .map(
-                      (u) => `
-                        <tr>
-                          <td>${u.email}</td>
-                          <td>${u.role_display}</td>
-                          <td>${u.is_active ? 'Active' : 'Inactive'}</td>
-                          <td>${u.created_at ? format(new Date(u.created_at), 'dd/MM/yy HH:mm') : ''}</td>
-                          <td>${
-                            u.first_login
-                              ? format(new Date(u.first_login), 'dd/MM/yy HH:mm')
-                              : ''
-                          }</td>
-                          <td>${
-                            u.last_logout
-                              ? format(new Date(u.last_logout), 'dd/MM/yy HH:mm')
-                              : ''
-                          }</td>
-                        </tr>
-                      `,
-                    )
-                    .join('');
-
-                  const html = `
-                    <!DOCTYPE html>
-                    <html>
-                      <head>
-                        <title>User Management Report</title>
-                        <style>
-                          body {
-                            font-family: Arial, sans-serif;
-                            margin: 0;
-                            padding: 16px;
-                            font-size: 12px;
-                          }
-                          h1 {
-                            margin: 0 0 12px 0;
-                            font-size: 18px;
-                            text-align: left;
-                          }
-                          table {
-                            width: 100%;
-                            border-collapse: collapse;
-                          }
-                          th, td {
-                            border: 1px solid #ccc;
-                            padding: 6px 8px;
-                            font-size: 11px;
-                          }
-                          th {
-                            background: #f5f5f5;
-                          }
-                        </style>
-                      </head>
-                      <body>
-                        <h1>User Management Report</h1>
-                        <table>
-                          <thead>
-                            <tr>
-                              <th>Email</th>
-                              <th>Role</th>
-                              <th>Status</th>
-                              <th>Date Joined</th>
-                              <th>First Login</th>
-                              <th>Last Logout</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            ${rowsHtml}
-                          </tbody>
-                        </table>
-                      </body>
-                    </html>
-                  `;
-
+                onClick={async () => {
                   try {
-                    const blob = new Blob([html], { type: 'text/html' });
+                    const meta = await loadUserActivityPrintHeaderMeta(
+                      userReportActivityDate,
+                      '00:00:00',
+                      userReportActivityDate,
+                      '23:59:59',
+                    );
+                    const printedBy =
+                      (user?.name && String(user.name).trim()) || user?.email?.trim() || '—';
+                    const blob = await generateUserManagementPdfBlob(filteredUserReports, meta, printedBy);
                     const success = printPDF(blob);
                     if (!success) {
                       toast.error('Please allow popups to print reports');
@@ -3407,57 +4394,82 @@ export default function ReportsPage() {
 
         {activeTab === 'user-activity' && canSeeActivity && (
           <div className="space-y-4">
-            <div className="flex flex-wrap items-end gap-4">
-              <div>
+            <div className="flex flex-nowrap items-end gap-3 overflow-x-auto pb-1">
+              <div className="shrink-0">
                 <Label>From date</Label>
                 <Input
                   type="date"
                   value={activityFromDate}
                   onChange={(e) => setActivityFromDate(e.target.value)}
-                  className="mt-1"
+                  className="mt-1 w-[11rem]"
                 />
               </div>
-              <div>
+              <div className="shrink-0">
+                <Label>From time</Label>
+                <Input
+                  type="time"
+                  value={activityFromTime}
+                  onChange={(e) => setActivityFromTime(e.target.value)}
+                  className="mt-1 w-[9rem]"
+                  step={1}
+                />
+              </div>
+              <div className="shrink-0">
                 <Label>To date</Label>
                 <Input
                   type="date"
                   value={activityToDate}
                   onChange={(e) => setActivityToDate(e.target.value)}
-                  className="mt-1"
+                  className="mt-1 w-[11rem]"
                 />
               </div>
-              <div>
+              <div className="shrink-0">
+                <Label>To time</Label>
+                <Input
+                  type="time"
+                  value={activityToTime}
+                  onChange={(e) => setActivityToTime(e.target.value)}
+                  className="mt-1 w-[9rem]"
+                  step={1}
+                />
+              </div>
+              <div className="w-[13rem] shrink-0 min-w-0">
                 <Label>Event type</Label>
                 <Select
                   value={activityEventType}
                   onValueChange={(value) => setActivityEventType(value)}
                 >
-                  <SelectTrigger className="w-[180px] mt-1">
+                  <SelectTrigger className="mt-1 h-10 w-full max-w-full text-left [&>span]:line-clamp-none [&>span]:block [&>span]:max-w-full [&>span]:truncate">
                     <SelectValue placeholder="Event type" />
                   </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All</SelectItem>
-                    <SelectItem value="login">Login</SelectItem>
-                    <SelectItem value="logout">Logout</SelectItem>
-                    <SelectItem value="manual_login">Manual Login</SelectItem>
-                    <SelectItem value="manual_logout">Manual Logout</SelectItem>
-                    <SelectItem value="auto_logout">Auto Logout</SelectItem>
-                    <SelectItem value="user_created">User created</SelectItem>
-                    <SelectItem value="password_changed">Password changed</SelectItem>
-                    <SelectItem value="user_locked">User locked</SelectItem>
-                    <SelectItem value="user_unlocked">User unlocked</SelectItem>
+                  <SelectContent className="!max-w-[min(100vw-1.5rem,40rem)] !w-max !min-w-[var(--radix-select-trigger-width)]">
+                    <SelectItem value="all">All event types</SelectItem>
+                    {userActivityEventFilterOptions.map((opt) => (
+                      <SelectItem
+                        key={opt.value}
+                        value={opt.value}
+                        className="whitespace-normal break-words pr-6"
+                      >
+                        {opt.label}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
               <Button
                 variant="outline"
                 size="sm"
+                className="shrink-0 whitespace-nowrap"
                 onClick={() => {
-                  const params: any = {};
-                  if (activityFromDate) params.from_date = activityFromDate;
-                  if (activityToDate) params.to_date = activityToDate;
-                  if (activityEventType !== 'all') params.event_type = activityEventType;
-                  loadUserActivity(params);
+                  loadUserActivity(
+                    buildUserActivityFilterParams(
+                      activityFromDate,
+                      activityFromTime,
+                      activityToDate,
+                      activityToTime,
+                      activityEventType,
+                    ),
+                  );
                 }}
               >
                 <Filter className="w-4 h-4 mr-2" />
@@ -3466,75 +4478,18 @@ export default function ReportsPage() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => {
-                  const rowsHtml = activityRows
-                    .map(
-                      (row) => `
-                        <tr>
-                          <td>${row.created_at ? format(new Date(row.created_at), 'dd/MM/yy HH:mm') : ''}</td>
-                          <td>${row.user_email}</td>
-                          <td>${row.event_type}</td>
-                          <td>${row.ip_address || ''}</td>
-                          <td>${row.user_agent || ''}</td>
-                        </tr>
-                      `,
-                    )
-                    .join('');
-
-                  const html = `
-                    <!DOCTYPE html>
-                    <html>
-                      <head>
-                        <title>User Activity Report</title>
-                        <style>
-                          body {
-                            font-family: Arial, sans-serif;
-                            margin: 0;
-                            padding: 20px;
-                            font-size: 13px;
-                            line-height: 1.4;
-                          }
-                          h1 {
-                            margin: 0 0 16px 0;
-                            font-size: 20px;
-                            text-align: left;
-                          }
-                          table {
-                            width: 100%;
-                            border-collapse: collapse;
-                          }
-                          th, td {
-                            border: 1px solid #ccc;
-                            padding: 8px 10px;
-                            font-size: 12px;
-                          }
-                          th {
-                            background: #f5f5f5;
-                          }
-                        </style>
-                      </head>
-                      <body>
-                        <h1>User Activity Report</h1>
-                        <table>
-                          <thead>
-                            <tr>
-                              <th>Date/Time</th>
-                              <th>User Email</th>
-                              <th>Event</th>
-                              <th>IP Address</th>
-                              <th>User Agent</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            ${rowsHtml}
-                          </tbody>
-                        </table>
-                      </body>
-                    </html>
-                  `;
-
+                className="shrink-0 whitespace-nowrap"
+                onClick={async () => {
                   try {
-                    const blob = new Blob([html], { type: 'text/html' });
+                    const meta = await loadUserActivityPrintHeaderMeta(
+                      activityFromDate,
+                      activityFromTime,
+                      activityToDate,
+                      activityToTime,
+                    );
+                    const printedBy =
+                      (user?.name && String(user.name).trim()) || user?.email?.trim() || '—';
+                    const blob = await generateUserActivityPdfBlob(activityRows, meta, printedBy);
                     const success = printPDF(blob);
                     if (!success) {
                       toast.error('Please allow popups to print reports');
@@ -3567,13 +4522,10 @@ export default function ReportsPage() {
                           User Email
                         </th>
                         <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                          Event
+                          Event name
                         </th>
                         <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
                           IP Address
-                        </th>
-                        <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                          User Agent
                         </th>
                       </tr>
                     </thead>
@@ -3582,23 +4534,20 @@ export default function ReportsPage() {
                         <tr key={row.id} className="hover:bg-muted/30 transition-colors">
                           <td className="px-4 py-3 text-sm">
                             {row.created_at
-                              ? format(new Date(row.created_at), 'dd/MM/yy HH:mm')
+                              ? format(new Date(row.created_at), 'dd/MM/yy HH:mm:ss')
                               : ''}
                           </td>
                           <td className="px-4 py-3 text-sm">{row.user_email}</td>
-                          <td className="px-4 py-3 text-sm">
-                            {auditEventLabels[row.event_type] ?? row.event_type}
+                          <td className="px-4 py-3 text-sm font-mono text-xs text-muted-foreground">
+                            {row.event_type}
                           </td>
                           <td className="px-4 py-3 text-sm">{row.ip_address}</td>
-                          <td className="px-4 py-3 text-sm truncate max-w-xs">
-                            {row.user_agent}
-                          </td>
                         </tr>
                       ))}
                       {activityRows.length === 0 && (
                         <tr>
                           <td
-                            colSpan={6}
+                            colSpan={4}
                             className="px-4 py-6 text-center text-sm text-muted-foreground"
                           >
                             No activity found for selected filters.
@@ -3626,12 +4575,32 @@ export default function ReportsPage() {
                 />
               </div>
               <div>
+                <Label>From time</Label>
+                <Input
+                  type="time"
+                  value={auditFromTime}
+                  onChange={(e) => setAuditFromTime(e.target.value)}
+                  className="mt-1 w-[9rem]"
+                  step={1}
+                />
+              </div>
+              <div>
                 <Label>To date</Label>
                 <Input
                   type="date"
                   value={auditToDate}
                   onChange={(e) => setAuditToDate(e.target.value)}
                   className="mt-1"
+                />
+              </div>
+              <div>
+                <Label>To time</Label>
+                <Input
+                  type="time"
+                  value={auditToTime}
+                  onChange={(e) => setAuditToTime(e.target.value)}
+                  className="mt-1 w-[9rem]"
+                  step={1}
                 />
               </div>
               <div>
@@ -3651,6 +4620,8 @@ export default function ReportsPage() {
                     <SelectItem value="log_correction">Log Correction</SelectItem>
                     <SelectItem value="log_created">Log Created</SelectItem>
                     <SelectItem value="log_deleted">Log Deleted</SelectItem>
+                    <SelectItem value="log_approved">Log Approved</SelectItem>
+                    <SelectItem value="log_rejected">Log Rejected</SelectItem>
                     <SelectItem value="entity_created">Entity Created</SelectItem>
                     <SelectItem value="entity_updated">Entity Updated</SelectItem>
                     <SelectItem value="entity_deleted">Entity Deleted</SelectItem>
@@ -3662,36 +4633,35 @@ export default function ReportsPage() {
               </div>
               <div>
                 <Label>Object type</Label>
-                <Input
-                  value={auditObjectType === 'all' ? '' : auditObjectType}
-                  onChange={(e) =>
-                    setAuditObjectType(e.target.value ? e.target.value : 'all')
-                  }
-                  placeholder="e.g. user, chiller_log"
-                  className="mt-1 w-[180px]"
-                />
-              </div>
-              <div>
-                <Label>Object ID</Label>
-                <Input
-                  value={auditObjectId}
-                  onChange={(e) => setAuditObjectId(e.target.value)}
-                  placeholder="e.g. log entry ID"
-                  className="mt-1 w-[180px]"
-                />
+                <Select
+                  value={auditObjectType}
+                  onValueChange={(value) => setAuditObjectType(value)}
+                >
+                  <SelectTrigger className="w-[180px] mt-1">
+                    <SelectValue placeholder="Object type" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All object types</SelectItem>
+                    {auditObjectTypeOptions.map((type) => (
+                      <SelectItem key={type} value={type}>
+                        {displayAuditObjectType({ object_type: type } as AuditEventRow)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
               <Button
                 variant="outline"
                 size="sm"
                 onClick={() => {
-                  const params: any = {};
-                  if (auditFromDate) params.from_date = auditFromDate;
-                  if (auditToDate) params.to_date = auditToDate;
-                  if (auditEventType !== 'all') params.event_type = auditEventType;
-                  if (auditObjectType !== 'all' && auditObjectType.trim()) {
-                    params.object_type = auditObjectType.trim();
-                  }
-                  if (auditObjectId.trim()) params.object_id = auditObjectId.trim();
+                  const params = buildAuditFilterParams(
+                    auditFromDate,
+                    auditFromTime,
+                    auditToDate,
+                    auditToTime,
+                    auditEventType,
+                    auditObjectType,
+                  );
                   loadAuditEvents(params);
                 }}
               >
@@ -3701,102 +4671,29 @@ export default function ReportsPage() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => {
-                  const rowsHtml = auditRows
-                    .map(
-                      (row) => `
-                        <tr>
-                          <td>${row.timestamp ? format(new Date(row.timestamp), 'dd/MM/yy HH:mm') : ''}</td>
-                          <td>${row.user_email || row.target_user_email || ''}</td>
-                          <td>${auditEventLabels[row.event_type] ?? row.event_type}</td>
-                          <td>${displayAuditObjectType(row as AuditEventRow)}</td>
-                          <td>${displayAuditObjectId(row as AuditEventRow, auditEquipmentLabelMap)}</td>
-                          <td>${displayAuditFieldName(row.field_name)}</td>
-                          <td>${displayAuditCellValue(row as AuditEventRow, row.old_value, 'old')}</td>
-                          <td>${displayAuditCellValue(row as AuditEventRow, row.new_value, 'new')}</td>
-                        </tr>
-                      `,
-                    )
-                    .join('');
-
-                  const html = `
-                    <!DOCTYPE html>
-                    <html>
-                      <head>
-                        <title>Audit Trail Report</title>
-                        <style>
-                          body { font-family: Arial, sans-serif; padding: 20px; }
-                          h1 { margin-bottom: 16px; }
-                          table { width: 100%; border-collapse: collapse; }
-                          th, td { border: 1px solid #ccc; padding: 6px 8px; font-size: 12px; }
-                          th { background: #f5f5f5; }
-                        </style>
-                      </head>
-                      <body>
-                        <h1>Audit Trail Report</h1>
-                        <table>
-                          <thead>
-                            <tr>
-                              <th>Date/Time</th>
-                              <th>User Email</th>
-                              <th>Event</th>
-                              <th>Object Type</th>
-                              <th>Object ID</th>
-                              <th>Field</th>
-                              <th>Old Value</th>
-                              <th>New Value</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            ${rowsHtml}
-                          </tbody>
-                        </table>
-                      </body>
-                    </html>`;
-
-                  const iframe = document.createElement('iframe');
-                  iframe.style.position = 'fixed';
-                  iframe.style.right = '0';
-                  iframe.style.bottom = '0';
-                  iframe.style.width = '0';
-                  iframe.style.height = '0';
-                  iframe.style.border = 'none';
-                  iframe.style.opacity = '0';
-                  iframe.style.pointerEvents = 'none';
-                  iframe.style.visibility = 'hidden';
-                  iframe.style.zIndex = '-1';
-                  document.body.appendChild(iframe);
-
-                  const doc = iframe.contentDocument;
-                  if (!doc) {
-                    document.body.removeChild(iframe);
-                    toast.error('Print failed');
-                    return;
-                  }
-                  doc.open();
-                  doc.write(html);
-                  doc.close();
-
-                  const triggerPrint = () => {
-                    try {
-                      if (iframe.contentWindow) {
-                        iframe.contentWindow.focus();
-                        iframe.contentWindow.print();
-                        toast.success('Opening print dialog...');
-                      }
-                    } catch (e) {
-                      console.error('Error triggering print:', e);
-                      toast.error('Print failed');
+                onClick={async () => {
+                  try {
+                    const meta = await loadUserActivityPrintHeaderMeta(
+                      auditFromDate,
+                      auditFromTime,
+                      auditToDate,
+                      auditToTime,
+                    );
+                    const printedBy =
+                      (user?.name && String(user.name).trim()) || user?.email?.trim() || '—';
+                    const blob = await generateAuditTrailPdfBlob(
+                      auditRows,
+                      meta,
+                      printedBy,
+                      auditEquipmentLabelMap,
+                    );
+                    const success = printPDF(blob);
+                    if (!success) {
+                      toast.error('Please allow popups to print reports');
                     }
-                    setTimeout(() => {
-                      if (iframe.parentNode) document.body.removeChild(iframe);
-                    }, 500);
-                  };
-
-                  if (iframe.contentWindow?.document.readyState === 'complete') {
-                    triggerPrint();
-                  } else {
-                    iframe.onload = triggerPrint;
+                  } catch (e) {
+                    console.error('Error preparing Audit Trail printout:', e);
+                    toast.error('Failed to open print dialog for Audit Trail report');
                   }
                 }}
               >
@@ -3827,7 +4724,7 @@ export default function ReportsPage() {
                         <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider min-w-[180px]">
                           Object Type
                         </th>
-                        <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                        <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider min-w-[150px]">
                           Object ID
                         </th>
                         <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
@@ -3846,13 +4743,13 @@ export default function ReportsPage() {
                         <tr key={row.id} className="hover:bg-muted/30 transition-colors">
                           <td className="px-4 py-3 text-sm">
                             {row.timestamp
-                              ? format(new Date(row.timestamp), 'dd/MM/yy HH:mm')
+                              ? format(new Date(row.timestamp), 'dd/MM/yy HH:mm:ss')
                               : ''}
                           </td>
                           <td className="px-4 py-3 text-sm">{row.user_email ?? row.target_user_email ?? '—'}</td>
                           <td className="px-4 py-3 text-sm">{auditEventLabels[row.event_type] ?? row.event_type}</td>
                           <td className="px-4 py-3 text-sm min-w-[180px]">{displayAuditObjectType(row)}</td>
-                          <td className="px-4 py-3 text-sm">{displayAuditObjectId(row, auditEquipmentLabelMap)}</td>
+                          <td className="px-4 py-3 text-sm min-w-[150px]">{displayAuditObjectId(row, auditEquipmentLabelMap)}</td>
                           <td className="px-4 py-3 text-sm">{displayAuditCellValue(row, row.old_value, 'old')}</td>
                           <td className="px-4 py-3 text-sm">{displayAuditCellValue(row, row.new_value, 'new')}</td>
                           <td className="px-4 py-3">

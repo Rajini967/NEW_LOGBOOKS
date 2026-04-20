@@ -42,6 +42,7 @@ class HVACValidationViewSet(viewsets.ModelViewSet):
     def approve(self, request, pk=None):
         """Approve or reject an HVAC validation."""
         validation = self.get_object()
+        previous_status = validation.status
         action_type = request.data.get('action', 'approve')  # 'approve' or 'reject'
         remarks = request.data.get('remarks', '')
         forbid_manager_rejecting_reading(request, action_type)
@@ -62,6 +63,17 @@ class HVACValidationViewSet(viewsets.ModelViewSet):
         if remarks:
             validation.remarks = remarks
         validation.save()
+
+        log_audit_event(
+            user=request.user,
+            event_type="log_approved" if action_type == "approve" else "log_rejected",
+            object_type="hvac_validation",
+            object_id=str(validation.id),
+            field_name="status",
+            old_value=previous_status,
+            new_value=validation.status,
+            extra={"remarks": remarks} if remarks else {},
+        )
         
         # Create report entry when approved
         if action_type == 'approve':

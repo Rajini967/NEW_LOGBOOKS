@@ -54,6 +54,7 @@ class BaseTestCertificateViewSet(viewsets.ModelViewSet):
     def approve(self, request, pk=None):
         """Approve or reject a test certificate."""
         test = self.get_object()
+        previous_status = test.status
         action_type = request.data.get('action', 'approve')
         remarks = request.data.get('remarks', '')
         forbid_manager_rejecting_reading(request, action_type)
@@ -74,6 +75,17 @@ class BaseTestCertificateViewSet(viewsets.ModelViewSet):
         if remarks:
             test.remarks = remarks
         test.save()
+
+        log_audit_event(
+            user=request.user,
+            event_type="log_approved" if action_type == "approve" else "log_rejected",
+            object_type=test._meta.model_name,
+            object_id=str(test.id),
+            field_name="status",
+            old_value=previous_status,
+            new_value=test.status,
+            extra={"remarks": remarks} if remarks else {},
+        )
         
         # Create report entry when approved
         if action_type == 'approve':

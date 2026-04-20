@@ -68,6 +68,19 @@ def delete_report_entry(source_id: str, source_table: str):
         logger.error(f"Error deleting report entry: {e}")
 
 
+def is_redundant_correction_status_audit(field_name: str, old, new) -> bool:
+    """
+    New correction log rows are always created with status pending_secondary_approval.
+    The rejected -> pending_secondary_approval transition is implied by log_corrected
+    plus the rejection event; omitting it avoids an extra noisy audit row per correction.
+    """
+    if field_name != "status":
+        return False
+    o = str(old) if old is not None else ""
+    n = str(new) if new is not None else ""
+    return o == "rejected" and n == "pending_secondary_approval"
+
+
 def log_limit_change(
     user,
     object_type: str,
@@ -123,8 +136,9 @@ def log_audit_event(
 
     Args:
         user: User performing the action (request.user); can be None.
-        event_type: e.g. 'log_created', 'log_deleted', 'entity_created', 'entity_updated',
-                    'entity_deleted', 'entity_approved', 'entity_rejected', 'consumption_updated'.
+        event_type: e.g. 'log_created', 'log_deleted', 'log_approved', 'log_rejected',
+                    'entity_created', 'entity_updated', 'entity_deleted', 'entity_approved',
+                    'entity_rejected', 'consumption_updated'.
         object_type: e.g. 'chiller_log', 'boiler_log', 'equipment', 'filter_master'.
         object_id: ID of the affected object (string).
         field_name: Optional field name (e.g. 'created', 'status').

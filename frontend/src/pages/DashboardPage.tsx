@@ -90,6 +90,31 @@ type OverdueFilterGroup = {
   earliestDue?: string;
 };
 
+class SectionErrorBoundary extends React.Component<
+  { children: React.ReactNode; sectionName: string },
+  { hasError: boolean }
+> {
+  constructor(props: { children: React.ReactNode; sectionName: string }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError(): { hasError: boolean } {
+    return { hasError: true };
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+          Failed to render {this.props.sectionName}. Please refresh this page.
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function num0(v: unknown): number {
   const n = Number(v ?? 0);
   return Number.isFinite(n) ? n : 0;
@@ -182,6 +207,8 @@ export default function DashboardPage() {
   const { data: overdueSummary } = useOverdueSummaryQuery(true);
   const [activeTab, setActiveTab] = useState('overview');
   const [overviewDate, setOverviewDate] = useState(new Date().toISOString().slice(0, 10));
+  const [overviewDateFrom, setOverviewDateFrom] = useState('');
+  const [overviewDateTo, setOverviewDateTo] = useState('');
   const [overviewPeriodType, setOverviewPeriodType] = useState<'day' | 'month' | 'year'>('day');
   const [showOverduePopup, setShowOverduePopup] = useState(false);
   const [overduePopupAcknowledged, setOverduePopupAcknowledged] = useState(false);
@@ -207,6 +234,11 @@ export default function DashboardPage() {
   const [overviewData, setOverviewData] = useState<OverviewData | null>(null);
   const [overviewActualWaterLiters, setOverviewActualWaterLiters] = useState(0);
   const [overviewProjectedWaterLiters, setOverviewProjectedWaterLiters] = useState(0);
+  const isOverviewRangeActive = Boolean(overviewDateFrom && overviewDateTo && overviewDateFrom <= overviewDateTo);
+  const overviewRequestDate =
+    overviewDate ||
+    (isOverviewRangeActive ? overviewDateTo || overviewDateFrom : '') ||
+    todayDate;
   const [overdueByFilter, setOverdueByFilter] = useState<OverdueFilterGroup[]>([]);
   const overdueEntries = useMemo(
     () =>
@@ -302,12 +334,44 @@ export default function DashboardPage() {
       try {
         const [chillerSummary, chillerSeries, boilerSummary, boilerSeries, chemicalSummary, filterSummary] =
           await Promise.all([
-            chillerDashboardAPI.getSummary({ periodType: overviewPeriodType, date: overviewDate, equipmentId: undefined }),
-            chillerDashboardAPI.getSeries({ periodType: overviewPeriodType, date: overviewDate }),
-            boilerDashboardAPI.getSummary({ periodType: overviewPeriodType, date: overviewDate, equipmentId: undefined }),
-            boilerDashboardAPI.getSeries({ periodType: overviewPeriodType, date: overviewDate }),
-            chemicalDashboardAPI.getSummary({ periodType: overviewPeriodType, date: overviewDate }),
-            filtersDashboardAPI.getSummary({ periodType: filtersPeriodType, date: filtersDate }),
+            chillerDashboardAPI.getSummary({
+              periodType: overviewPeriodType,
+              date: overviewRequestDate,
+              equipmentId: undefined,
+              dateFrom: isOverviewRangeActive ? overviewDateFrom : undefined,
+              dateTo: isOverviewRangeActive ? overviewDateTo : undefined,
+            }),
+            chillerDashboardAPI.getSeries({
+              periodType: overviewPeriodType,
+              date: overviewRequestDate,
+              dateFrom: isOverviewRangeActive ? overviewDateFrom : undefined,
+              dateTo: isOverviewRangeActive ? overviewDateTo : undefined,
+            }),
+            boilerDashboardAPI.getSummary({
+              periodType: overviewPeriodType,
+              date: overviewRequestDate,
+              equipmentId: undefined,
+              dateFrom: isOverviewRangeActive ? overviewDateFrom : undefined,
+              dateTo: isOverviewRangeActive ? overviewDateTo : undefined,
+            }),
+            boilerDashboardAPI.getSeries({
+              periodType: overviewPeriodType,
+              date: overviewRequestDate,
+              dateFrom: isOverviewRangeActive ? overviewDateFrom : undefined,
+              dateTo: isOverviewRangeActive ? overviewDateTo : undefined,
+            }),
+            chemicalDashboardAPI.getSummary({
+              periodType: overviewPeriodType,
+              date: overviewRequestDate,
+              dateFrom: isOverviewRangeActive ? overviewDateFrom : undefined,
+              dateTo: isOverviewRangeActive ? overviewDateTo : undefined,
+            }),
+            filtersDashboardAPI.getSummary({
+              periodType: filtersPeriodType,
+              date: filtersDate,
+              dateFrom: isOverviewRangeActive ? overviewDateFrom : undefined,
+              dateTo: isOverviewRangeActive ? overviewDateTo : undefined,
+            }),
           ]);
         if (!cancelled) setOverviewData({ chillerSummary, chillerSeries, boilerSummary, boilerSeries, chemicalSummary, filterSummary });
       } catch {
@@ -320,23 +384,34 @@ export default function DashboardPage() {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [overviewDate, overviewPeriodType, filtersDate, filtersPeriodType]);
+  }, [
+    overviewDate,
+    overviewRequestDate,
+    overviewPeriodType,
+    filtersDate,
+    filtersPeriodType,
+    isOverviewRangeActive,
+    overviewDateFrom,
+    overviewDateTo,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
 
     (async () => {
       try {
-        const d = new Date(`${overviewDate}T12:00:00`);
-        const start =
-          overviewPeriodType === 'day'
-            ? overviewDate
+        const d = new Date(`${overviewRequestDate}T12:00:00`);
+        const start = isOverviewRangeActive
+          ? overviewDateFrom
+          : overviewPeriodType === 'day'
+            ? overviewRequestDate
             : overviewPeriodType === 'month'
               ? toLocalYyyyMmDd(new Date(d.getFullYear(), d.getMonth(), 1))
               : toLocalYyyyMmDd(new Date(d.getFullYear(), 0, 1));
-        const end =
-          overviewPeriodType === 'day'
-            ? overviewDate
+        const end = isOverviewRangeActive
+          ? overviewDateTo
+          : overviewPeriodType === 'day'
+            ? overviewRequestDate
             : overviewPeriodType === 'month'
               ? toLocalYyyyMmDd(new Date(d.getFullYear(), d.getMonth() + 1, 0))
               : toLocalYyyyMmDd(new Date(d.getFullYear(), 11, 31));
@@ -374,7 +449,7 @@ export default function DashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [overviewDate, overviewPeriodType]);
+  }, [overviewDate, overviewRequestDate, overviewPeriodType, isOverviewRangeActive, overviewDateFrom, overviewDateTo]);
 
   const powerTrend = useMemo(() => {
     const c = overviewData?.chillerSeries?.series ?? [];
@@ -507,6 +582,11 @@ export default function DashboardPage() {
       unit: 'kWh',
       icon: Zap,
       accent: 'bg-blue-500/10 text-blue-600 border-blue-500/20',
+      gradient: 'from-blue-500/25 via-sky-400/15 to-indigo-500/10',
+      iconGlow: 'shadow-[0_0_0_7px_rgba(59,130,246,0.22)]',
+      progress: 'bg-blue-500',
+      textAccent: 'text-blue-700 dark:text-blue-300',
+      chipAccent: 'bg-blue-500/15 text-blue-700 dark:text-blue-300',
       actual:
         numberOrZero((overviewData?.chillerSummary as any)?.actual_power_kwh) +
         numberOrZero((overviewData?.boilerSummary as any)?.actual_power_kwh),
@@ -519,6 +599,11 @@ export default function DashboardPage() {
       unit: 'L',
       icon: Droplets,
       accent: 'bg-cyan-500/10 text-cyan-600 border-cyan-500/20',
+      gradient: 'from-cyan-500/25 via-teal-400/15 to-sky-500/10',
+      iconGlow: 'shadow-[0_0_0_7px_rgba(6,182,212,0.22)]',
+      progress: 'bg-cyan-500',
+      textAccent: 'text-cyan-700 dark:text-cyan-300',
+      chipAccent: 'bg-cyan-500/15 text-cyan-700 dark:text-cyan-300',
       actual: overviewActualWaterLiters,
       projected: overviewProjectedWaterLiters,
     },
@@ -527,6 +612,11 @@ export default function DashboardPage() {
       unit: 'L',
       icon: Fuel,
       accent: 'bg-amber-500/10 text-amber-600 border-amber-500/20',
+      gradient: 'from-amber-500/25 via-orange-400/15 to-yellow-500/10',
+      iconGlow: 'shadow-[0_0_0_7px_rgba(245,158,11,0.22)]',
+      progress: 'bg-amber-500',
+      textAccent: 'text-amber-700 dark:text-amber-300',
+      chipAccent: 'bg-amber-500/15 text-amber-700 dark:text-amber-300',
       actual: actualFuelLiquid > 0 ? actualFuelLiquid : actualFuelFallback,
       projected: projectedFuelLiquid > 0 ? projectedFuelLiquid : projectedFuelFallback,
     },
@@ -535,6 +625,11 @@ export default function DashboardPage() {
       unit: 'kg',
       icon: FlaskConical,
       accent: 'bg-violet-500/10 text-violet-600 border-violet-500/20',
+      gradient: 'from-violet-500/25 via-fuchsia-400/15 to-purple-500/10',
+      iconGlow: 'shadow-[0_0_0_7px_rgba(139,92,246,0.22)]',
+      progress: 'bg-violet-500',
+      textAccent: 'text-violet-700 dark:text-violet-300',
+      chipAccent: 'bg-violet-500/15 text-violet-700 dark:text-violet-300',
       actual: numberOrZero((overviewData?.chemicalSummary as any)?.total_consumption_kg),
       projected: numberOrZero((overviewData?.chemicalSummary as any)?.projected_consumption_kg),
     },
@@ -565,7 +660,7 @@ export default function DashboardPage() {
               ) : null}
             </TabsTrigger>
           </TabsList>
-          {activeTab !== 'overview' && topFilterBar}
+          {activeTab !== 'overview' && activeTab !== 'energy' && activeTab !== 'chemicals' && activeTab !== 'maintenance' && topFilterBar}
           <TabsContent value="overview" className="space-y-3">
             <div className="rounded-lg border border-border bg-card px-3 py-2">
               <div className="flex flex-wrap items-center gap-2">
@@ -574,6 +669,22 @@ export default function DashboardPage() {
                   max={todayDate}
                   value={overviewDate}
                   onChange={(e) => setOverviewDate(e.target.value)}
+                  className="h-8 w-[145px]"
+                />
+                <Label className="text-[10px] text-muted-foreground">From</Label>
+                <Input
+                  type="date"
+                  max={todayDate}
+                  value={overviewDateFrom}
+                  onChange={(e) => setOverviewDateFrom(e.target.value)}
+                  className="h-8 w-[145px]"
+                />
+                <Label className="text-[10px] text-muted-foreground">To</Label>
+                <Input
+                  type="date"
+                  max={todayDate}
+                  value={overviewDateTo}
+                  onChange={(e) => setOverviewDateTo(e.target.value)}
                   className="h-8 w-[145px]"
                 />
                 <div className="flex rounded-md border p-0.5">
@@ -596,19 +707,28 @@ export default function DashboardPage() {
                 {overviewConsumptionCards.map((card) => {
                   const Icon = card.icon;
                   const delta = card.actual - card.projected;
+                  const utilization = card.projected > 0 ? Math.min(160, Math.max(0, (card.actual / card.projected) * 100)) : 0;
                   const deltaLabel =
                     delta === 0
                       ? 'On target'
                       : `${delta > 0 ? '+' : ''}${delta.toLocaleString('en-IN', { maximumFractionDigits: 2 })} ${card.unit}`;
                   return (
-                    <div key={card.title} className="rounded-lg border border-border bg-card p-4 transition-colors hover:bg-muted/20">
+                    <div
+                      key={card.title}
+                      className={`group relative overflow-hidden rounded-xl border border-border/70 bg-gradient-to-br ${card.gradient} p-4 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-xl`}
+                    >
+                      <div className="pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-300 group-hover:opacity-100">
+                        <div className="absolute -top-10 -right-10 h-24 w-24 rounded-full bg-white/25 blur-2xl" />
+                      </div>
                       <div className="flex items-start justify-between">
-                        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{card.title}</p>
-                        <span className={`inline-flex h-8 w-8 items-center justify-center rounded-md border ${card.accent}`}>
+                        <p className={`text-xs font-semibold uppercase tracking-wide ${card.textAccent}`}>{card.title}</p>
+                        <span
+                          className={`inline-flex h-8 w-8 items-center justify-center rounded-md border ${card.accent} ${card.iconGlow} transition-transform duration-300 group-hover:scale-110`}
+                        >
                           <Icon className="h-4 w-4" />
                         </span>
                       </div>
-                      <div className="mt-3 rounded-md border border-border bg-muted/30 p-2.5">
+                      <div className="mt-3 rounded-md border border-white/40 bg-white/40 p-2.5 backdrop-blur-sm dark:border-border/70 dark:bg-background/70">
                         <div className="space-y-2 text-sm">
                           <div className="flex items-center justify-between gap-2">
                             <span className="text-muted-foreground">Actual</span>
@@ -623,6 +743,18 @@ export default function DashboardPage() {
                             </span>
                           </div>
                         </div>
+                        <div className="mt-3">
+                          <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                            <span>Utilization</span>
+                            <span className="tabular-nums">{Math.round(utilization)}%</span>
+                          </div>
+                          <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                            <div
+                              className={`h-full rounded-full transition-all duration-700 ${card.progress}`}
+                              style={{ width: `${Math.min(utilization, 100)}%` }}
+                            />
+                          </div>
+                        </div>
                       </div>
                       <div className="mt-3 flex items-center justify-between">
                         <span className="text-xs text-muted-foreground">Difference</span>
@@ -632,7 +764,7 @@ export default function DashboardPage() {
                               ? 'bg-amber-500/10 text-amber-700'
                               : delta < 0
                                 ? 'bg-emerald-500/10 text-emerald-700'
-                                : 'bg-muted text-muted-foreground'
+                                : card.chipAccent
                           }`}
                         >
                           {deltaLabel}
@@ -650,12 +782,16 @@ export default function DashboardPage() {
           </TabsContent>
           <TabsContent value="energy" className="space-y-3">
             <div className="grid grid-cols-1 gap-3 items-start">
-              <ChillerDashboardSection periodType={chillerPeriodType} onPeriodTypeChange={setChillerPeriodType} date={chillerDate} onDateChange={setChillerDate} selectedEquipmentId={chillerEquipmentId} onSelectedEquipmentIdChange={setChillerEquipmentId} onEquipmentOptionsChange={setChillerEquipmentOptions} showToolbar={false} />
-              <BoilerDashboardSection periodType={boilerPeriodType} onPeriodTypeChange={setBoilerPeriodType} date={boilerDate} onDateChange={setBoilerDate} fuelType={boilerFuelType} onFuelTypeChange={setBoilerFuelType} selectedEquipmentId={boilerEquipmentId} onSelectedEquipmentIdChange={setBoilerEquipmentId} onEquipmentOptionsChange={setBoilerEquipmentOptions} showToolbar />
+              <SectionErrorBoundary sectionName="Chiller dashboard">
+                <ChillerDashboardSection periodType={chillerPeriodType} onPeriodTypeChange={setChillerPeriodType} date={chillerDate} onDateChange={setChillerDate} selectedEquipmentId={chillerEquipmentId} onSelectedEquipmentIdChange={setChillerEquipmentId} onEquipmentOptionsChange={setChillerEquipmentOptions} showToolbar />
+              </SectionErrorBoundary>
+              <SectionErrorBoundary sectionName="Boiler dashboard">
+                <BoilerDashboardSection periodType={boilerPeriodType} onPeriodTypeChange={setBoilerPeriodType} date={boilerDate} onDateChange={setBoilerDate} fuelType={boilerFuelType} onFuelTypeChange={setBoilerFuelType} selectedEquipmentId={boilerEquipmentId} onSelectedEquipmentIdChange={setBoilerEquipmentId} onEquipmentOptionsChange={setBoilerEquipmentOptions} showToolbar />
+              </SectionErrorBoundary>
             </div>
           </TabsContent>
           <TabsContent value="chemicals" className="space-y-3">
-            <ChemicalDashboardSection periodType={chemicalPeriodType} onPeriodTypeChange={setChemicalPeriodType} date={chemicalDate} onDateChange={setChemicalDate} selectedEquipmentName={chemicalEquipmentName} onSelectedEquipmentNameChange={setChemicalEquipmentName} selectedChemicalName={chemicalName} onSelectedChemicalNameChange={setChemicalName} onEquipmentOptionsChange={setChemicalEquipmentOptions} showToolbar={false} />
+            <ChemicalDashboardSection periodType={chemicalPeriodType} onPeriodTypeChange={setChemicalPeriodType} date={chemicalDate} onDateChange={setChemicalDate} selectedEquipmentName={chemicalEquipmentName} onSelectedEquipmentNameChange={setChemicalEquipmentName} selectedChemicalName={chemicalName} onSelectedChemicalNameChange={setChemicalName} onEquipmentOptionsChange={setChemicalEquipmentOptions} showToolbar />
           </TabsContent>
           <TabsContent value="maintenance" className="space-y-3">
             <FiltersDashboardSection
@@ -666,7 +802,7 @@ export default function DashboardPage() {
               selectedEquipmentId={filtersEquipmentId}
               onSelectedEquipmentIdChange={setFiltersEquipmentId}
               onEquipmentOptionsChange={setFiltersEquipmentOptions}
-              showToolbar={false}
+              showToolbar
               className={hasOverdueFilters ? 'ring-2 ring-destructive/45' : undefined}
             />
           </TabsContent>

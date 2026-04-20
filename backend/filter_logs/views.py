@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 
 from accounts.permissions import CanApproveReports, CanLogEntries, IsSuperAdmin, forbid_manager_rejecting_reading
+from core.equipment_scope import assert_user_can_access_equipment, filter_queryset_by_equipment_scope
 from equipment.models import Equipment
 from core.log_slot_utils import (
     get_interval_for_equipment,
@@ -19,7 +20,13 @@ from core.log_slot_utils import (
     get_slot_timezone,
     filter_missing_slots_before_earliest_downtime,
 )
-from reports.utils import log_limit_change, log_audit_event, delete_report_entry, save_missing_slots_snapshot
+from reports.utils import (
+    log_limit_change,
+    log_audit_event,
+    delete_report_entry,
+    save_missing_slots_snapshot,
+    is_redundant_correction_status_audit,
+)
 from reports.services import create_utility_report_for_log
 from reports.approval_workflow import (
     ensure_not_operator,
@@ -84,6 +91,7 @@ class FilterLogViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = super().get_queryset()
+        qs = filter_queryset_by_equipment_scope(qs, self.request.user)
         if self.action != 'list':
             return qs
         date_from = self.request.query_params.get('date_from')
@@ -123,6 +131,7 @@ class FilterLogViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         validated = serializer.validated_data
+        assert_user_can_access_equipment(self.request.user, validated.get("equipment_id"))
         equipment_id = validated.get('equipment_id')
         area_category = validated.get('area_category')
         filter_no = validated.get('filter_no')
@@ -691,6 +700,8 @@ class FilterLogViewSet(viewsets.ModelViewSet):
             after = getattr(new_log, field)
             if before == after:
                 continue
+            if is_redundant_correction_status_audit(field, before, after):
+                continue
             extra = dict(extra_base)
             extra["field_label"] = field
             log_limit_change(
@@ -716,6 +727,7 @@ class FilterLogViewSet(viewsets.ModelViewSet):
         - Secondary approval must be by a different user than the rejector.
         """
         log = self.get_object()
+        previous_status = log.status
         action_type = normalize_approval_action(request.data.get('action'))
         # Backwards compatible: frontend currently sends approval/rejection comment as `remarks`.
         comment = (request.data.get('comment') or request.data.get('remarks') or '').strip()
@@ -744,6 +756,7 @@ class FilterLogViewSet(viewsets.ModelViewSet):
                 field_name="status",
                 old_value=previous_status,
                 new_value="rejected",
+                extra={"remarks": comment} if comment else {},
             )
         else:
             if log.status == 'pending_secondary_approval':
@@ -767,6 +780,18 @@ class FilterLogViewSet(viewsets.ModelViewSet):
             'comment',
             'updated_at',
         ])
+
+        if action_type == "approve" and log.status == "approved":
+            log_audit_event(
+                user=request.user,
+                event_type="log_approved",
+                object_type="filter_log",
+                object_id=str(log.id),
+                field_name="status",
+                old_value=previous_status,
+                new_value="approved",
+                extra={"remarks": comment} if comment else {},
+            )
 
         if action_type == 'approve' and log.status == 'approved':
             eq_title = _filter_report_equipment_title(log.equipment_id or "")

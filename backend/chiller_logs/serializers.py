@@ -31,7 +31,7 @@ class ChillerLogSerializer(serializers.ModelSerializer):
             'cooling_tower_blowdown_time_min',
             'daily_water_consumption_ct1_liters', 'daily_water_consumption_ct2_liters',
             'daily_water_consumption_ct3_liters',
-            'operator_sign', 'verified_by',
+            'operator_sign',
             'remarks', 'comment', 'operator_id', 'operator_name', 'status',
             'approved_by_id', 'approved_by_name', 'approved_at', 'secondary_approved_by_id', 'secondary_approved_at',
             'corrects_id', 'has_corrections', 'tolerance_status',

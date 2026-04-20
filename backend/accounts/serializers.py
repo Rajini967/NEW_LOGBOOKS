@@ -1,6 +1,7 @@
 """
 Serializers for User model.
 """
+import json
 from datetime import datetime
 
 from django.utils import timezone
@@ -25,6 +26,21 @@ def _can_assign_user_department_equipment(request):
     )
 
 
+def _validate_dept_equipment_scope(dept_ids, eq_ids):
+    """Ensure every selected equipment belongs to one of the selected departments when both are provided."""
+    dept_ids = list(dept_ids or [])
+    eq_ids = list(eq_ids or [])
+    if not dept_ids or not eq_ids:
+        return
+    for eq in Equipment.objects.filter(pk__in=eq_ids).only("department_id"):
+        if eq.department_id not in dept_ids:
+            raise serializers.ValidationError(
+                {
+                    "equipment_ids": "Each selected equipment must belong to one of the selected departments."
+                }
+            )
+
+
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     """Custom token serializer that uses email instead of username."""
     
@@ -46,6 +62,8 @@ class UserSerializer(serializers.ModelSerializer):
     role_display = serializers.CharField(source='get_role_display', read_only=True)
     is_locked = serializers.SerializerMethodField(read_only=True)
     password_expired = serializers.SerializerMethodField(read_only=True)
+    department_ids = serializers.SerializerMethodField(read_only=True)
+    equipment_ids = serializers.SerializerMethodField(read_only=True)
     
     class Meta:
         model = User
@@ -67,8 +85,8 @@ class UserSerializer(serializers.ModelSerializer):
             'last_login',
             'created_at',
             'updated_at',
-            'assigned_department',
-            'assigned_equipment',
+            'department_ids',
+            'equipment_ids',
         ]
         read_only_fields = [
             'id',
@@ -95,15 +113,25 @@ class UserSerializer(serializers.ModelSerializer):
         from datetime import timedelta
         return timezone.now() - obj.password_changed_at > timedelta(days=expiry_days)
 
+    def get_department_ids(self, obj):
+        return [str(x) for x in obj.scoped_departments.values_list("pk", flat=True)]
+
+    def get_equipment_ids(self, obj):
+        return [str(x) for x in obj.scoped_equipment.values_list("pk", flat=True)]
+
 
 class UserCreateSerializer(serializers.ModelSerializer):
     """Serializer for creating users."""
 
-    assigned_department = serializers.PrimaryKeyRelatedField(
-        queryset=Department.objects.all(), allow_null=True, required=False
+    department_ids = serializers.ListField(
+        child=serializers.UUIDField(),
+        required=False,
+        allow_empty=True,
     )
-    assigned_equipment = serializers.PrimaryKeyRelatedField(
-        queryset=Equipment.objects.all(), allow_null=True, required=False
+    equipment_ids = serializers.ListField(
+        child=serializers.UUIDField(),
+        required=False,
+        allow_empty=True,
     )
 
     password = serializers.CharField(
@@ -127,8 +155,8 @@ class UserCreateSerializer(serializers.ModelSerializer):
             'password_confirm',
             'role',
             'is_active',
-            'assigned_department',
-            'assigned_equipment',
+            'department_ids',
+            'equipment_ids',
         ]
     
     def validate_email(self, value):
@@ -164,11 +192,15 @@ class UserCreateSerializer(serializers.ModelSerializer):
             })
         request = self.context.get("request")
         initial = getattr(self, "initial_data", None) or {}
-        if any(k in initial for k in ("assigned_department", "assigned_equipment")):
+        if any(k in initial for k in ("department_ids", "equipment_ids")):
             if not _can_assign_user_department_equipment(request):
                 raise serializers.ValidationError(
-                    {"assigned_department": "Only Admin or Super Admin can assign department or equipment."}
+                    {"department_ids": "Only Admin or Super Admin can assign department or equipment."}
                 )
+        _validate_dept_equipment_scope(
+            attrs.get("department_ids") or [],
+            attrs.get("equipment_ids") or [],
+        )
         return attrs
 
     def create(self, validated_data):
@@ -176,18 +208,26 @@ class UserCreateSerializer(serializers.ModelSerializer):
         validated_data.pop('password_confirm')
         password = validated_data.pop('password')
         email = validated_data.pop('email')
+        dept_ids = validated_data.pop('department_ids', [])
+        eq_ids = validated_data.pop('equipment_ids', [])
         user = User.objects.create_user(email=email, password=password, **validated_data)
+        user.scoped_departments.set(dept_ids)
+        user.scoped_equipment.set(eq_ids)
         return user
 
 
 class UserUpdateSerializer(serializers.ModelSerializer):
     """Serializer for updating users."""
 
-    assigned_department = serializers.PrimaryKeyRelatedField(
-        queryset=Department.objects.all(), allow_null=True, required=False
+    department_ids = serializers.ListField(
+        child=serializers.UUIDField(),
+        required=False,
+        allow_empty=True,
     )
-    assigned_equipment = serializers.PrimaryKeyRelatedField(
-        queryset=Equipment.objects.all(), allow_null=True, required=False
+    equipment_ids = serializers.ListField(
+        child=serializers.UUIDField(),
+        required=False,
+        allow_empty=True,
     )
 
     password = serializers.CharField(
@@ -206,18 +246,27 @@ class UserUpdateSerializer(serializers.ModelSerializer):
             'password',
             'role',
             'is_active',
-            'assigned_department',
-            'assigned_equipment',
+            'department_ids',
+            'equipment_ids',
         ]
 
     def validate(self, attrs):
         request = self.context.get("request")
         initial = getattr(self, "initial_data", None) or {}
-        if any(k in initial for k in ("assigned_department", "assigned_equipment")):
+        if any(k in initial for k in ("department_ids", "equipment_ids")):
             if not _can_assign_user_department_equipment(request):
                 raise serializers.ValidationError(
-                    {"assigned_department": "Only Admin or Super Admin can assign department or equipment."}
+                    {"department_ids": "Only Admin or Super Admin can assign department or equipment."}
                 )
+        inst = getattr(self, "instance", None)
+        dept_part = attrs.get("department_ids")
+        if dept_part is None and inst is not None:
+            dept_part = list(inst.scoped_departments.values_list("pk", flat=True))
+        eq_part = attrs.get("equipment_ids")
+        if eq_part is None and inst is not None:
+            eq_part = list(inst.scoped_equipment.values_list("pk", flat=True))
+        if dept_part is not None and eq_part is not None:
+            _validate_dept_equipment_scope(dept_part, eq_part)
         return attrs
 
     def validate_email(self, value):
@@ -257,9 +306,27 @@ class UserUpdateSerializer(serializers.ModelSerializer):
     
     def update(self, instance, validated_data):
         """Update user."""
+        request = self.context.get("request")
+        actor = request.user if request and getattr(request.user, "is_authenticated", False) else None
+
+        old_role = instance.role
+        old_dept = {str(x) for x in instance.scoped_departments.values_list("pk", flat=True)}
+        old_eq = {str(x) for x in instance.scoped_equipment.values_list("pk", flat=True)}
+
+        dept_ids = validated_data.pop("department_ids", None)
+        eq_ids = validated_data.pop("equipment_ids", None)
+        ip_address = request.META.get("REMOTE_ADDR") if request else None
+        user_agent = request.META.get("HTTP_USER_AGENT", "") if request else None
+
         password = validated_data.pop('password', None)
         if password:
-            check_password_history(instance, password)
+            check_password_history(
+                instance,
+                password,
+                performed_by=actor,
+                ip_address=ip_address,
+                user_agent=user_agent or "",
+            )
             instance.set_password(password)
             instance.must_change_password = True
             instance.password_changed_at = timezone.now()
@@ -274,14 +341,60 @@ class UserUpdateSerializer(serializers.ModelSerializer):
 
         instance.save()
 
+        if dept_ids is not None:
+            instance.scoped_departments.set(dept_ids)
+        if eq_ids is not None:
+            instance.scoped_equipment.set(eq_ids)
+
         if password:
-            request = self.context.get('request')
             try:
                 log_user_activity_event(
                     "password_changed",
                     instance,
-                    ip_address=request.META.get("REMOTE_ADDR") if request else None,
-                    user_agent=request.META.get("HTTP_USER_AGENT", "") if request else None,
+                    performed_by=actor,
+                    ip_address=ip_address,
+                    user_agent=user_agent or "",
+                )
+            except Exception:
+                pass
+
+        if "role" in validated_data and old_role != instance.role:
+            try:
+                log_user_activity_event(
+                    "role_changed",
+                    instance,
+                    performed_by=actor,
+                    detail=f"role: {old_role} → {instance.role}",
+                    ip_address=ip_address,
+                    user_agent=user_agent or "",
+                )
+            except Exception:
+                pass
+
+        scope_parts: dict = {}
+        if dept_ids is not None:
+            new_dept = {str(x) for x in dept_ids}
+            if new_dept != old_dept:
+                scope_parts["departments"] = {
+                    "previous": sorted(old_dept),
+                    "current": sorted(new_dept),
+                }
+        if eq_ids is not None:
+            new_eq = {str(x) for x in eq_ids}
+            if new_eq != old_eq:
+                scope_parts["equipment"] = {
+                    "previous": sorted(old_eq),
+                    "current": sorted(new_eq),
+                }
+        if scope_parts:
+            try:
+                log_user_activity_event(
+                    "access_scope_changed",
+                    instance,
+                    performed_by=actor,
+                    detail=json.dumps(scope_parts),
+                    ip_address=ip_address,
+                    user_agent=user_agent or "",
                 )
             except Exception:
                 pass
@@ -373,7 +486,14 @@ class ResetPasswordSerializer(_BaseTokenSerializer):
         user = token_obj.user
 
         new_password = self.validated_data["new_password"]
-        check_password_history(user, new_password)
+        request = self.context.get("request")
+        check_password_history(
+            user,
+            new_password,
+            performed_by=user,
+            ip_address=request.META.get("REMOTE_ADDR") if request else None,
+            user_agent=request.META.get("HTTP_USER_AGENT", "") if request else None,
+        )
         user.set_password(new_password)
         user.must_change_password = False
         user.password_changed_at = timezone.now()
@@ -409,7 +529,14 @@ class ChangePasswordSerializer(serializers.Serializer):
         user = self.context["request"].user
         if not user.check_password(attrs["current_password"]):
             raise serializers.ValidationError({"current_password": "Current password is incorrect."})
-        check_password_history(user, attrs["new_password"])
+        request = self.context.get("request")
+        check_password_history(
+            user,
+            attrs["new_password"],
+            performed_by=user,
+            ip_address=request.META.get("REMOTE_ADDR") if request else None,
+            user_agent=request.META.get("HTTP_USER_AGENT", "") if request else None,
+        )
         return attrs
 
     def save(self, **kwargs):
@@ -425,6 +552,7 @@ class ChangePasswordSerializer(serializers.Serializer):
             log_user_activity_event(
                 "password_changed",
                 user,
+                performed_by=user,
                 ip_address=request.META.get("REMOTE_ADDR") if request else None,
                 user_agent=request.META.get("HTTP_USER_AGENT", "") if request else None,
             )
@@ -508,8 +636,9 @@ class UserActivityLogSerializer(serializers.ModelSerializer):
     Serializer for user activity reporting.
     """
 
-    user_email = serializers.EmailField(source="user.email", read_only=True)
-    user_name = serializers.CharField(source="user.name", read_only=True)
+    user_email = serializers.SerializerMethodField()
+    user_name = serializers.SerializerMethodField()
+    performed_by_email = serializers.SerializerMethodField()
 
     class Meta:
         model = UserActivityLog
@@ -518,11 +647,30 @@ class UserActivityLogSerializer(serializers.ModelSerializer):
             "user",
             "user_email",
             "user_name",
+            "attempted_email",
+            "performed_by",
+            "performed_by_email",
+            "detail",
             "event_type",
             "ip_address",
             "user_agent",
             "created_at",
         ]
+
+    def get_user_email(self, obj):
+        if obj.user_id:
+            return obj.user.email
+        return obj.attempted_email or ""
+
+    def get_user_name(self, obj):
+        if obj.user_id:
+            return obj.user.name
+        return ""
+
+    def get_performed_by_email(self, obj):
+        if obj.performed_by_id:
+            return obj.performed_by.email
+        return ""
 
 
 class SessionSettingSerializer(serializers.ModelSerializer):

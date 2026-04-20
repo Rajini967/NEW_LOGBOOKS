@@ -183,12 +183,6 @@ class ChillerLog(models.Model):
         null=True,
         help_text="Operator Sign & Date"
     )
-    verified_by = models.CharField(
-        max_length=255,
-        blank=True,
-        null=True,
-        help_text="Verified by (Sign & Date)"
-    )
     
     remarks = models.TextField(blank=True, null=True, help_text="Operator remarks from entry form")
     comment = models.TextField(blank=True, null=True, help_text="Separate comment field for list view")

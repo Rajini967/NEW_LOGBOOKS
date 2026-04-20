@@ -4,8 +4,26 @@ import { unwrapPaginated } from "../pagination";
 
 export const briquetteLogAPI = {
   list: async (params?: { date_from?: string; date_to?: string; equipment_id?: string }) => {
-    const response = await api.get("/briquette-logs/", { params });
-    return unwrapPaginated<Record<string, unknown>>(response.data);
+    const first = await api.get("/briquette-logs/", { params });
+    if (!first.data || !Array.isArray(first.data.results)) {
+      return unwrapPaginated<Record<string, unknown>>(first.data);
+    }
+    const allRows: Record<string, unknown>[] = [...first.data.results];
+    let nextUrl: string | null = typeof first.data.next === "string" ? first.data.next : null;
+    while (nextUrl) {
+      const page = await api.get(nextUrl);
+      if (Array.isArray(page.data?.results)) {
+        allRows.push(...page.data.results);
+      }
+      nextUrl = typeof page.data?.next === "string" ? page.data.next : null;
+    }
+    const seen = new Set<string>();
+    return allRows.filter((r) => {
+      const id = String(r.id ?? "");
+      if (!id || seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
   },
   missingSlots: async (params?: { date?: string; equipment_id?: string }) => {
     const response = await api.get<MissingSlotsResponse>("/briquette-logs/missing-slots/", { params });

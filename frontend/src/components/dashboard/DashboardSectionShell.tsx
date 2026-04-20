@@ -79,7 +79,11 @@ export function DashboardSectionShell({
         >
           {title}
         </h3>
-        {toolbar ? <div className="flex flex-wrap items-center gap-2">{toolbar}</div> : null}
+        {toolbar ? (
+          <div className="flex flex-wrap items-center gap-1.5 sm:justify-end [&>*]:shrink-0">
+            {toolbar}
+          </div>
+        ) : null}
       </div>
       <div className="space-y-3 p-3">{children}</div>
     </div>

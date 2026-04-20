@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Header } from "@/components/layout/Header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -89,6 +89,27 @@ const BOILER_LIST_FIELDS: { key: keyof BoilerLog; label: string; unit: string }[
   { key: "mobreyFunctioning", label: "Mobrey", unit: "" },
   { key: "manualBlowdownTime", label: "Blowdown Time", unit: "" },
   { key: "steamConsumptionKgHr", label: "Steam consumption", unit: "kg/hr" },
+];
+
+const BRIQUETTE_LIST_FIELDS: { key: keyof BoilerLog; label: string; unit?: string }[] = [
+  { key: "steamPressure", label: "Steam pressure", unit: "kg/cm²" },
+  { key: "furnacePressureMmwc", label: "Furnace pressure", unit: "mmWC" },
+  { key: "idFanOpPercent", label: "ID fan O/P", unit: "%" },
+  { key: "paDamperPosition1", label: "PA damper position 1", unit: "%" },
+  { key: "paDamperPosition2", label: "PA damper position 2", unit: "%" },
+  { key: "meteringScrewPercent", label: "Metering screw", unit: "%" },
+  { key: "steamReadingTon", label: "Steam reading", unit: "Ton" },
+  { key: "steamFlowKgHr", label: "Steam flow", unit: "kg/hr" },
+  { key: "stackTemp", label: "Stack temp", unit: "°C" },
+  { key: "furnaceTemp", label: "Furnace temp", unit: "°C" },
+  { key: "hotAirTemp", label: "Hot air temp" },
+  { key: "feedPump12", label: "Feed pump 1/2" },
+  { key: "feedWaterPh", label: "Feed water pH" },
+  { key: "feedWaterHardnessPpm", label: "Feed water hardness", unit: "PPM" },
+  { key: "feedWaterTdsPpm", label: "Feed water TDS", unit: "PPM" },
+  { key: "boilerWaterPh", label: "Boiler water pH" },
+  { key: "boilerWaterHardnessPpm", label: "Boiler water hardness", unit: "PPM" },
+  { key: "boilerWaterTdsPpm", label: "Boiler water TDS", unit: "PPM" },
 ];
 
 interface BoilerLog {
@@ -182,6 +203,7 @@ const buildAutoSignText = (nameOrEmail: string) => {
 
 const BoilerLogBookPage: React.FC = () => {
   const { user, sessionSettings } = useAuth();
+  const submitLockRef = useRef(false);
   const [logs, setLogs] = useState<BoilerLog[]>([]);
   const [showMissedReadingPopup, setShowMissedReadingPopup] = useState(false);
   const [missedReadingNextDue, setMissedReadingNextDue] = useState<Date | null>(null);
@@ -416,10 +438,16 @@ const BoilerLogBookPage: React.FC = () => {
       const boilerLogs = boilerResult.data ?? [];
       const briquetteLogs = briquetteResult.data ?? [];
 
-      const allLogs: BoilerLog[] = [
+      const merged: BoilerLog[] = [
         ...boilerLogs.map((log: BoilerLikeLog) => mapBoilerLogPayload(log)),
         ...briquetteLogs.map((log: BoilerLikeLog) => mapBriquetteLogPayload(log)),
       ];
+      const byId = new Map<string, BoilerLog>();
+      for (const log of merged) {
+        const id = String(log.id || "").trim();
+        if (id && !byId.has(id)) byId.set(id, log);
+      }
+      const allLogs = Array.from(byId.values());
 
       allLogs.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
       setLogs(allLogs);
@@ -773,6 +801,8 @@ const BoilerLogBookPage: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitLockRef.current) return;
+    submitLockRef.current = true;
     try {
       if (!formData.equipmentId) {
         toast.error("Please select Equipment ID.");
@@ -1174,6 +1204,8 @@ const BoilerLogBookPage: React.FC = () => {
       } else {
         toast.error(error?.message || "Failed to save boiler entry");
       }
+    } finally {
+      submitLockRef.current = false;
     }
   };
 
@@ -2413,6 +2445,14 @@ const BoilerLogBookPage: React.FC = () => {
                                     toast.error("The log book entry must be rejected by a different user than the operator (Log Book Done By).");
                                     return;
                                   }
+                                  if (isMaintenanceOrShutdown && !editedMaintenanceLogIds.has(log.id)) {
+                                    toast.error("Please edit this maintenance/shutdown entry first, then reject.");
+                                    return;
+                                  }
+                                  if (!isMaintenanceOrShutdown && !viewedReadingsLogIds.has(log.id)) {
+                                    toast.error("Please click View Readings before rejecting this entry.");
+                                    return;
+                                  }
                                   setSelectedLogId(log.id);
                                   setRejectConfirmOpen(true);
                                 }
@@ -2564,6 +2604,33 @@ const BoilerLogBookPage: React.FC = () => {
                   <span className={cn("tabular-nums", isOut && "font-semibold")}>{value}</span>
                 </div>
               );
+              const renderFlatSection = (
+                title: string,
+                icon: React.ElementType,
+                fields: { key: keyof BoilerLog; label: string; unit?: string }[]
+              ) => {
+                const Icon = icon;
+                const items = fields
+                  .map(({ key, label, unit }) => {
+                    const value = logRecord[key as string];
+                    if (value === undefined || value === null || value === "") return null;
+                    const display = unit ? `${value} ${unit}`.trim() : String(value);
+                    return renderItem(label, display);
+                  })
+                  .filter(Boolean);
+                if (items.length === 0) return null;
+                return (
+                  <div key={title} className="rounded-xl border border-border/60 bg-card p-4 shadow-sm">
+                    <h4 className="flex items-center gap-2 text-sm font-semibold text-foreground mb-3">
+                      <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                        <Icon className="h-4 w-4" />
+                      </span>
+                      {title}
+                    </h4>
+                    <div className="space-y-0.5">{items}</div>
+                  </div>
+                );
+              };
               const tankLevelKeys = ["foHsdNgDayTankLevel", "feedWaterTankLevel"];
               const tempKeys = ["foPreHeaterTemp", "burnerHeaterTemp", "stackTemperature"];
               const pressureKeys = ["burnerOilPressure", "boilerSteamPressure", "steamPressureAfterPrv"];
@@ -2595,6 +2662,45 @@ const BoilerLogBookPage: React.FC = () => {
               const dailyKeys = ["dailyPowerConsumptionKwh", "dailyWaterConsumptionLiters", "dailyChemicalConsumptionKg"];
               const fuelLabels: Record<string, string> = { dieselStockLiters: "Diesel (L)", dieselCostRupees: "Diesel cost (Rs)", furnaceOilStockLiters: "Furnace oil (L)", furnaceOilCostRupees: "Furnace oil cost (Rs)", brigadeStockKg: "Brigade (kg)", brigadeCostRupees: "Brigade cost (Rs)" };
               const dailyLabels: Record<string, string> = { dailyPowerConsumptionKwh: "Daily power (kWh)", dailyWaterConsumptionLiters: "Daily water (L)", dailyChemicalConsumptionKg: "Daily chemical (kg)" };
+              const isBriquette = log.equipmentType === "briquette";
+              if (isBriquette) {
+                const coreFields = BRIQUETTE_LIST_FIELDS.filter((f) =>
+                  [
+                    "steamPressure",
+                    "furnacePressureMmwc",
+                    "idFanOpPercent",
+                    "paDamperPosition1",
+                    "paDamperPosition2",
+                    "meteringScrewPercent",
+                    "steamReadingTon",
+                    "steamFlowKgHr",
+                    "stackTemp",
+                    "furnaceTemp",
+                  ].includes(String(f.key))
+                );
+                const waterQualityFields = BRIQUETTE_LIST_FIELDS.filter((f) =>
+                  [
+                    "feedWaterPh",
+                    "feedWaterHardnessPpm",
+                    "feedWaterTdsPpm",
+                    "boilerWaterPh",
+                    "boilerWaterHardnessPpm",
+                    "boilerWaterTdsPpm",
+                  ].includes(String(f.key))
+                );
+                const otherFields = BRIQUETTE_LIST_FIELDS.filter((f) =>
+                  ["hotAirTemp", "feedPump12"].includes(String(f.key))
+                );
+                return (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      {renderFlatSection("Core readings", Gauge, coreFields)}
+                      {renderFlatSection("Water quality", Droplets, waterQualityFields)}
+                      {renderFlatSection("Other", Clock, otherFields)}
+                    </div>
+                  </div>
+                );
+              }
               return (
                 <div className="space-y-4">
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

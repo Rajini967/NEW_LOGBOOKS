@@ -131,7 +131,7 @@ class BoilerMissingSlotsRangeTests(APITestCase):
 
 
 class BoilerTankLevelLimitTests(APITestCase):
-    """NLT 200 Ltr / NLT 2 KL for operation activity (serializer)."""
+    """Tank-level NLT hints are advisory only (serializer accepts any numeric values)."""
 
     def setUp(self):
         self.operator = User.objects.create_user(
@@ -155,7 +155,7 @@ class BoilerTankLevelLimitTests(APITestCase):
         payload.update(overrides)
         return payload
 
-    def test_operation_rejects_fo_day_tank_below_200(self):
+    def test_operation_accepts_fo_day_tank_below_ui_hint(self):
         response = self.client.post(
             self.url,
             self._base_operation_payload(
@@ -164,10 +164,9 @@ class BoilerTankLevelLimitTests(APITestCase):
             ),
             format="json",
         )
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("fo_hsd_ng_day_tank_level", response.data)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 
-    def test_operation_rejects_feed_water_tank_below_2_kl(self):
+    def test_operation_accepts_feed_water_tank_below_ui_hint(self):
         response = self.client.post(
             self.url,
             self._base_operation_payload(
@@ -176,8 +175,7 @@ class BoilerTankLevelLimitTests(APITestCase):
             ),
             format="json",
         )
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("feed_water_tank_level", response.data)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 
     def test_maintenance_without_tank_levels_succeeds(self):
         response = self.client.post(

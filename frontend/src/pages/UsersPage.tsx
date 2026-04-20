@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useLayoutEffect } from 'react';
+import { Navigate } from 'react-router-dom';
 import { Header } from '@/components/layout/Header';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -29,7 +30,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Plus, Users, Shield, Mail, User, Edit, Trash2, Lock, LockOpen, Eye, EyeOff } from 'lucide-react';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Plus, Users, Shield, Mail, User, Edit, Trash2, Lock, LockOpen, Eye, EyeOff, ChevronDown } from 'lucide-react';
 import { toast } from '@/lib/toast';
 import { userAPI, departmentAPI, equipmentAPI } from '@/lib/api';
 import { User as UserType } from '@/types';
@@ -41,7 +43,12 @@ interface UserData extends UserType {
 }
 
 type DeptRow = { id: string; name: string };
-type EquipmentRow = { id: string; equipment_number?: string; name?: string };
+type EquipmentRow = {
+  id: string;
+  equipment_number?: string;
+  name?: string;
+  department?: string;
+};
 
 const roleLabels: Record<string, string> = {
   operator: 'Operator',
@@ -80,12 +87,95 @@ export default function UsersPage() {
     password_confirm: '',
     role: '',
     is_active: true,
-    assigned_department: '',
-    assigned_equipment: '',
+    department_ids: [] as string[],
+    equipment_ids: [] as string[],
   });
 
   const canAssignDeptEquipment =
     currentUser?.role === 'admin' || currentUser?.role === 'super_admin';
+
+  const equipmentForSelectedDepartments = useMemo(() => {
+    const deptSet = new Set(formData.department_ids);
+    if (!deptSet.size) return [];
+    return equipmentList.filter((eq) => eq.department && deptSet.has(String(eq.department)));
+  }, [equipmentList, formData.department_ids]);
+
+  const departmentDropdownLabel = useMemo(() => {
+    if (!formData.department_ids.length) return 'Select departments…';
+    const names = formData.department_ids
+      .map((id) => departments.find((d) => d.id === id)?.name)
+      .filter(Boolean) as string[];
+    if (names.length <= 2) return names.join(', ');
+    return `${names.slice(0, 2).join(', ')} +${names.length - 2} more`;
+  }, [formData.department_ids, departments]);
+
+  const equipmentDropdownLabel = useMemo(() => {
+    if (!formData.department_ids.length) return 'Select departments first…';
+    if (!formData.equipment_ids.length) return 'Select equipment…';
+    const labels = formData.equipment_ids.map((id) => {
+      const eq = equipmentList.find((e) => e.id === id);
+      return eq ? [eq.equipment_number, eq.name].filter(Boolean).join(' — ') || id : id;
+    });
+    if (labels.length <= 2) return labels.join(', ');
+    return `${labels.slice(0, 2).join(', ')} +${labels.length - 2} more`;
+  }, [formData.department_ids, formData.equipment_ids, equipmentList]);
+
+  const deptTriggerRef = useRef<HTMLButtonElement>(null);
+  const equipTriggerRef = useRef<HTMLButtonElement>(null);
+  const [deptPopoverWidth, setDeptPopoverWidth] = useState<number>();
+  const [equipPopoverWidth, setEquipPopoverWidth] = useState<number>();
+
+  /** Popover panels use the same width as the trigger button (full-width field). */
+  useLayoutEffect(() => {
+    if (!isDialogOpen || !canAssignDeptEquipment) return;
+
+    const measure = () => {
+      setDeptPopoverWidth(deptTriggerRef.current?.offsetWidth ?? undefined);
+      setEquipPopoverWidth(equipTriggerRef.current?.offsetWidth ?? undefined);
+    };
+
+    measure();
+    const raf = window.requestAnimationFrame(measure);
+    window.addEventListener('resize', measure);
+
+    let ro: ResizeObserver | undefined;
+    if (typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(measure);
+      if (deptTriggerRef.current) ro.observe(deptTriggerRef.current);
+      if (equipTriggerRef.current) ro.observe(equipTriggerRef.current);
+    }
+
+    return () => {
+      window.cancelAnimationFrame(raf);
+      window.removeEventListener('resize', measure);
+      ro?.disconnect();
+    };
+  }, [isDialogOpen, canAssignDeptEquipment, departments.length, equipmentList.length]);
+
+  const toggleDepartment = (id: string) => {
+    setFormData((prev) => {
+      const next = new Set(prev.department_ids);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      const department_ids = [...next];
+      const allowedEqIds = new Set(
+        equipmentList
+          .filter((eq) => eq.department && department_ids.includes(String(eq.department)))
+          .map((eq) => eq.id),
+      );
+      const equipment_ids = prev.equipment_ids.filter((eid) => allowedEqIds.has(eid));
+      return { ...prev, department_ids, equipment_ids };
+    });
+  };
+
+  const toggleEquipment = (id: string) => {
+    setFormData((prev) => {
+      const next = new Set(prev.equipment_ids);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return { ...prev, equipment_ids: [...next] };
+    });
+  };
 
   useEffect(() => {
     if (!isDialogOpen || !canAssignDeptEquipment) return;
@@ -137,8 +227,8 @@ export default function UsersPage() {
       password_confirm: '',
       role: user.role,
       is_active: user.is_active ?? true,
-      assigned_department: user.assigned_department ?? '',
-      assigned_equipment: user.assigned_equipment ?? '',
+      department_ids: Array.isArray(user.department_ids) ? [...user.department_ids] : [],
+      equipment_ids: Array.isArray(user.equipment_ids) ? [...user.equipment_ids] : [],
     });
     setIsDialogOpen(true);
   };
@@ -175,8 +265,8 @@ export default function UsersPage() {
         }
 
         if (canAssignDeptEquipment) {
-          updateData.assigned_department = formData.assigned_department || null;
-          updateData.assigned_equipment = formData.assigned_equipment || null;
+          updateData.department_ids = formData.department_ids;
+          updateData.equipment_ids = formData.equipment_ids;
         }
 
         const updatedUser = await userAPI.update(editingUserId, updateData);
@@ -190,8 +280,8 @@ export default function UsersPage() {
           password_confirm: '',
           role: '',
           is_active: true,
-          assigned_department: '',
-          assigned_equipment: '',
+          department_ids: [],
+          equipment_ids: [],
         });
         if (formData.password) {
           toast.success('Password changed successfully.');
@@ -210,8 +300,8 @@ export default function UsersPage() {
           is_active: formData.is_active,
         };
         if (canAssignDeptEquipment) {
-          createPayload.assigned_department = formData.assigned_department || null;
-          createPayload.assigned_equipment = formData.assigned_equipment || null;
+          createPayload.department_ids = formData.department_ids;
+          createPayload.equipment_ids = formData.equipment_ids;
         }
         const newUser = await userAPI.create(createPayload);
 
@@ -223,8 +313,8 @@ export default function UsersPage() {
           password_confirm: '',
           role: '',
           is_active: true,
-          assigned_department: '',
-          assigned_equipment: '',
+          department_ids: [],
+          equipment_ids: [],
         });
         toast.success('User created and role assigned successfully.');
       }
@@ -302,6 +392,10 @@ export default function UsersPage() {
     }
   };
 
+  if (currentUser?.role !== 'admin' && currentUser?.role !== 'super_admin') {
+    return <Navigate to="/dashboard" replace />;
+  }
+
   return (
     <div className="min-h-screen">
       <Header
@@ -348,8 +442,8 @@ export default function UsersPage() {
                 password_confirm: '',
                 role: '',
                 is_active: true,
-                assigned_department: '',
-                assigned_equipment: '',
+                department_ids: [],
+                equipment_ids: [],
               });
             }
           }}>
@@ -359,19 +453,20 @@ export default function UsersPage() {
                 Add User
               </Button>
             </DialogTrigger>
-            <DialogContent className="sm:max-w-[560px] max-h-[85vh] overflow-y-auto">
-              <DialogHeader>
-                <DialogTitle className="flex items-center gap-2">
-                  <Users className="w-5 h-5" />
-                  {isEditMode ? 'Edit User' : 'Create New User'}
-                </DialogTitle>
-                <p className="text-sm text-muted-foreground mt-1">
-                  {isEditMode 
-                    ? 'Update user information. Leave password fields empty to keep the current password.'
-                    : "First, enter an email and password. Then, you'll be able to edit more user options."}
-                </p>
-              </DialogHeader>
-              <form onSubmit={handleSubmit} className="space-y-4">
+            <DialogContent className="sm:max-w-[560px] max-h-[85vh] min-h-0 flex flex-col gap-4 overflow-visible p-6 pt-10">
+              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1 -mr-1 [scrollbar-gutter:stable]">
+                <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2">
+                    <Users className="w-5 h-5" />
+                    {isEditMode ? 'Edit User' : 'Create New User'}
+                  </DialogTitle>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    {isEditMode 
+                      ? 'Update user information. Leave password fields empty to keep the current password.'
+                      : "First, enter an email and password. Then, you'll be able to edit more user options."}
+                  </p>
+                </DialogHeader>
+                <form onSubmit={handleSubmit} className="space-y-4">
                 <div className="space-y-2">
                   <Label htmlFor="email">
                     <Mail className="w-4 h-4 inline mr-2" />
@@ -502,52 +597,97 @@ export default function UsersPage() {
                 {canAssignDeptEquipment && (
                   <div className="space-y-4 pt-2 border-t border-border">
                     <div className="space-y-2">
-                      <Label htmlFor="assigned_department">Department assignment</Label>
-                      <Select
-                        value={formData.assigned_department || 'none'}
-                        onValueChange={(v) =>
-                          setFormData({
-                            ...formData,
-                            assigned_department: v === 'none' ? '' : v,
-                          })
-                        }
-                      >
-                        <SelectTrigger id="assigned_department">
-                          <SelectValue placeholder="None" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="none">None</SelectItem>
-                          {departments.map((d) => (
-                            <SelectItem key={d.id} value={d.id}>
-                              {d.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      <Label htmlFor="departments-dropdown">Departments</Label>
+                      <p className="text-xs text-muted-foreground">
+                        Open the dropdown and tick one or more departments. Equipment updates immediately.
+                      </p>
+                      <Popover modal={false}>
+                        <PopoverTrigger asChild>
+                          <Button
+                            ref={deptTriggerRef}
+                            id="departments-dropdown"
+                            type="button"
+                            variant="outline"
+                            className="w-full justify-between font-normal text-left min-h-10 h-auto py-2"
+                          >
+                            <span className="truncate text-left">{departmentDropdownLabel}</span>
+                            <ChevronDown className="h-4 w-4 shrink-0 opacity-60" />
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent
+                          className="z-[100] flex max-h-[min(200px,28vh)] flex-col overflow-hidden p-0 max-w-[calc(100vw-2rem)]"
+                          align="start"
+                          side="bottom"
+                          sideOffset={4}
+                          avoidCollisions={false}
+                          style={deptPopoverWidth ? { width: deptPopoverWidth } : undefined}
+                        >
+                          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-2 pr-3 space-y-2 [scrollbar-gutter:stable]">
+                            {departments.map((d) => (
+                              <div key={d.id} className="flex items-center space-x-2 shrink-0">
+                                <Checkbox
+                                  id={`dept-${d.id}`}
+                                  checked={formData.department_ids.includes(d.id)}
+                                  onCheckedChange={() => toggleDepartment(d.id)}
+                                />
+                                <Label htmlFor={`dept-${d.id}`} className="text-sm font-normal cursor-pointer leading-snug">
+                                  {d.name}
+                                </Label>
+                              </div>
+                            ))}
+                          </div>
+                        </PopoverContent>
+                      </Popover>
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="assigned_equipment">Equipment assignment</Label>
-                      <Select
-                        value={formData.assigned_equipment || 'none'}
-                        onValueChange={(v) =>
-                          setFormData({
-                            ...formData,
-                            assigned_equipment: v === 'none' ? '' : v,
-                          })
-                        }
-                      >
-                        <SelectTrigger id="assigned_equipment">
-                          <SelectValue placeholder="None" />
-                        </SelectTrigger>
-                        <SelectContent className="max-h-[240px]">
-                          <SelectItem value="none">None</SelectItem>
-                          {equipmentList.map((eq) => (
-                            <SelectItem key={eq.id} value={eq.id}>
-                              {[eq.equipment_number, eq.name].filter(Boolean).join(' — ') || eq.id}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      <Label htmlFor="equipment-dropdown">Equipment</Label>
+                      <p className="text-xs text-muted-foreground">
+                        Dropdown lists only equipment in the departments you selected. Validate on save.
+                      </p>
+                      <Popover modal={false}>
+                        <PopoverTrigger asChild>
+                          <Button
+                            ref={equipTriggerRef}
+                            id="equipment-dropdown"
+                            type="button"
+                            variant="outline"
+                            className="w-full justify-between font-normal text-left min-h-10 h-auto py-2"
+                            disabled={!formData.department_ids.length}
+                          >
+                            <span className="truncate text-left">{equipmentDropdownLabel}</span>
+                            <ChevronDown className="h-4 w-4 shrink-0 opacity-60" />
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent
+                          className="z-[100] flex max-h-[min(200px,28vh)] flex-col overflow-hidden p-0 max-w-[calc(100vw-2rem)]"
+                          align="start"
+                          side="bottom"
+                          sideOffset={4}
+                          avoidCollisions={false}
+                          style={equipPopoverWidth ? { width: equipPopoverWidth } : undefined}
+                        >
+                          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-2 pr-3 space-y-2 [scrollbar-gutter:stable]">
+                            {!formData.department_ids.length ? (
+                              <p className="text-xs text-muted-foreground px-1 py-2">Select at least one department first.</p>
+                            ) : equipmentForSelectedDepartments.length === 0 ? (
+                              <p className="text-xs text-muted-foreground px-1 py-2">No equipment for these departments.</p>
+                            ) : (
+                              equipmentForSelectedDepartments.map((eq) => (
+                                <div key={eq.id} className="flex items-center space-x-2 shrink-0">
+                                  <Checkbox
+                                    id={`eq-${eq.id}`}
+                                    checked={formData.equipment_ids.includes(eq.id)}
+                                    onCheckedChange={() => toggleEquipment(eq.id)}
+                                  />
+                                  <Label htmlFor={`eq-${eq.id}`} className="text-sm font-normal cursor-pointer leading-snug">
+                                    {[eq.equipment_number, eq.name].filter(Boolean).join(' — ') || eq.id}
+                                  </Label>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        </PopoverContent>
+                      </Popover>
                     </div>
                   </div>
                 )}
@@ -577,6 +717,7 @@ export default function UsersPage() {
                   </Button>
                 </div>
               </form>
+              </div>
             </DialogContent>
           </Dialog>
         </div>

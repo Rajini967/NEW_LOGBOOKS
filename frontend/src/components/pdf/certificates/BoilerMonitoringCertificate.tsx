@@ -10,7 +10,7 @@ const styles = StyleSheet.create({
   },
   titleRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    justifyContent: 'center',
     alignItems: 'flex-end',
     marginTop: 4,
     marginBottom: 4,
@@ -20,15 +20,6 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     textAlign: 'center',
     flexGrow: 1,
-  },
-  brandRight: {
-    width: '18%',
-    textAlign: 'right',
-    fontSize: 8,
-    fontWeight: 'bold',
-  },
-  brandLeft: {
-    width: '18%',
   },
   metaTable: {
     width: '100%',
@@ -67,10 +58,6 @@ const styles = StyleSheet.create({
   metaRight: {
     textAlign: 'right',
   },
-  freq: {
-    marginBottom: 4,
-    fontSize: 8,
-  },
   table: {
     width: '100%',
     border: '1 solid #000',
@@ -98,9 +85,20 @@ const styles = StyleSheet.create({
   footer: {
     marginTop: 8,
     fontSize: 8,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
   },
   footerLine: {
-    marginBottom: 5,
+    marginBottom: 3,
+    textAlign: 'right',
+  },
+  footerLeft: {
+    flexShrink: 0,
+    fontSize: 8,
+  },
+  signoffBlock: {
+    minWidth: 280,
   },
   descCell: {
     width: '30%',
@@ -126,6 +124,7 @@ const styles = StyleSheet.create({
 interface BoilerMonitoringData {
   approvedBy?: string;
   printedBy?: string;
+  recordingFrequency?: string;
   logs: Array<{
     date: string;
     time: string;
@@ -241,37 +240,36 @@ export function BoilerMonitoringCertificate({ data }: BoilerMonitoringCertificat
   };
 
   const firstCheckedBy = logs.find((l) => (l.checkedBy || '').trim())?.checkedBy || '';
+  const doneByLog = logs.find((l) => (l.checkedBy || '').trim());
+  const firstTime = timeCols[0] || '';
+  const signDate = reportDate && firstTime ? `${reportDate} ${formatTimeColumnLabel(firstTime)}` : (reportDate || '');
+  const doneBySignDate =
+    doneByLog && doneByLog.checkedBy
+      ? `${String(doneByLog.checkedBy).trim()}${signDate ? ` - ${signDate}` : ''}`
+      : '-';
+  const approvedBySignDate =
+    data.approvedBy && String(data.approvedBy).trim()
+      ? `${String(data.approvedBy).trim()}${signDate ? ` - ${signDate}` : ''}`
+      : '-';
+  const printedBySignDate =
+    data.printedBy && String(data.printedBy).trim()
+      ? `${String(data.printedBy).trim()}${signDate ? ` - ${signDate}` : ''}`
+      : '-';
 
   return (
     <Document>
       <Page size="A4" style={styles.page}>
-        <PDFHeader />
+        <PDFHeader reportTitle="BOILER LOG BOOK REPORT" />
 
         <View style={styles.titleRow}>
-          <Text style={styles.brandLeft}> </Text>
           <Text style={styles.title}>Equipment operation log: Boiler</Text>
-          <Text style={styles.brandRight}>Dr.Reddy&apos;s</Text>
-        </View>
-
-        <View style={styles.metaTable} wrap={false}>
-          <View style={styles.metaRow} wrap={false}>
-            <Text style={[styles.metaCell, { width: '55%' }]}>Document No.: FORM-FT08-EN-0197</Text>
-            <Text style={[styles.metaCell, styles.metaCellLast, { width: '45%' }]}>Version: 2.0, CURRENT</Text>
-          </View>
-          <View style={[styles.metaRow, styles.metaRowLast]} wrap={false}>
-            <Text style={[styles.metaCell, { width: '55%' }]}>Reference SOP No.: SOP-FT01-EN-0083</Text>
-            <Text style={[styles.metaCell, styles.metaCellLast, { width: '45%' }]}>
-              Legacy Document No.: FORM-FT08-EN-0081
-            </Text>
-          </View>
         </View>
 
         <View style={styles.fieldRow}>
           <Text style={styles.metaItem}>Date: {reportDate || ' '}</Text>
-          <Text style={[styles.metaItem, styles.metaCenter]}>Shift: </Text>
+          <Text style={styles.metaItem} />
           <Text style={[styles.metaItem, styles.metaRight]}>Equipment Number: {equipmentId}</Text>
         </View>
-        <Text style={styles.freq}>Recording Frequency: once in every 01 hour</Text>
 
         <View style={styles.table} wrap={false}>
           <View style={[styles.tableRow, styles.tableHeader]} wrap={false}>
@@ -332,29 +330,6 @@ export function BoilerMonitoringCertificate({ data }: BoilerMonitoringCertificat
             </View>
           ))}
 
-          <View style={[styles.tableRow, { borderBottom: 'none' }]} wrap={false}>
-            <Text style={[styles.tableCell, styles.descCell]}>Recorded by</Text>
-            <Text style={[styles.tableCell, styles.rangeCell]} />
-            {timeCols.length === 0 ? (
-              <Text style={[styles.tableCell, styles.tableCellLast, { width: '55%' }]}>
-                {firstCheckedBy || ' '}
-              </Text>
-            ) : (
-              timeCols.map((t, i) => (
-                <Text
-                  key={`rec-by-${t}`}
-                  style={[
-                    styles.tableCell,
-                    { width: timeColWidth },
-                    styles.timeCell,
-                    i === timeCols.length - 1 && styles.tableCellLast,
-                  ]}
-                >
-                  {valueAt(t, 'checkedBy')}
-                </Text>
-              ))
-            )}
-          </View>
         </View>
 
         <View style={styles.lowerTable} wrap={false}>
@@ -414,29 +389,6 @@ export function BoilerMonitoringCertificate({ data }: BoilerMonitoringCertificat
             </View>
           ))}
           <View style={styles.tableRow} wrap={false}>
-            <Text style={[styles.tableCell, styles.descCell]}>Recorded by</Text>
-            <Text style={[styles.tableCell, styles.rangeCell]} />
-            {timeCols.length === 0 ? (
-              <Text style={[styles.tableCell, styles.tableCellLast, { width: '55%' }]}>
-                {firstCheckedBy || ' '}
-              </Text>
-            ) : (
-              timeCols.map((t, i) => (
-                <Text
-                  key={`shift-rec-${t}`}
-                  style={[
-                    styles.tableCell,
-                    { width: timeColWidth },
-                    styles.timeCell,
-                    i === timeCols.length - 1 && styles.tableCellLast,
-                  ]}
-                >
-                  {valueAt(t, 'checkedBy')}
-                </Text>
-              ))
-            )}
-          </View>
-          <View style={[styles.tableRow, { borderBottom: 'none' }]} wrap={false}>
             <Text style={[styles.tableCell, styles.descCell]}>Remarks</Text>
             <Text style={[styles.tableCell, styles.rangeCell]} />
             {timeCols.length === 0 ? (
@@ -459,11 +411,61 @@ export function BoilerMonitoringCertificate({ data }: BoilerMonitoringCertificat
               ))
             )}
           </View>
+          <View style={styles.tableRow} wrap={false}>
+            <Text style={[styles.tableCell, styles.descCell]}>Done By (Sign & Date)</Text>
+            <Text style={[styles.tableCell, styles.rangeCell]} />
+            {timeCols.length === 0 ? (
+              <Text style={[styles.tableCell, styles.tableCellLast, { width: '55%' }]}>
+                {doneBySignDate}
+              </Text>
+            ) : (
+              timeCols.map((t, i) => (
+                <Text
+                  key={`shift-done-${t}`}
+                  style={[
+                    styles.tableCell,
+                    { width: timeColWidth },
+                    styles.timeCell,
+                    i === timeCols.length - 1 && styles.tableCellLast,
+                  ]}
+                >
+                  {i === 0 ? doneBySignDate : ''}
+                </Text>
+              ))
+            )}
+          </View>
+          <View style={[styles.tableRow, { borderBottom: 'none' }]} wrap={false}>
+            <Text style={[styles.tableCell, styles.descCell]}>Approved By (Sign & Date)</Text>
+            <Text style={[styles.tableCell, styles.rangeCell]} />
+            {timeCols.length === 0 ? (
+              <Text style={[styles.tableCell, styles.tableCellLast, { width: '55%' }]}>
+                {approvedBySignDate}
+              </Text>
+            ) : (
+              timeCols.map((t, i) => (
+                <Text
+                  key={`shift-approved-${t}`}
+                  style={[
+                    styles.tableCell,
+                    { width: timeColWidth },
+                    styles.timeCell,
+                    i === timeCols.length - 1 && styles.tableCellLast,
+                  ]}
+                >
+                  {i === 0 ? approvedBySignDate : ''}
+                </Text>
+              ))
+            )}
+          </View>
         </View>
 
         <View style={styles.footer}>
-          <Text style={styles.footerLine}>Approved By: {data.approvedBy || '-'}</Text>
-          <Text style={styles.footerLine}>Printed By: {data.printedBy || '-'}</Text>
+          <Text style={styles.footerLeft}>
+            Recording Frequency: {data.recordingFrequency || 'Once in every 01 hour'}
+          </Text>
+          <View style={styles.signoffBlock}>
+            <Text style={styles.footerLine}>Printed By (Sign & Date): {printedBySignDate}</Text>
+          </View>
         </View>
       </Page>
     </Document>

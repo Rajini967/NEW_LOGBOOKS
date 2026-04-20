@@ -208,6 +208,20 @@ class AuditEventSerializer(serializers.ModelSerializer):
                     "equipment_id": str(row.get("assignment__equipment__equipment_number") or ""),
                     "equipment_name": str(row.get("assignment__equipment__name") or ""),
                 }
+            if normalized == "chemical_assignment":
+                from chemical_prep.models import ChemicalAssignment
+                row = (
+                    ChemicalAssignment.objects.filter(pk=object_id)
+                    .values("equipment_name", "chemical_name", "chemical__name")
+                    .first()
+                )
+                if not row:
+                    return {}
+                chem = row.get("chemical__name") or row.get("chemical_name") or ""
+                return {
+                    "equipment_name": str(row.get("equipment_name") or ""),
+                    "chemical_name": str(chem),
+                }
         except Exception:
             return {}
         return {}

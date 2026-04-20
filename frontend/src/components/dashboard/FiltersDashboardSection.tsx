@@ -71,6 +71,8 @@ export function FiltersDashboardSection({
 }: FiltersDashboardSectionProps = {}) {
   const [periodTypeState, setPeriodTypeState] = useState<PeriodType>('month');
   const [dateState, setDateState] = useState<string>(getDefaultDate());
+  const [dateFrom, setDateFrom] = useState<string>('');
+  const [dateTo, setDateTo] = useState<string>('');
   const [selectedEquipmentIdState, setSelectedEquipmentIdState] = useState<string>('');
   const periodType = periodTypeProp ?? periodTypeState;
   const setPeriodType = onPeriodTypeChange ?? setPeriodTypeState;
@@ -82,6 +84,9 @@ export function FiltersDashboardSection({
   const [summary, setSummary] = useState<FiltersDashboardSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const todayDate = getDefaultDate();
+  const isRangeActive = Boolean(dateFrom && dateTo && dateFrom <= dateTo);
+  const requestDate = date || (isRangeActive ? dateTo || dateFrom : '') || todayDate;
 
   useEffect(() => {
     let cancelled = false;
@@ -128,8 +133,10 @@ export function FiltersDashboardSection({
       try {
         const data = await filtersDashboardAPI.getSummary({
           periodType,
-          date,
+          date: requestDate,
           equipmentId: selectedEquipmentId || undefined,
+          dateFrom: isRangeActive ? dateFrom : undefined,
+          dateTo: isRangeActive ? dateTo : undefined,
         });
         setSummary(data);
       } catch (e: unknown) {
@@ -142,7 +149,7 @@ export function FiltersDashboardSection({
         if (!background) setLoading(false);
       }
     },
-    [periodType, date, selectedEquipmentId]
+    [periodType, requestDate, selectedEquipmentId, isRangeActive, dateFrom, dateTo]
   );
 
   useEffect(() => {
@@ -220,8 +227,35 @@ export function FiltersDashboardSection({
         <Input
           id="filters-period-date"
           type="date"
+          max={todayDate}
           value={date}
           onChange={(e) => setDate(e.target.value)}
+          className="h-9 w-[150px] sm:w-[160px]"
+        />
+      </div>
+      <div className="flex items-center gap-2">
+        <Label htmlFor="filters-date-from" className="text-xs text-muted-foreground whitespace-nowrap sm:text-sm">
+          From
+        </Label>
+        <Input
+          id="filters-date-from"
+          type="date"
+          max={todayDate}
+          value={dateFrom}
+          onChange={(e) => setDateFrom(e.target.value)}
+          className="h-9 w-[150px] sm:w-[160px]"
+        />
+      </div>
+      <div className="flex items-center gap-2">
+        <Label htmlFor="filters-date-to" className="text-xs text-muted-foreground whitespace-nowrap sm:text-sm">
+          To
+        </Label>
+        <Input
+          id="filters-date-to"
+          type="date"
+          max={todayDate}
+          value={dateTo}
+          onChange={(e) => setDateTo(e.target.value)}
           className="h-9 w-[150px] sm:w-[160px]"
         />
       </div>
@@ -282,7 +316,10 @@ export function FiltersDashboardSection({
 
       {!loading && !error && summary && (
         <>
-          <p className="text-xs text-muted-foreground -mb-2">Period: {periodLabel(summary)}</p>
+          <p className="text-xs text-muted-foreground -mb-2">
+            Period: {periodLabel(summary)}
+            {isRangeActive ? ` · Exact range (${dateFrom} to ${dateTo})` : ''}
+          </p>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
             <DashboardInsightRow

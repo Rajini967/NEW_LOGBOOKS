@@ -99,6 +99,19 @@ type EquipmentIntervalMeta = {
   tolerance_minutes?: number | null;
 };
 
+/** Same label set as Chemical Equipment Assignment "Current assignments" (rows must match master). */
+function buildMasterNameSetForChemicalVisibility(equipmentList: EquipmentIntervalMeta[]): Set<string> {
+  const masterNames = new Set<string>();
+  equipmentList.forEach((eq) => {
+    const n = (eq.name || "").trim();
+    const num = (eq.equipment_number || "").trim();
+    if (n) masterNames.add(n.toLowerCase());
+    if (num) masterNames.add(num.toLowerCase());
+    if (num || n) masterNames.add(`${num} – ${n || num}`.trim().toLowerCase());
+  });
+  return masterNames;
+}
+
 /**
  * Match chemical assignment equipment label to Equipment Master (B-007 - Boiler vs B-007 – Boiler).
  */
@@ -214,8 +227,9 @@ const ChemicalLogBookPage: React.FC = () => {
   const isLoading = chemicalLogs.isLoading || chemicalLogs.isFetching;
 
   const [chemicalNames, setChemicalNames] = useState<string[]>([]);
-  const [equipmentOptions, setEquipmentOptions] = useState<{ id: string; name: string }[]>([]);
   const [equipmentWithIntervals, setEquipmentWithIntervals] = useState<EquipmentIntervalMeta[]>([]);
+  /** Full approved equipment (all pages) — matches Chemical Assignment visibility; category API lists can be paginated/incomplete. */
+  const [equipmentMasterAllPages, setEquipmentMasterAllPages] = useState<EquipmentIntervalMeta[]>([]);
   const [entryLogInterval, setEntryLogInterval] = useState<"" | LogEntryIntervalType>("");
   const [entryShiftDurationHours, setEntryShiftDurationHours] = useState<number | "">("");
   const [entryToleranceMinutes, setEntryToleranceMinutes] = useState<number | "">("");
@@ -394,28 +408,6 @@ const ChemicalLogBookPage: React.FC = () => {
       .finally(() => setMissingRangeLoading(false));
   }, [showMissedReadingPopup, missingRangeFrom, missingRangeTo, missingRangeRefreshKey]);
 
-  useEffect(() => {
-    if (!isDialogOpen) return;
-    if (!formData.equipmentName) return;
-    if (entryLogInterval !== "" || entryShiftDurationHours !== "" || entryToleranceMinutes !== "") return;
-    const selectedEquipmentMeta = findEquipmentMetaByAssignmentLabel(
-      equipmentWithIntervals,
-      formData.equipmentName,
-    );
-    if (!selectedEquipmentMeta) return;
-    setEntryLogInterval((selectedEquipmentMeta.log_entry_interval as LogEntryIntervalType) || "");
-    setEntryShiftDurationHours(selectedEquipmentMeta.shift_duration_hours ?? "");
-    setEntryToleranceMinutes(selectedEquipmentMeta.tolerance_minutes ?? "");
-  }, [
-    isDialogOpen,
-    editingLogId,
-    formData.equipmentName,
-    equipmentWithIntervals,
-    entryLogInterval,
-    entryShiftDurationHours,
-    entryToleranceMinutes,
-  ]);
-
   const hasMissedReadings =
     !!missedReadingNextDue || (missedEquipments?.length ?? 0) > 0;
 
@@ -484,6 +476,105 @@ const ChemicalLogBookPage: React.FC = () => {
     return map;
   }, [assignments]);
 
+  /** Prefer full master list for label resolution (interval fields come from API on both sources). */
+  const equipmentMetaLookupList = useMemo(
+    () => (equipmentMasterAllPages.length > 0 ? equipmentMasterAllPages : equipmentWithIntervals),
+    [equipmentMasterAllPages, equipmentWithIntervals],
+  );
+
+  useEffect(() => {
+    if (!isDialogOpen) return;
+    if (!formData.equipmentName) return;
+    if (entryLogInterval !== "" || entryShiftDurationHours !== "" || entryToleranceMinutes !== "") return;
+    const selectedEquipmentMeta = findEquipmentMetaByAssignmentLabel(
+      equipmentMetaLookupList,
+      formData.equipmentName,
+    );
+    if (!selectedEquipmentMeta) return;
+    setEntryLogInterval((selectedEquipmentMeta.log_entry_interval as LogEntryIntervalType) || "");
+    setEntryShiftDurationHours(selectedEquipmentMeta.shift_duration_hours ?? "");
+    setEntryToleranceMinutes(selectedEquipmentMeta.tolerance_minutes ?? "");
+  }, [
+    isDialogOpen,
+    editingLogId,
+    formData.equipmentName,
+    equipmentMetaLookupList,
+    entryLogInterval,
+    entryShiftDurationHours,
+    entryToleranceMinutes,
+  ]);
+
+  /**
+   * Equipment pickers: same rule as Chemical Equipment Assignment table — only non-rejected assignments
+   * whose `equipment_name` matches an approved row in Equipment Master (not every string in the API).
+   */
+  const assignmentEquipmentOptions = useMemo(() => {
+    const nonRejected = assignments.filter(
+      (r) => String(r.status || "").toLowerCase() !== "rejected",
+    );
+    const masterList = equipmentMasterAllPages.length > 0 ? equipmentMasterAllPages : equipmentWithIntervals;
+    const useMasterFilter = masterList.length > 0;
+    const masterNames = useMasterFilter ? buildMasterNameSetForChemicalVisibility(masterList) : null;
+    const source = useMasterFilter
+      ? nonRejected.filter((r) => masterNames!.has((r.equipment_name || "").trim().toLowerCase()))
+      : nonRejected;
+    const seen = new Set<string>();
+    const opts: { id: string; name: string }[] = [];
+    source.forEach((r) => {
+      if (r.equipment_name && !seen.has(r.equipment_name)) {
+        seen.add(r.equipment_name);
+        opts.push({ id: r.equipment_name, name: r.equipment_name });
+      }
+    });
+    return opts;
+  }, [assignments, equipmentMasterAllPages, equipmentWithIntervals]);
+
+  const entryEquipmentOptions = useMemo(() => {
+    if (!assignmentEquipmentOptions.length) return [];
+    let base = assignmentEquipmentOptions;
+    if (editingLogId && formData.equipmentName?.trim()) {
+      const exists = base.some((eq) => eq.name === formData.equipmentName);
+      if (!exists) {
+        base = [...base, { id: formData.equipmentName, name: formData.equipmentName }];
+      }
+    }
+    return base;
+  }, [assignmentEquipmentOptions, editingLogId, formData.equipmentName]);
+
+  // Full equipment master (all pages) for assignment ↔ master label matching
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const raw = await equipmentAPI.listAllPages();
+        const merged: EquipmentIntervalMeta[] = [];
+        const seen = new Set<string>();
+        for (const e of raw || []) {
+          const rec = e as Record<string, unknown>;
+          const id = rec?.id != null ? String(rec.id) : "";
+          if (!id || seen.has(id)) continue;
+          if (rec?.is_active === false || rec?.status !== "approved") continue;
+          seen.add(id);
+          merged.push({
+            id,
+            equipment_number: String(rec.equipment_number ?? ""),
+            name: String(rec.name ?? ""),
+            log_entry_interval: (rec.log_entry_interval as string | null | undefined) ?? null,
+            shift_duration_hours:
+              rec.shift_duration_hours != null ? Number(rec.shift_duration_hours) : null,
+            tolerance_minutes: rec.tolerance_minutes != null ? Number(rec.tolerance_minutes) : null,
+          });
+        }
+        if (!cancelled) setEquipmentMasterAllPages(merged);
+      } catch {
+        if (!cancelled) setEquipmentMasterAllPages([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Load equipment with intervals from all logbook-related categories (assignments may tag boilers, chillers, etc.)
   useEffect(() => {
     (async () => {
@@ -535,7 +626,7 @@ const ChemicalLogBookPage: React.FC = () => {
     })();
   }, []);
 
-  // Load equipment options and assignments so Equipment dropdown shows only approved equipment
+  // Load chemical assignments (equipment dropdown options are derived in assignmentEquipmentOptions)
   useEffect(() => {
     (async () => {
       try {
@@ -550,17 +641,6 @@ const ChemicalLogBookPage: React.FC = () => {
           status: (row as any).status as string | undefined,
         }));
         setAssignments(allRows);
-        // Only show equipment that have at least one approved assignment
-        const approvedRows = allRows.filter((r) => r.status === "approved");
-        const seen = new Set<string>();
-        const eqOpts: { id: string; name: string }[] = [];
-        approvedRows.forEach((r) => {
-          if (r.equipment_name && !seen.has(r.equipment_name)) {
-            seen.add(r.equipment_name);
-            eqOpts.push({ id: r.equipment_name, name: r.equipment_name });
-          }
-        });
-        setEquipmentOptions(eqOpts);
       } catch (error) {
         console.error("Error loading equipment assignments:", error);
       }
@@ -821,7 +901,7 @@ const ChemicalLogBookPage: React.FC = () => {
         return;
       }
       const selectedEquipmentMeta = findEquipmentMetaByAssignmentLabel(
-        equipmentWithIntervals,
+        equipmentMetaLookupList,
         formData.equipmentName,
       );
       if (selectedEquipmentMeta?.id) {
@@ -1367,7 +1447,7 @@ const ChemicalLogBookPage: React.FC = () => {
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="all">All</SelectItem>
-                        {equipmentOptions.map((eq) => (
+                        {assignmentEquipmentOptions.map((eq) => (
                           <SelectItem key={eq.id} value={eq.name}>
                             {eq.name}
                           </SelectItem>
@@ -1513,7 +1593,7 @@ const ChemicalLogBookPage: React.FC = () => {
                               ? optionsForEquipment[0].category
                               : "major";
                           const selectedEquipmentMeta = findEquipmentMetaByAssignmentLabel(
-                            equipmentWithIntervals,
+                            equipmentMetaLookupList,
                             nextEquipmentName,
                           );
                           setFormData({
@@ -1542,7 +1622,7 @@ const ChemicalLogBookPage: React.FC = () => {
                         </SelectTrigger>
                         <SelectContent className="max-h-60 overflow-y-auto">
                           <SelectItem value="__none__">Select equipment</SelectItem>
-                          {equipmentOptions.map((eq) => (
+                          {entryEquipmentOptions.map((eq) => (
                             <SelectItem key={eq.id} value={eq.name}>
                               {eq.name}
                             </SelectItem>
@@ -2184,6 +2264,14 @@ const ChemicalLogBookPage: React.FC = () => {
                                 if (log.status === "pending" || log.status === "draft" || log.status === "pending_secondary_approval") {
                                   if (log.operator_id === user?.id) {
                                     toast.error("The log book entry must be rejected by a different user than the operator (Log Book Done By).");
+                                    return;
+                                  }
+                                  if (isMaintenanceOrShutdown && !editedMaintenanceLogIds.has(log.id)) {
+                                    toast.error("Please edit this maintenance/shutdown entry first, then reject.");
+                                    return;
+                                  }
+                                  if (!isMaintenanceOrShutdown && !viewedReadingsLogIds.has(log.id)) {
+                                    toast.error("Please click View Readings before rejecting this entry.");
                                     return;
                                   }
                                   setSelectedLogId(log.id);

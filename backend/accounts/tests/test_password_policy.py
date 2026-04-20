@@ -8,7 +8,7 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from accounts.models import User, UserRole, UserPasswordHistory, SessionSetting
+from accounts.models import User, UserRole, UserPasswordHistory, SessionSetting, UserActivityLog
 
 
 class PasswordPolicyAPITests(APITestCase):
@@ -154,6 +154,9 @@ class PasswordPolicyAPITests(APITestCase):
                 format="json",
             )
             self.assertEqual(r.status_code, status.HTTP_200_OK)
+        before = UserActivityLog.objects.filter(
+            user=self.manager, event_type="password_reuse_rejected"
+        ).count()
         response = self.client.post(
             self.change_password_url,
             {
@@ -164,6 +167,10 @@ class PasswordPolicyAPITests(APITestCase):
             format="json",
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        after = UserActivityLog.objects.filter(
+            user=self.manager, event_type="password_reuse_rejected"
+        ).count()
+        self.assertEqual(after, before + 1)
 
     def test_me_returns_password_expired_when_overdue(self):
         """GET /users/me/ returns password_expired True when past expiry."""

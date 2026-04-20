@@ -40,7 +40,7 @@ export interface ChillerMonitoringMappedLog {
   coolingTowerFanChemicalName?: string;
   coolingTowerFanChemicalQtyKg?: number;
   operatorSign?: string;
-  verifiedBy?: string;
+  approvedBy?: string;
   remarks?: string;
   checkedBy?: string;
   raw?: { activity_type?: string };
@@ -329,21 +329,9 @@ export function buildChillerMonitoringGrid(
 
   dayLogs.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
 
-  // Dedupe by minute slot: keep latest timestamp within same yyyy-MM-dd HH:mm
-  const byMinute = new Map<string, ChillerMonitoringMappedLog>();
-  for (const log of dayLogs) {
-    const key = format(log.timestamp, COL_TIME_KEY_FMT);
-    const prev = byMinute.get(key);
-    if (!prev || log.timestamp.getTime() >= prev.timestamp.getTime()) {
-      byMinute.set(key, log);
-    }
-  }
-  const uniqueSorted = Array.from(byMinute.values()).sort(
-    (a, b) => a.timestamp.getTime() - b.timestamp.getTime(),
-  );
-
-  const columns: ChillerGridColumn[] = uniqueSorted.map((log) => ({
-    id: format(log.timestamp, COL_TIME_KEY_FMT),
+  // Keep every reading for the report day; do not collapse logs that share the same minute.
+  const columns: ChillerGridColumn[] = dayLogs.map((log) => ({
+    id: `${format(log.timestamp, COL_TIME_KEY_FMT)}-${String((log as { id?: string }).id ?? "")}`,
     label: format(log.timestamp, "HH:mm"),
     at: log.timestamp,
     log,
@@ -448,7 +436,7 @@ export function buildChillerMonitoringGrid(
 
   const signoffRows = [
     makeTextRow("Operator Sign & Date:", columnLogs.map((log) => log.operatorSign ?? "")),
-    makeTextRow("Verified By (Sign & Date)", columnLogs.map((log) => log.verifiedBy ?? "")),
+    makeTextRow("Approved By (Sign & Date)", columnLogs.map((log) => log.approvedBy ?? "")),
     makeTextRow("Done By", columnLogs.map((log) => log.checkedBy ?? "")),
   ];
 

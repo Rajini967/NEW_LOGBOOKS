@@ -1,5 +1,6 @@
 import React from 'react';
 import { Document, Page, View, Text, StyleSheet } from '@react-pdf/renderer';
+import { format } from 'date-fns';
 import { PDFHeader } from '../PDFHeader';
 
 const styles = StyleSheet.create({
@@ -30,7 +31,7 @@ const styles = StyleSheet.create({
   tableRow: {
     flexDirection: 'row',
     borderBottom: '1 solid #000',
-    minHeight: 20,
+    minHeight: 24,
   },
   tableHeader: {
     backgroundColor: '#e0e0e0',
@@ -38,10 +39,12 @@ const styles = StyleSheet.create({
     borderBottom: '2 solid #000',
   },
   tableCell: {
-    padding: 6,
+    padding: 4,
     fontSize: 8,
     borderRight: '1 solid #000',
     textAlign: 'center',
+    overflow: 'hidden',
+    lineHeight: 1.2,
   },
   tableCellLeft: {
     textAlign: 'left',
@@ -51,10 +54,23 @@ const styles = StyleSheet.create({
   },
   footer: {
     marginTop: 20,
-    fontSize: 10,
+    fontSize: 8,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
   },
   footerLine: {
-    marginBottom: 5,
+    marginBottom: 4,
+    fontSize: 7.2,
+  },
+  footerLeft: {
+    width: '44%',
+    textAlign: 'left',
+  },
+  footerRight: {
+    width: '56%',
+    textAlign: 'right',
+    fontSize: 7,
   },
   detailsTitle: {
     fontSize: 12,
@@ -69,14 +85,21 @@ const styles = StyleSheet.create({
     padding: 4,
   },
   emailCell: {
-    fontSize: 6,
-    padding: 3,
+    fontSize: 5.5,
+    padding: 2,
+    lineHeight: 1.1,
+  },
+  remarksCell: {
+    fontSize: 6.5,
+    textAlign: 'left',
+    lineHeight: 1.15,
   },
 });
 
 interface ChemicalMonitoringData {
   approvedBy?: string;
   printedBy?: string;
+  recordingFrequency?: string;
   logs: Array<{
     date: string;
     time: string;
@@ -104,16 +127,52 @@ interface ChemicalMonitoringCertificateProps {
 
 export function ChemicalMonitoringCertificate({ data }: ChemicalMonitoringCertificateProps) {
   const equipmentId = (data.logs[0] as any)?.equipmentId || data.logs[0]?.equipmentName || '-';
+  const wrapTight = (value: unknown, tokenSize = 14): string => {
+    const raw = String(value ?? '').trim();
+    if (!raw) return '';
+    return raw
+      .split(/\s+/)
+      .map((token) => {
+        if (token.length <= tokenSize) return token;
+        const chunks = token.match(new RegExp(`.{1,${tokenSize}}`, 'g'));
+        return chunks ? chunks.join('\n') : token;
+      })
+      .join(' ');
+  };
+  const rowDateTime = (log: ChemicalMonitoringData['logs'][number]): string => {
+    const d = (log.date || '').trim();
+    const t = (log.time || '').trim();
+    if (!d && !t) return '';
+    if (d && t) return `${d} ${t}`;
+    return d || t;
+  };
+  const doneByForRow = (log: ChemicalMonitoringData['logs'][number]): string => {
+    const name = (log.checkedBy || '').trim();
+    const dt = rowDateTime(log);
+    if (!name) return '';
+    return dt ? `${name} - ${dt}` : name;
+  };
   const approvedByForRow = (log: ChemicalMonitoringData['logs'][number]): string =>
-    (log as any)?.approvedBy ||
-    (log as any)?.approved_by_name ||
-    (log as any)?.raw?.approved_by_name ||
-    data.approvedBy ||
-    '-';
+    (() => {
+      const name =
+        (log as any)?.approvedBy ||
+        (log as any)?.approved_by_name ||
+        (log as any)?.raw?.approved_by_name ||
+        data.approvedBy ||
+        '';
+      const dt = rowDateTime(log);
+      if (!name) return '-';
+      return dt ? `${name} - ${dt}` : String(name);
+    })();
+  const printedBySignDate = (() => {
+    const by = (data.printedBy || '').trim();
+    if (!by) return '-';
+    return `${by} - ${format(new Date(), 'dd/MM/yy HH:mm:ss')}`;
+  })();
   return (
     <Document>
       <Page size="A4" style={styles.page}>
-        <PDFHeader />
+        <PDFHeader reportTitle="CHEMICAL LOG BOOK REPORT" />
         
         <Text style={styles.title}>RAW DATA FOR CHEMICAL MONITORING</Text>
         <Text style={styles.subtitle}>Equipment ID: {equipmentId}</Text>
@@ -121,107 +180,70 @@ export function ChemicalMonitoringCertificate({ data }: ChemicalMonitoringCertif
         <View style={styles.table}>
           {/* Header Row */}
           <View style={[styles.tableRow, styles.tableHeader]}>
-            <Text style={[styles.tableCell, { width: '10%' }]}>Date</Text>
-            <Text style={[styles.tableCell, { width: '10%' }]}>Time</Text>
-            <Text style={[styles.tableCell, { width: '12%' }]}>EqP Name</Text>
-            <Text style={[styles.tableCell, { width: '10%' }]}>Chemical name</Text>
-            <Text style={[styles.tableCell, { width: '8%' }]}>Chemical %</Text>
+            <Text style={[styles.tableCell, { width: '7%' }]}>Date</Text>
+            <Text style={[styles.tableCell, { width: '7%' }]}>Time</Text>
+            <Text style={[styles.tableCell, { width: '11%' }]}>EqP Name</Text>
+            <Text style={[styles.tableCell, { width: '9%' }]}>Chemical name</Text>
+            <Text style={[styles.tableCell, { width: '7%' }]}>Chemical concentration %</Text>
             <Text style={[styles.tableCell, { width: '9%' }]}>Solution concentration %</Text>
-            <Text style={[styles.tableCell, { width: '7%' }]}>Water Qty</Text>
-            <Text style={[styles.tableCell, { width: '7%' }]}>Chemical Qty</Text>
-            <Text style={[styles.tableCell, { width: '5%' }]}>Remarks</Text>
-            <Text style={[styles.tableCell, { width: '11%' }]}>Done By</Text>
-            <Text style={[styles.tableCell, { width: '11%' }, styles.tableCellLast]}>Approved By</Text>
+            <Text style={[styles.tableCell, { width: '6%' }]}>Water Qty</Text>
+            <Text style={[styles.tableCell, { width: '6%' }]}>Chemical Qty</Text>
+            <Text style={[styles.tableCell, { width: '8%' }]}>Batch No</Text>
+            <Text style={[styles.tableCell, { width: '10%' }]}>Remarks</Text>
+            <Text style={[styles.tableCell, { width: '10%' }]}>Done By (Sign and Date)</Text>
+            <Text style={[styles.tableCell, { width: '10%' }, styles.tableCellLast]}>Approved By (Sign and Date)</Text>
           </View>
 
           {/* Data Rows */}
           {data.logs.map((log, index) => (
             <View key={index} style={styles.tableRow}>
-              <Text style={[styles.tableCell, { width: '10%' }]}>{log.date === 'Automatic' || !log.date ? 'Automatic' : log.date}</Text>
-              <Text style={[styles.tableCell, { width: '10%' }]}>{log.time === 'Automatic' || !log.time ? 'Automatic' : log.time}</Text>
-              <Text style={[styles.tableCell, styles.tableCellLeft, { width: '12%' }]}>
+              <Text style={[styles.tableCell, { width: '7%' }]}>{log.date === 'Automatic' || !log.date ? 'Automatic' : log.date}</Text>
+              <Text style={[styles.tableCell, { width: '7%' }]}>{log.time === 'Automatic' || !log.time ? 'Automatic' : log.time}</Text>
+              <Text style={[styles.tableCell, styles.tableCellLeft, { width: '11%' }]}>
                 {log.equipmentName || ''}
               </Text>
-              <Text style={[styles.tableCell, { width: '10%' }]}>
+              <Text style={[styles.tableCell, { width: '9%' }]}>
                 {log.chemicalName || ''}
               </Text>
-              <Text style={[styles.tableCell, { width: '8%' }]}>
-                {log.chemicalPercent !== undefined ? `${log.chemicalPercent}% - Automatic` : ''}
+              <Text style={[styles.tableCell, { width: '7%' }]}>
+                {log.chemicalPercent != null && log.chemicalPercent !== ''
+                  ? `${log.chemicalPercent}%`
+                  : ''}
               </Text>
               <Text style={[styles.tableCell, { width: '9%' }]}>
-                {log.solutionConcentration !== undefined ? `${log.solutionConcentration} %` : ''}
+                {log.solutionConcentration != null && log.solutionConcentration !== ''
+                  ? `${log.solutionConcentration} %`
+                  : ''}
               </Text>
-              <Text style={[styles.tableCell, { width: '7%' }]}>
-                {log.waterQty !== undefined ? `${log.waterQty} L` : ''}
+              <Text style={[styles.tableCell, { width: '6%' }]}>
+                {log.waterQty != null && log.waterQty !== '' ? `${log.waterQty} L` : ''}
               </Text>
-              <Text style={[styles.tableCell, { width: '7%' }]}>
-                {log.chemicalQty !== undefined ? `${log.chemicalQty} G` : ''}
+              <Text style={[styles.tableCell, { width: '6%' }]}>
+                {log.chemicalQty != null && log.chemicalQty !== '' ? `${log.chemicalQty} G` : ''}
               </Text>
-              <Text style={[styles.tableCell, { width: '5%' }]}>
-                {log.remarks || '-'}
+              <Text style={[styles.tableCell, { width: '8%' }]}>
+                {log.batchNo || ''}
               </Text>
-              <Text style={[styles.tableCell, styles.emailCell, { width: '11%' }]}>
-                {log.checkedBy || ''}
+              <Text style={[styles.tableCell, styles.remarksCell, { width: '10%' }]}>
+                {wrapTight(log.remarks || '-', 10)}
               </Text>
-              <Text style={[styles.tableCell, styles.emailCell, { width: '11%' }, styles.tableCellLast]}>
-                {approvedByForRow(log)}
+              <Text style={[styles.tableCell, styles.emailCell, { width: '10%' }]}>
+                {wrapTight(doneByForRow(log), 10)}
               </Text>
-            </View>
-          ))}
-
-          {/* Empty rows for additional entries */}
-          {Array.from({ length: Math.max(0, 10 - data.logs.length) }).map((_, index) => (
-            <View key={`empty-${index}`} style={styles.tableRow}>
-              <Text style={[styles.tableCell, { width: '10%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '10%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '12%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '10%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '8%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '9%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '7%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '7%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '5%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '11%' }]}></Text>
-              <Text style={[styles.tableCell, { width: '11%' }, styles.tableCellLast]}></Text>
+              <Text style={[styles.tableCell, styles.emailCell, { width: '10%' }, styles.tableCellLast]}>
+                {wrapTight(approvedByForRow(log), 10)}
+              </Text>
             </View>
           ))}
         </View>
 
         <View style={styles.footer}>
-          <Text style={styles.footerLine}>Printed By: {data.printedBy || '-'}</Text>
-        </View>
-      </Page>
-
-      {/* DETAILS */}
-      <Page size="A4" style={styles.page}>
-        <PDFHeader />
-        <Text style={styles.detailsTitle}>RAW DATA FOR CHEMICAL MONITORING (DETAILS)</Text>
-        <Text style={styles.subtitle}>Equipment ID: {equipmentId}</Text>
-
-        <View style={styles.table}>
-          <View style={[styles.tableRow, styles.tableHeader]}>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>Date</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>Time</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '14%' }]}>Batch No</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>Done By</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '14%' }]}>Operator</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '14%' }]}>Approved At</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '14%' }]}>Secondary Approved</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }, styles.tableCellLast]}>Comment</Text>
-          </View>
-
-          {data.logs.map((log, index) => (
-            <View key={index} style={styles.tableRow}>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>{log.date || ''}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '10%' }]}>{log.time || ''}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '14%' }]}>{log.batchNo || ''}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }]}>{log.doneBy || ''}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '14%' }]}>{log.operatorName || ''}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '14%' }]}>{log.approvedAt || ''}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '14%' }]}>{log.secondaryApprovedAt || ''}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '12%' }, styles.tableCellLast]}>{log.comment || ''}</Text>
-            </View>
-          ))}
+          <Text style={[styles.footerLine, styles.footerLeft]}>
+            Recording Frequency: {data.recordingFrequency || 'Once in every 01 hour'}
+          </Text>
+          <Text style={[styles.footerLine, styles.footerRight]}>
+            Printed By (Sign and Date): {printedBySignDate}
+          </Text>
         </View>
       </Page>
     </Document>

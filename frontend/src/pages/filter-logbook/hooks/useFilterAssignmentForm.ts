@@ -1,5 +1,6 @@
 import { useCallback, type Dispatch, type SetStateAction } from "react";
 import {
+  equipmentUuidFromFilterAssignmentRow,
   formatFilterSize,
   type FilterAssignmentRow,
   type FilterCategory,
@@ -50,7 +51,7 @@ export function useFilterAssignmentForm<T extends AssignmentFormFields>(options:
         tagInfo: active.tag_info ?? prev.tagInfo,
       }));
       // Prefer equipment UUID: filter_id is omitted from the map when the same filter is on multiple assets.
-      const equipKey = (active.equipment || "").trim();
+      const equipKey = equipmentUuidFromFilterAssignmentRow(active);
       const filterKey = (active.filter_id || "").trim();
       const timingMeta =
         (equipKey ? filterIdToEquipmentInterval.get(equipKey) : undefined) ??

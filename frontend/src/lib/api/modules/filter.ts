@@ -67,12 +67,19 @@ export const filterLogAPI = {
 };
 
 export const filtersDashboardAPI = {
-  getSummary: async (params: { periodType: "week" | "month"; date: string; equipmentId?: string }) => {
+  getSummary: async (params: {
+    periodType: "week" | "month";
+    date: string;
+    equipmentId?: string;
+    dateFrom?: string;
+    dateTo?: string;
+  }) => {
     const response = await api.get("/filter-schedules/dashboard_summary/", {
       params: {
         period_type: params.periodType,
         date: params.date,
         ...(params.equipmentId ? { equipment_id: params.equipmentId } : {}),
+        ...(params.dateFrom && params.dateTo ? { date_from: params.dateFrom, date_to: params.dateTo } : {}),
       },
     });
     return response.data;

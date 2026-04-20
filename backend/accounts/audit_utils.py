@@ -10,6 +10,10 @@ logger = logging.getLogger(__name__)
 def log_user_activity_event(
     event_type,
     target_user,
+    *,
+    performed_by=None,
+    detail="",
+    attempted_email=None,
     ip_address=None,
     user_agent=None,
     created_at=None,
@@ -18,8 +22,11 @@ def log_user_activity_event(
     Record a user lifecycle event in user activity logs.
 
     Args:
-        event_type: One of user_created, password_changed, user_locked, user_unlocked.
-        target_user: The affected user.
+        event_type: e.g. user_created, password_changed, role_changed, access_scope_changed.
+        target_user: The affected user (may be None only for events that do not target a user row).
+        performed_by: Optional actor (e.g. admin who edited another user).
+        detail: Optional short or JSON text (role before/after, scope ids, etc.).
+        attempted_email: For failed-login style rows when target_user is unset.
         ip_address: Optional client IP from request.
         user_agent: Optional user-agent from request.
         created_at: Optional timestamp override for backfill.
@@ -31,8 +38,13 @@ def log_user_activity_event(
             "user": target_user,
             "event_type": event_type,
             "ip_address": ip_address,
-            "user_agent": user_agent,
+            "user_agent": user_agent or "",
+            "detail": detail or "",
         }
+        if performed_by is not None and getattr(performed_by, "is_authenticated", False):
+            payload["performed_by"] = performed_by
+        if attempted_email is not None:
+            payload["attempted_email"] = (attempted_email or "")[:254]
         if created_at is not None:
             payload["created_at"] = created_at
         UserActivityLog.objects.create(**payload)

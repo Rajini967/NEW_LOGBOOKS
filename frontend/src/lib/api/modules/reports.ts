@@ -47,19 +47,94 @@ export const reportsAPI = {
   listUserActivity: async (params?: {
     from_date?: string;
     to_date?: string;
+    from_datetime?: string;
+    to_datetime?: string;
     user?: string;
     event_type?: string;
   }) => {
-    const response = await api.get("/reports/user-activity/", { params });
-    if (response.data.results) {
-      return response.data.results;
+    const fetchActivityPages = async (query?: {
+      from_date?: string;
+      to_date?: string;
+      from_datetime?: string;
+      to_datetime?: string;
+      user?: string;
+      event_type?: string;
+    }) => {
+      const first = await api.get("/reports/user-activity/", { params: query });
+      if (!first.data || !first.data.results) {
+        return Array.isArray(first.data) ? first.data : [];
+      }
+
+      const allRows = Array.isArray(first.data.results) ? [...first.data.results] : [];
+      let nextUrl: string | null = typeof first.data.next === "string" ? first.data.next : null;
+
+      while (nextUrl) {
+        const page = await api.get(nextUrl);
+        if (Array.isArray(page.data?.results)) {
+          allRows.push(...page.data.results);
+        }
+        nextUrl = typeof page.data?.next === "string" ? page.data.next : null;
+      }
+      return allRows;
+    };
+
+    // "All" should contain every supported event category.
+    if (!params?.event_type) {
+      const allEventTypes = [
+        "manual_login",
+        "manual_logout",
+        "auto_logout",
+        "login_failed_blank_email",
+        "login_failed_blank_password",
+        "login_failed_invalid_password",
+        "login_failed_unknown_email",
+        "login_failed_account_locked",
+        "login_failed_inactive_user",
+        "user_created",
+        "password_changed",
+        "password_reuse_rejected",
+        "user_locked",
+        "user_unlocked",
+        "role_changed",
+        "access_scope_changed",
+        // Legacy DB rows only (no longer emitted or offered in filters)
+        "user_groups_changed",
+        // Backward-compatible legacy values
+        "login",
+        "logout",
+      ] as const;
+
+      const chunks = await Promise.all(
+        allEventTypes.map((eventType) =>
+          fetchActivityPages({
+            ...params,
+            event_type: eventType,
+          }),
+        ),
+      );
+
+      const unique = new Map<string, Record<string, unknown>>();
+      for (const rows of chunks) {
+        for (const row of rows as Array<Record<string, unknown>>) {
+          const key = String(row.id ?? "");
+          if (!key) continue;
+          unique.set(key, row);
+        }
+      }
+
+      return Array.from(unique.values()).sort((a, b) =>
+        String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")),
+      );
     }
-    return Array.isArray(response.data) ? response.data : [];
+
+    return fetchActivityPages(params);
   },
 
   listAuditEvents: async (params?: {
     from_date?: string;
     to_date?: string;
+    from_datetime?: string;
+    to_datetime?: string;
     user?: string;
     object_type?: string;
     object_id?: string;

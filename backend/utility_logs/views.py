@@ -7,6 +7,7 @@ from reports.utils import log_audit_event
 from .models import UtilityLog
 from .serializers import UtilityLogSerializer
 from accounts.permissions import CanLogEntries, CanApproveReports
+from core.equipment_scope import assert_user_can_access_equipment, filter_queryset_by_equipment_scope
 
 
 class UtilityLogViewSet(viewsets.ModelViewSet):
@@ -14,6 +15,10 @@ class UtilityLogViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     serializer_class = UtilityLogSerializer
     queryset = UtilityLog.objects.all()
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        return filter_queryset_by_equipment_scope(qs, self.request.user)
     
     def get_permissions(self):
         """Different permissions for different actions."""
@@ -25,6 +30,9 @@ class UtilityLogViewSet(viewsets.ModelViewSet):
     
     def perform_create(self, serializer):
         """Set operator when creating a log."""
+        assert_user_can_access_equipment(
+            self.request.user, serializer.validated_data.get("equipment_id")
+        )
         log = serializer.save(
             operator=self.request.user,
             operator_name=self.request.user.name or self.request.user.email
@@ -54,6 +62,7 @@ class UtilityLogViewSet(viewsets.ModelViewSet):
     def approve(self, request, pk=None):
         """Approve or reject a utility log."""
         log = self.get_object()
+        previous_status = log.status
         action_type = request.data.get('action', 'approve')  # 'approve' or 'reject'
         remarks = request.data.get('remarks', '')
         
@@ -73,6 +82,17 @@ class UtilityLogViewSet(viewsets.ModelViewSet):
         if remarks:
             log.remarks = remarks
         log.save()
+
+        log_audit_event(
+            user=request.user,
+            event_type="log_approved" if action_type == "approve" else "log_rejected",
+            object_type="utility_log",
+            object_id=str(log.id),
+            field_name="status",
+            old_value=previous_status,
+            new_value=log.status,
+            extra={"remarks": remarks} if remarks else {},
+        )
         
         serializer = self.get_serializer(log)
         return Response(serializer.data)

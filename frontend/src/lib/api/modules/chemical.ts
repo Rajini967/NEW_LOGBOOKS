@@ -155,6 +155,8 @@ export const chemicalDashboardAPI = {
     date: string;
     equipmentName?: string | null;
     chemicalName?: string | null;
+    dateFrom?: string;
+    dateTo?: string;
   }) => {
     const response = await api.get("/chemical-preps/dashboard_summary/", {
       params: {
@@ -162,6 +164,7 @@ export const chemicalDashboardAPI = {
         date: params.date,
         ...(params.equipmentName ? { equipment_name: params.equipmentName } : {}),
         ...(params.chemicalName ? { chemical_name: params.chemicalName } : {}),
+        ...(params.dateFrom && params.dateTo ? { date_from: params.dateFrom, date_to: params.dateTo } : {}),
       },
     });
     return response.data;
@@ -172,6 +175,8 @@ export const chemicalDashboardAPI = {
     equipmentName?: string | null;
     chemicalName?: string | null;
     days?: number;
+    dateFrom?: string;
+    dateTo?: string;
   }) => {
     const response = await api.get("/chemical-preps/dashboard_series/", {
       params: {
@@ -180,6 +185,7 @@ export const chemicalDashboardAPI = {
         ...(params.equipmentName ? { equipment_name: params.equipmentName } : {}),
         ...(params.chemicalName ? { chemical_name: params.chemicalName } : {}),
         ...(params.days != null ? { days: params.days } : {}),
+        ...(params.dateFrom && params.dateTo ? { date_from: params.dateFrom, date_to: params.dateTo } : {}),
       },
     });
     return response.data;

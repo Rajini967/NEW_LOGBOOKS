@@ -6,8 +6,9 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import ValidationError
 from core.log_slot_utils import get_interval_for_equipment, get_slot_range
-from reports.utils import log_audit_event, log_limit_change
+from reports.utils import log_audit_event, log_limit_change, is_redundant_correction_status_audit
 from reports.services import create_utility_report_for_log
+from core.equipment_scope import filter_queryset_by_equipment_scope, assert_user_can_access_equipment
 from .models import CompressorLog
 from .serializers import CompressorLogSerializer
 from accounts.permissions import CanLogEntries, CanApproveReports, IsSuperAdmin, forbid_manager_rejecting_reading
@@ -23,6 +24,7 @@ class CompressorLogViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = super().get_queryset()
+        qs = filter_queryset_by_equipment_scope(qs, self.request.user)
         if self.action != 'list':
             return qs
         date_from = self.request.query_params.get('date_from')
@@ -60,6 +62,9 @@ class CompressorLogViewSet(viewsets.ModelViewSet):
     
     def perform_create(self, serializer):
         """Set operator when creating a log."""
+        assert_user_can_access_equipment(
+            self.request.user, serializer.validated_data.get("equipment_id")
+        )
         log = serializer.save(
             operator=self.request.user,
             operator_name=self.request.user.name or self.request.user.email
@@ -182,6 +187,8 @@ class CompressorLogViewSet(viewsets.ModelViewSet):
             after = getattr(new_log, field)
             if before == after:
                 continue
+            if is_redundant_correction_status_audit(field, before, after):
+                continue
             extra = dict(extra_base)
             extra["field_label"] = field
             log_limit_change(
@@ -202,6 +209,7 @@ class CompressorLogViewSet(viewsets.ModelViewSet):
     def approve(self, request, pk=None):
         """Approve or reject a compressor log. Handles primary approval, secondary approval (after correction), and reject."""
         log = self.get_object()
+        previous_status = log.status
         action_type = request.data.get('action', 'approve')
         remarks = (request.data.get('remarks') or '').strip()
         forbid_manager_rejecting_reading(request, action_type)
@@ -254,6 +262,7 @@ class CompressorLogViewSet(viewsets.ModelViewSet):
                 field_name="status",
                 old_value=previous_status,
                 new_value="rejected",
+                extra={"remarks": remarks} if remarks else {},
             )
         else:
             return Response(
@@ -267,6 +276,18 @@ class CompressorLogViewSet(viewsets.ModelViewSet):
         if remarks:
             log.comment = remarks
         log.save()
+
+        if action_type == "approve" and log.status == "approved":
+            log_audit_event(
+                user=request.user,
+                event_type="log_approved",
+                object_type="compressor_log",
+                object_id=str(log.id),
+                field_name="status",
+                old_value=previous_status,
+                new_value="approved",
+                extra={"remarks": remarks} if remarks else {},
+            )
 
         if action_type == 'approve' and log.status == 'approved':
             create_utility_report_for_log(

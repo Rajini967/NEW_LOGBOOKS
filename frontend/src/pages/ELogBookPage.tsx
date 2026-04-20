@@ -97,7 +97,6 @@ interface ELogBook {
   coolingTowerFanChemicalName?: string;
   coolingTowerFanChemicalQtyKg?: number;
   operatorSign?: string;
-  verifiedBy?: string;
   foPreHeaterTemp?: number;
   stackTemperature?: number;
   boilerSteamPressure?: number;
@@ -300,7 +299,6 @@ export default function ELogBookPage() {
     coolingTowerFanChemicalName: '',
     coolingTowerFanChemicalQtyKg: '',
     operatorSign: '',
-    verifiedBy: '',
     // Compressor fields
     compressorSupplyTemp: '',
     compressorReturnTemp: '',
@@ -741,7 +739,6 @@ export default function ELogBookPage() {
           coolingTowerFanChemicalName: log.cooling_tower_fan_chemical_name,
           coolingTowerFanChemicalQtyKg: log.cooling_tower_fan_chemical_qty_kg,
           operatorSign: log.operator_sign,
-          verifiedBy: log.verified_by,
           remarks: log.remarks || '',
           comment: log.comment || '',
           checkedBy: log.operator_name,
@@ -1184,7 +1181,6 @@ export default function ELogBookPage() {
           activity_from_time: maintenanceTimings.fromTime || undefined,
           activity_to_time: maintenanceTimings.toTime || undefined,
           operator_sign: formData.operatorSign || undefined,
-          verified_by: formData.verifiedBy || undefined,
           remarks: formData.remarks || undefined,
           cooling_tower_pump_status: coolingTowerPumpStatus || undefined,
           chilled_water_pump_status: chilledWaterPumpStatus || undefined,
@@ -1329,7 +1325,6 @@ export default function ELogBookPage() {
         coolingTowerFanChemicalName: '',
         coolingTowerFanChemicalQtyKg: '',
         operatorSign: '',
-        verifiedBy: '',
         compressorSupplyTemp: '',
         compressorReturnTemp: '',
         compressorPressure: '',
@@ -1487,6 +1482,20 @@ export default function ELogBookPage() {
     const log = logs.find((l) => l.id === id);
     if (!log) return;
 
+    const isMaintenanceOrShutdown =
+      log.activity_type === 'maintenance' || log.activity_type === 'shutdown';
+    if (isMaintenanceOrShutdown && !editedMaintenanceLogIds.has(id)) {
+      toast.error('Please edit this maintenance/shutdown entry first, then reject.');
+      return;
+    }
+    const requiresReadingsBeforeDecision =
+      !isMaintenanceOrShutdown &&
+      (log.equipmentType === 'chiller' || log.equipmentType === 'boiler' || log.equipmentType === 'chemical');
+    if (requiresReadingsBeforeDecision && !viewedReadingsLogIds.has(id)) {
+      toast.error('Please click View Readings before rejecting this entry.');
+      return;
+    }
+
     // Prevent operator from attempting rejection – show same message as backend
     if (log.operator_id && user?.id && log.operator_id === user.id) {
       toast.error(
@@ -1569,7 +1578,6 @@ export default function ELogBookPage() {
       coolingTowerFanChemicalQtyKg:
         log.coolingTowerFanChemicalQtyKg != null ? String(log.coolingTowerFanChemicalQtyKg) : '',
       operatorSign: log.operatorSign || '',
-      verifiedBy: log.verifiedBy || '',
       remarks: log.remarks || '',
       date: log.date || '',
       time: log.time || '',
@@ -1720,7 +1728,6 @@ export default function ELogBookPage() {
         ? [{ key: 'coolingTowerBlowdownTimeMin', label: 'Cooling tower blow down time (minutes)', numeric: true } as const]
         : []),
       { key: 'operatorSign', label: 'Operator Sign & Date' },
-      { key: 'verifiedBy', label: 'Verified By (Sign & Date)' },
     ];
 
     for (const field of requiredFields) {
@@ -2013,15 +2020,13 @@ export default function ELogBookPage() {
                   setEntryToleranceMinutes('');
                   return;
                 }
-                // For new entries, auto-fill operator/verified fields.
+                // For new entries, auto-fill operator sign field.
                 if (open && !editingLogId) {
                   const now = new Date();
                   const operatorLabel = user?.name || user?.email || 'Operator';
-                  const verifierLabel = user?.name || user?.email || 'Supervisor';
                   setFormData((prev) => ({
                     ...prev,
                     operatorSign: `${operatorLabel} - ${format(now, 'dd/MM/yyyy HH:mm')}`,
-                    verifiedBy: `${verifierLabel} - ${format(now, 'dd/MM/yyyy HH:mm')}`,
                   }));
                 }
               }}
@@ -2089,7 +2094,6 @@ export default function ELogBookPage() {
                           coolingTowerChemicalName: '',
                           coolingTowerChemicalQtyPerDay: '',
                           operatorSign: '',
-                          verifiedBy: '',
                           compressorSupplyTemp: '',
                           compressorReturnTemp: '',
                           compressorPressure: '',
@@ -3190,22 +3194,6 @@ export default function ELogBookPage() {
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-4 mt-6">
-                        <div className="space-y-2">
-                          <Label>Verified By (Sign & Date)</Label>
-                          <Input
-                            type="text"
-                            value={formData.verifiedBy}
-                            onChange={(e) =>
-                              setFormData({
-                                ...formData,
-                                verifiedBy: e.target.value,
-                              })
-                            }
-                            placeholder="e.g., Supervisor name & date"
-                          />
-                        </div>
-                      </div>
                     </div>
                   </fieldset>
                   </>

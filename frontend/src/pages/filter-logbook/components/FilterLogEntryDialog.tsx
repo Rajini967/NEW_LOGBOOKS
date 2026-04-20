@@ -186,7 +186,7 @@ export function FilterLogEntryDialog(props: FilterLogEntryDialogProps) {
                 <SelectValue placeholder="Select equipment (loads assigned filter & approved schedules)" />
               </SelectTrigger>
               <SelectContent
-                className="!z-[9999] max-h-60 max-w-[min(100vw-2rem,24rem)] overflow-y-auto"
+                className="!z-[9999] max-h-60 overflow-y-auto"
                 position="popper"
               >
                 {equipmentOptions.length === 0 ? (
@@ -205,16 +205,16 @@ export function FilterLogEntryDialog(props: FilterLogEntryDialogProps) {
             <p className="text-xs text-muted-foreground max-w-full break-words">
               {equipmentOptions.length === 0 ? (
                 <>
-                  No eligible equipment yet. Assign a filter in{" "}
-                  <span className="font-medium">Filter Register</span>, then approve{" "}
-                  <span className="font-medium">replacement</span>, <span className="font-medium">cleaning</span>,
-                  and <span className="font-medium">integrity</span> schedules under{" "}
-                  <span className="font-medium">Filter → Schedule approvals</span>.
+                  No equipment with an active filter assignment in your scope. In{" "}
+                  <span className="font-medium">Filter Register</span>, assign a filter to equipment you can
+                  access; then use <span className="font-medium">Filter → Schedule approvals</span> so
+                  replacement, cleaning, and integrity schedules are approved (needed for due-date fields).
                 </>
               ) : (
                 <>
-                  Uses the active assignment and only <span className="font-medium">approved</span> filter
-                  schedules for frequencies and due dates.
+                  Equipment comes from active filter assignments in your scope.{" "}
+                  <span className="font-medium">Approved</span> schedules set maintenance frequencies and due
+                  dates; until then, only basic log fields may be required.
                 </>
               )}
             </p>
@@ -235,7 +235,10 @@ export function FilterLogEntryDialog(props: FilterLogEntryDialogProps) {
                   <SelectTrigger>
                     <SelectValue placeholder="Select area for this equipment" />
                   </SelectTrigger>
-                  <SelectContent className="!z-[9999] max-h-60 overflow-y-auto" position="popper">
+                  <SelectContent
+                    className="!z-[9999] max-h-60 overflow-y-auto"
+                    position="popper"
+                  >
                     {uniqueAreaCategoryKeys.map((k) => (
                       <SelectItem key={k} value={k}>
                         {assignmentAreaCategoryLabel(k)}
@@ -275,7 +278,10 @@ export function FilterLogEntryDialog(props: FilterLogEntryDialogProps) {
                 <SelectTrigger>
                   <SelectValue placeholder="Select filter on this equipment" />
                 </SelectTrigger>
-                <SelectContent className="!z-[9999] max-h-60 overflow-y-auto" position="popper">
+                <SelectContent
+                  className="!z-[9999] max-h-60 overflow-y-auto"
+                  position="popper"
+                >
                   {assignmentsForSelectedArea.map((a) => (
                     <SelectItem key={a.id} value={a.id}>
                       {formatAssignmentSelectLabel(a, assignmentsForSelectedArea)}

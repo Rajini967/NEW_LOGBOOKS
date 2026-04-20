@@ -21,6 +21,7 @@ from core.log_slot_utils import (
 from equipment.models import Equipment
 from django.http import Http404
 from uuid import UUID
+from core.equipment_scope import filter_queryset_by_equipment_scope, assert_user_can_access_equipment
 from .models import BoilerLog, BoilerEquipmentLimit, BoilerDashboardConfig
 from .serializers import BoilerLogSerializer, BoilerEquipmentLimitSerializer
 from accounts.permissions import (
@@ -30,7 +31,12 @@ from accounts.permissions import (
     IsSuperAdminOrAdmin,
     forbid_manager_rejecting_reading,
 )
-from reports.utils import log_limit_change, log_audit_event, save_missing_slots_snapshot
+from reports.utils import (
+    log_limit_change,
+    log_audit_event,
+    save_missing_slots_snapshot,
+    is_redundant_correction_status_audit,
+)
 from reports.services import create_utility_report_for_log
 from reports.approval_workflow import (
     ensure_not_operator,
@@ -343,6 +349,7 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = super().get_queryset()
+        qs = filter_queryset_by_equipment_scope(qs, self.request.user)
         if self.action != 'list':
             return qs
         date_from = self.request.query_params.get('date_from')
@@ -371,6 +378,7 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         """Set operator when creating a log."""
         validated = serializer.validated_data
+        assert_user_can_access_equipment(self.request.user, validated.get("equipment_id"))
         equipment_id = validated.get('equipment_id')
         activity_type = validated.get('activity_type') or 'operation'
         timestamp = validated.get('timestamp') or timezone.now()
@@ -425,6 +433,7 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
         validated = serializer.validated_data
         next_timestamp = validated.get("timestamp", instance.timestamp)
         next_equipment_id = validated.get("equipment_id", instance.equipment_id)
+        assert_user_can_access_equipment(self.request.user, next_equipment_id)
         interval, shift_hours = get_interval_for_equipment(next_equipment_id or "", "boiler")
         slot_start, slot_end = get_slot_range(next_timestamp, interval, shift_hours)
         duplicate_exists = (
@@ -837,6 +846,9 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
         period_type = (request.query_params.get('period_type') or 'day').lower()
         if period_type not in ('day', 'month', 'year'):
             return Response({'error': 'period_type must be day, month, or year'}, status=status.HTTP_400_BAD_REQUEST)
+        date_from_str = (request.query_params.get('date_from') or '').strip()
+        date_to_str = (request.query_params.get('date_to') or '').strip()
+        has_custom_range = bool(date_from_str and date_to_str)
         date_str = request.query_params.get('date')
         if not date_str:
             return Response({'error': 'date is required (YYYY-MM-DD)'}, status=status.HTTP_400_BAD_REQUEST)
@@ -846,9 +858,25 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
             return Response({'error': 'date must be YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
         if ref_date > timezone.localdate():
             return Response({'error': 'future date is not allowed'}, status=status.HTTP_400_BAD_REQUEST)
+        if has_custom_range:
+            try:
+                range_start_d = datetime.strptime(date_from_str[:10], '%Y-%m-%d').date()
+                range_end_d = datetime.strptime(date_to_str[:10], '%Y-%m-%d').date()
+            except ValueError:
+                return Response({'error': 'date_from/date_to must be YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
+            if range_start_d > range_end_d:
+                return Response({'error': 'date_from must be <= date_to'}, status=status.HTTP_400_BAD_REQUEST)
+            today_d = timezone.localdate()
+            if range_end_d > today_d:
+                return Response({'error': 'future date is not allowed'}, status=status.HTTP_400_BAD_REQUEST)
+            ref_date = range_end_d
         equipment_id = request.query_params.get('equipment_id', '').strip() or None
 
-        if period_type == 'day':
+        if has_custom_range:
+            period_start = timezone.make_aware(datetime.combine(range_start_d, datetime.min.time()))
+            period_end = timezone.make_aware(datetime.combine(range_end_d, datetime.max.time().replace(microsecond=999999)))
+            days_in_period = (range_end_d - range_start_d).days + 1
+        elif period_type == 'day':
             period_start = timezone.make_aware(datetime.combine(ref_date, datetime.min.time()))
             period_end = timezone.make_aware(datetime.combine(ref_date, datetime.max.time().replace(microsecond=999999)))
             days_in_period = 1
@@ -865,7 +893,17 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
         period_start_d = period_start.date() if hasattr(period_start, 'date') else period_start
         period_end_d = period_end.date() if hasattr(period_end, 'date') else period_end
 
-        if period_type == 'day':
+        if has_custom_range:
+            (
+                actual_power_kwh,
+                actual_diesel,
+                actual_furnace_oil,
+                actual_brigade,
+                actual_steam_kg_hr,
+                by_equipment_power,
+            ) = _actual_boiler_for_date_range(period_start_d, period_end_d, equipment_id)
+            actual_oil_liters = actual_diesel + actual_furnace_oil
+        elif period_type == 'day':
             actual_power_kwh, actual_diesel, actual_furnace_oil, actual_brigade, actual_steam_kg_hr = _actual_boiler_for_date(
                 ref_date, equipment_id
             )
@@ -915,7 +953,9 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
                 if eid not in by_equipment_power:
                     by_equipment_power[eid] = _actual_boiler_for_date(ref_date, eid)[0]
 
-        if period_type == 'day':
+        if has_custom_range:
+            limit_lookup_date = period_end_d
+        elif period_type == 'day':
             limit_lookup_date = ref_date
         elif period_type == 'month':
             _, last_day_m = calendar.monthrange(ref_date.year, ref_date.month)
@@ -931,11 +971,9 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
         by_equipment = []
         for eid in limit_equipment_ids:
             limit_row = _get_boiler_limit_for_display(eid, limit_lookup_date)
-            daily_kw = (limit_row.daily_power_limit_kw or 0) if limit_row else 0
-            if period_type == 'day':
-                limit_for_period = daily_kw
-            else:
-                limit_for_period = _projected_boiler_exact_dates(period_start_d, period_end_d, eid)[0]
+            # Keep by-equipment limits aligned with projected summary logic for all periods,
+            # including day: use only exact configured dates in the selected range.
+            limit_for_period = _projected_boiler_exact_dates(period_start_d, period_end_d, eid)[0]
             limit_power_kwh += limit_for_period
             limit_diesel += (getattr(limit_row, 'daily_diesel_limit_liters', None) or 0) * days_in_period if limit_row else 0
             limit_furnace_oil += (getattr(limit_row, 'daily_furnace_oil_limit_liters', None) or 0) * days_in_period if limit_row else 0
@@ -1019,6 +1057,8 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
         utilization_pct = (actual_power_kwh / limit_power_kwh * 100) if limit_power_kwh > 0 else None
         payload['utilization_pct'] = round(utilization_pct, 2) if utilization_pct is not None else None
         payload['kwh_per_day'] = round(actual_power_kwh / days_in_period, 2) if days_in_period else 0
+        if has_custom_range:
+            payload['period_type'] = 'custom'
         return Response(payload)
 
     @action(detail=False, methods=['get'], url_path='dashboard_series')
@@ -1031,6 +1071,9 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
         period_type = (request.query_params.get('period_type') or 'day').lower()
         if period_type not in ('day', 'month', 'year'):
             return Response({'error': 'period_type must be day, month, or year'}, status=status.HTTP_400_BAD_REQUEST)
+        date_from_str = (request.query_params.get('date_from') or '').strip()
+        date_to_str = (request.query_params.get('date_to') or '').strip()
+        has_custom_range = bool(date_from_str and date_to_str)
         date_str = request.query_params.get('date')
         if not date_str:
             return Response({'error': 'date is required (YYYY-MM-DD)'}, status=status.HTTP_400_BAD_REQUEST)
@@ -1038,6 +1081,17 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
             ref_date = datetime.strptime(date_str.strip()[:10], '%Y-%m-%d').date()
         except ValueError:
             return Response({'error': 'date must be YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
+        if has_custom_range:
+            try:
+                range_start_d = datetime.strptime(date_from_str[:10], '%Y-%m-%d').date()
+                range_end_d = datetime.strptime(date_to_str[:10], '%Y-%m-%d').date()
+            except ValueError:
+                return Response({'error': 'date_from/date_to must be YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
+            if range_start_d > range_end_d:
+                return Response({'error': 'date_from must be <= date_to'}, status=status.HTTP_400_BAD_REQUEST)
+            if range_end_d > timezone.localdate():
+                return Response({'error': 'future date is not allowed'}, status=status.HTTP_400_BAD_REQUEST)
+            ref_date = range_end_d
         equipment_id = request.query_params.get('equipment_id', '').strip() or None
         days_param = request.query_params.get('days')
         series_days = int(days_param) if days_param and str(days_param).isdigit() else 1
@@ -1047,7 +1101,52 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
 
         series = []
         try:
-            if period_type == 'day':
+            if has_custom_range:
+                (
+                    actual_power_kwh,
+                    actual_diesel,
+                    actual_furnace_oil,
+                    actual_brigade,
+                    actual_steam_kg_hr,
+                    _,
+                ) = _actual_boiler_for_date_range(range_start_d, range_end_d, equipment_id)
+                rate_limit = _get_boiler_rate_row_for_scope(equipment_id, limit_eids, range_end_d)
+                power_rate = float(rate_limit.electricity_rate_rs_per_kwh or 0) if rate_limit else 0
+                diesel_rate = float(getattr(rate_limit, 'diesel_rate_rs_per_liter', None) or 0) if rate_limit else 0
+                fo_rate = float(getattr(rate_limit, 'furnace_oil_rate_rs_per_liter', None) or 0) if rate_limit else 0
+                brigade_rate = float(getattr(rate_limit, 'brigade_rate_rs_per_kg', None) or 0) if rate_limit else 0
+                proj_power, proj_diesel, proj_fo, proj_br, proj_steam = _projected_boiler_exact_dates(
+                    range_start_d, range_end_d, equipment_id
+                )
+                if proj_power == 0:
+                    actual_cost = 0.0
+                    proj_cost = 0.0
+                else:
+                    actual_cost = round(
+                        actual_power_kwh * power_rate
+                        + actual_diesel * diesel_rate
+                        + actual_furnace_oil * fo_rate
+                        + actual_brigade * brigade_rate,
+                        2,
+                    )
+                    proj_cost = _projected_boiler_cost_exact_dates(range_start_d, range_end_d, equipment_id)
+                series.append({
+                    'date': range_start_d.isoformat(),
+                    'label': f"{range_start_d.strftime('%d %b')} - {range_end_d.strftime('%d %b')}",
+                    'actual_power_kwh': round(actual_power_kwh, 2),
+                    'projected_power_kwh': round(proj_power, 2),
+                    'actual_cost_rs': actual_cost,
+                    'projected_cost_rs': proj_cost,
+                    'actual_diesel_liters': round(actual_diesel, 2),
+                    'projected_diesel_liters': round(proj_diesel, 2),
+                    'actual_furnace_oil_liters': round(actual_furnace_oil, 2),
+                    'projected_furnace_oil_liters': round(proj_fo, 2),
+                    'actual_brigade_kg': round(actual_brigade, 2),
+                    'projected_brigade_kg': round(proj_br, 2),
+                    'actual_steam_kg_hr': round(actual_steam_kg_hr * ((range_end_d - range_start_d).days + 1) * 24, 2),
+                    'projected_steam_kg_hr': round(proj_steam, 2),
+                })
+            elif period_type == 'day':
                 for i in range(series_days - 1, -1, -1):
                     d = ref_date - timedelta(days=i)
                     label = d.strftime('%d %b')
@@ -1302,6 +1401,8 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
             after = getattr(new_log, field)
             if before == after:
                 continue
+            if is_redundant_correction_status_audit(field, before, after):
+                continue
             extra = dict(extra_base)
             extra["field_label"] = field
             log_limit_change(
@@ -1322,6 +1423,7 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
     def approve(self, request, pk=None):
         """Approve or reject a boiler log. Handles primary approval, secondary approval (after correction), and reject."""
         log = self.get_object()
+        previous_status = log.status
         action_type = normalize_approval_action(request.data.get('action'))
         remarks = (request.data.get('remarks') or '').strip()
         require_rejection_comment(action_type, remarks)
@@ -1356,6 +1458,7 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
                 field_name="status",
                 old_value=previous_status,
                 new_value="rejected",
+                extra={"remarks": remarks} if remarks else {},
             )
         if action_type == 'reject' or (action_type == 'approve' and log.status == 'approved'):
             log.approved_by = request.user
@@ -1363,6 +1466,18 @@ class BoilerLogViewSet(viewsets.ModelViewSet):
         if remarks:
             log.comment = remarks
         log.save()
+
+        if action_type == "approve" and log.status == "approved":
+            log_audit_event(
+                user=request.user,
+                event_type="log_approved",
+                object_type="boiler_log",
+                object_id=str(log.id),
+                field_name="status",
+                old_value=previous_status,
+                new_value="approved",
+                extra={"remarks": remarks} if remarks else {},
+            )
         
         if action_type == 'approve' and log.status == 'approved':
             create_utility_report_for_log(
@@ -1392,7 +1507,7 @@ class BoilerEquipmentLimitViewSet(viewsets.ModelViewSet):
         equipment_id = self.request.query_params.get('equipment_id')
         if equipment_id:
             qs = qs.filter(equipment_id=equipment_id)
-        return qs
+        return filter_queryset_by_equipment_scope(qs, self.request.user)
 
     def get_object(self):
         """

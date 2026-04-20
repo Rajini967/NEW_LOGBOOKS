@@ -18,6 +18,7 @@ from django.core.mail import send_mail
 from django.conf import settings
 from django.db import IntegrityError
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 
 from .models import User, UserRole, PasswordResetToken, hash_reset_token, UserActivityLog, SessionSetting
 from .serializers import (
@@ -54,31 +55,73 @@ class CustomTokenObtainPairView(TokenObtainPairView):
     """
     permission_classes = [AllowAny]
     serializer_class = CustomTokenObtainPairSerializer
-    
+
+    @staticmethod
+    def _record_login_activity(request, event_type, *, user=None, attempted_email=""):
+        try:
+            UserActivityLog.objects.create(
+                user=user,
+                event_type=event_type,
+                attempted_email=(attempted_email or "")[:254],
+                ip_address=request.META.get("REMOTE_ADDR"),
+                user_agent=request.META.get("HTTP_USER_AGENT", ""),
+            )
+        except Exception:
+            pass
+
     def post(self, request, *args, **kwargs):
         email = request.data.get("email")
         password = request.data.get("password")
+
         if email is None or (isinstance(email, str) and not email.strip()):
+            raw_attempt = request.data.get("email")
+            self._record_login_activity(
+                request,
+                "login_failed_blank_email",
+                attempted_email=(str(raw_attempt).strip()[:254] if raw_attempt is not None else ""),
+            )
             return Response(
                 {"error": "Please enter your email."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        normalized_email = User.objects.normalize_email(email)
+        lookup_user = User.all_objects.filter(email=normalized_email).first()
+
         if password is None or (isinstance(password, str) and not password.strip()):
+            self._record_login_activity(
+                request,
+                "login_failed_blank_password",
+                user=lookup_user,
+                attempted_email=normalized_email,
+            )
             return Response(
                 {"error": "Please enter your password."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        normalized_email = User.objects.normalize_email(email)
-        user = User.all_objects.filter(email=normalized_email).first()
+
+        user = lookup_user
         login_data = {**request.data, "email": normalized_email}
         serializer = self.get_serializer(data=login_data)
         if user is not None:
             if user.is_locked():
+                self._record_login_activity(
+                    request,
+                    "login_failed_account_locked",
+                    user=user,
+                    attempted_email=normalized_email,
+                )
                 return Response(
                     {"error": "Account is locked due to too many failed login attempts. Contact an administrator to unlock."},
                     status=status.HTTP_401_UNAUTHORIZED,
                 )
             if not user.is_active or user.is_deleted:
+                self._record_login_activity(
+                    request,
+                    "login_failed_inactive_user",
+                    user=user,
+                    attempted_email=normalized_email,
+                )
                 return Response(
                     {"error": "User account is inactive or deleted."},
                     status=status.HTTP_401_UNAUTHORIZED,
@@ -86,6 +129,12 @@ class CustomTokenObtainPairView(TokenObtainPairView):
             try:
                 serializer.is_valid(raise_exception=True)
             except Exception:
+                self._record_login_activity(
+                    request,
+                    "login_failed_invalid_password",
+                    user=user,
+                    attempted_email=normalized_email,
+                )
                 user.failed_login_attempts += 1
                 if user.failed_login_attempts >= LOCKOUT_THRESHOLD:
                     user.locked_until = timezone.now() + timedelta(minutes=LOCKOUT_DURATION_MINUTES)
@@ -112,12 +161,23 @@ class CustomTokenObtainPairView(TokenObtainPairView):
             try:
                 serializer.is_valid(raise_exception=True)
             except Exception:
+                self._record_login_activity(
+                    request,
+                    "login_failed_unknown_email",
+                    attempted_email=normalized_email,
+                )
                 return Response(
                     {"error": "Invalid credentials. Please check your email and password."},
                     status=status.HTTP_401_UNAUTHORIZED,
                 )
         user = serializer.user
         if not user.is_active or user.is_deleted:
+            self._record_login_activity(
+                request,
+                "login_failed_inactive_user",
+                user=user,
+                attempted_email=normalized_email,
+            )
             return Response(
                 {"error": "User account is inactive or deleted."},
                 status=status.HTTP_401_UNAUTHORIZED,
@@ -128,6 +188,7 @@ class CustomTokenObtainPairView(TokenObtainPairView):
             UserActivityLog.objects.create(
                 user=user,
                 event_type="manual_login",
+                attempted_email="",
                 ip_address=ip_address,
                 user_agent=user_agent,
             )
@@ -277,7 +338,10 @@ class ResetPasswordView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        serializer = ResetPasswordSerializer(data=request.data)
+        serializer = ResetPasswordSerializer(
+            data=request.data,
+            context={"request": request},
+        )
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
 
@@ -342,8 +406,10 @@ class UserViewSet(viewsets.ModelViewSet):
         
         # Super Admin can see all users
         if user.role == UserRole.SUPER_ADMIN:
-            return User.objects.filter(is_deleted=False)
-        
+            return User.objects.filter(is_deleted=False).prefetch_related(
+                "scoped_departments", "scoped_equipment"
+            )
+
         # Admin can see Supervisors, Operators, Managers, and other Admins (not Super Admin)
         if user.role == UserRole.ADMIN:
             return User.objects.filter(
@@ -353,8 +419,8 @@ class UserViewSet(viewsets.ModelViewSet):
                     UserRole.SUPERVISOR,
                     UserRole.OPERATOR,
                     UserRole.MANAGER,
-                ]
-            )
+                ],
+            ).prefetch_related("scoped_departments", "scoped_equipment")
         
         # Others cannot list users
         return User.objects.none()
@@ -400,6 +466,7 @@ class UserViewSet(viewsets.ModelViewSet):
             log_user_activity_event(
                 "user_created",
                 user,
+                performed_by=request.user,
                 ip_address=request.META.get("REMOTE_ADDR"),
                 user_agent=request.META.get("HTTP_USER_AGENT", ""),
             )
@@ -422,6 +489,7 @@ class UserViewSet(viewsets.ModelViewSet):
             log_user_activity_event(
                 "user_unlocked",
                 user,
+                performed_by=request.user,
                 ip_address=request.META.get("REMOTE_ADDR"),
                 user_agent=request.META.get("HTTP_USER_AGENT", ""),
             )
@@ -486,7 +554,10 @@ class UserViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def me(self, request):
         """Get current user information."""
-        serializer = self.get_serializer(request.user)
+        user = User.objects.prefetch_related(
+            "scoped_departments", "scoped_equipment"
+        ).get(pk=request.user.pk)
+        serializer = UserSerializer(user)
         return Response(serializer.data)
 
 
@@ -558,6 +629,21 @@ class UserReportViewSet(viewsets.ReadOnlyModelViewSet):
         return qs.order_by("-created_at")
 
 
+def _parse_user_activity_query_datetime(value):
+    """Parse ISO datetime from query string; return timezone-aware datetime or None."""
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    dt = parse_datetime(raw.replace(" ", "T"))
+    if dt is None:
+        return None
+    if timezone.is_naive(dt):
+        dt = timezone.make_aware(dt, timezone.get_current_timezone())
+    return dt
+
+
 class UserActivityReportViewSet(viewsets.ReadOnlyModelViewSet):
     """
     Read-only viewset for user login/logout activity reports.
@@ -575,20 +661,26 @@ class UserActivityReportViewSet(viewsets.ReadOnlyModelViewSet):
         if user.role not in [UserRole.SUPERVISOR, UserRole.ADMIN, UserRole.SUPER_ADMIN]:
             return UserActivityLog.objects.none()
 
-        qs = UserActivityLog.objects.select_related("user")
+        qs = UserActivityLog.objects.select_related("user", "performed_by")
         if user.role != UserRole.SUPER_ADMIN:
             # Non-super-admin users should not see super-admin activity.
             qs = qs.exclude(user__role=UserRole.SUPER_ADMIN)
 
-        # Filters
+        # Filters (datetime bounds take precedence over date-only)
         from_date = self.request.query_params.get("from_date")
         to_date = self.request.query_params.get("to_date")
+        from_dt = _parse_user_activity_query_datetime(self.request.query_params.get("from_datetime"))
+        to_dt = _parse_user_activity_query_datetime(self.request.query_params.get("to_datetime"))
         user_id = self.request.query_params.get("user")
         event_type = self.request.query_params.get("event_type")
 
-        if from_date:
+        if from_dt is not None:
+            qs = qs.filter(created_at__gte=from_dt)
+        elif from_date:
             qs = qs.filter(created_at__date__gte=from_date)
-        if to_date:
+        if to_dt is not None:
+            qs = qs.filter(created_at__lte=to_dt)
+        elif to_date:
             qs = qs.filter(created_at__date__lte=to_date)
         if user_id:
             qs = qs.filter(user_id=user_id)

@@ -17,6 +17,8 @@ from accounts.permissions import (
 )
 from reports.utils import log_audit_event, log_entity_update_changes
 
+from core.equipment_scope import filter_department_queryset, filter_equipment_master_queryset
+
 from .models import Department, EquipmentCategory, Equipment
 from .serializers import (
     DepartmentSerializer,
@@ -33,6 +35,10 @@ class DepartmentViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     serializer_class = DepartmentSerializer
     queryset = Department.objects.all().order_by("name")
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        return filter_department_queryset(qs, self.request.user)
 
     def get_permissions(self):
         if self.action == "destroy":
@@ -149,7 +155,7 @@ class EquipmentViewSet(viewsets.ModelViewSet):
         if status_param and status_param.lower() == "approved":
             qs = qs.filter(status="approved")
 
-        return qs
+        return filter_equipment_master_queryset(qs, self.request.user)
 
     def get_permissions(self):
         if self.action == "destroy":
@@ -415,6 +421,7 @@ class EquipmentViewSet(viewsets.ModelViewSet):
 
         creator_id = getattr(equipment.created_by, "id", None)
         if action_type == "approve":
+            previous_eq_status = equipment.status
             if creator_id and creator_id == request.user.id:
                 raise ValidationError(
                     {"detail": ["The equipment entry must be approved by a different user than the creator."]}
@@ -457,6 +464,7 @@ class EquipmentViewSet(viewsets.ModelViewSet):
                 field_name="status",
                 old_value=previous_status,
                 new_value="rejected",
+                extra={"remarks": remarks} if remarks else {},
             )
 
         if action_type == "reject" or (action_type == "approve" and equipment.status == "approved"):
@@ -482,7 +490,9 @@ class EquipmentViewSet(viewsets.ModelViewSet):
                 object_type="equipment",
                 object_id=str(equipment.id),
                 field_name="status",
+                old_value=previous_eq_status,
                 new_value=equipment.status,
+                extra={"remarks": remarks} if remarks else {},
             )
 
         serializer = self.get_serializer(equipment)

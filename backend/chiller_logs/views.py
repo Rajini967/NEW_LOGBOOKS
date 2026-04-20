@@ -22,7 +22,12 @@ from accounts.permissions import (
     IsSuperAdminOrAdmin,
     forbid_manager_rejecting_reading,
 )
-from reports.utils import log_limit_change, log_audit_event, save_missing_slots_snapshot
+from reports.utils import (
+    log_limit_change,
+    log_audit_event,
+    save_missing_slots_snapshot,
+    is_redundant_correction_status_audit,
+)
 from reports.services import create_utility_report_for_log
 from reports.approval_workflow import (
     ensure_not_operator,
@@ -38,6 +43,15 @@ import calendar
 from equipment.models import Equipment
 from django.http import Http404
 from uuid import UUID
+from core.equipment_scope import (
+    assert_user_can_access_equipment,
+    filter_equipment_master_queryset,
+    filter_queryset_by_equipment_scope,
+)
+
+
+def _scoped_chiller_qs(user):
+    return filter_queryset_by_equipment_scope(ChillerLog.objects.all(), user)
 
 CREATOR_ONLY_REJECTED_EDIT_MESSAGE = "Only the original creator can edit/correct a rejected entry."
 
@@ -345,6 +359,7 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = super().get_queryset()
+        qs = filter_queryset_by_equipment_scope(qs, self.request.user)
         if self.action != 'list':
             return qs
         date_from = self.request.query_params.get('date_from')
@@ -373,6 +388,7 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         """Set operator and apply daily pump/fan status logic with audit trail."""
         validated = serializer.validated_data
+        assert_user_can_access_equipment(self.request.user, validated.get("equipment_id"))
         equipment_id = validated.get('equipment_id')
         activity_type = validated.get('activity_type') or 'operation'
         timestamp = validated.get('timestamp') or timezone.now()
@@ -527,6 +543,7 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
         validated = serializer.validated_data
         next_timestamp = validated.get("timestamp", instance.timestamp)
         next_equipment_id = validated.get("equipment_id", instance.equipment_id)
+        assert_user_can_access_equipment(self.request.user, next_equipment_id)
         interval, shift_hours = get_interval_for_equipment(next_equipment_id or "", "chiller")
         slot_start, slot_end = get_slot_range(next_timestamp, interval, shift_hours)
         duplicate_exists = (
@@ -600,7 +617,7 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
         first_day_start, _ = get_slot_day_bounds(days[0])
         _, last_day_end = get_slot_day_bounds(days[-1])
 
-        range_qs = ChillerLog.objects.filter(timestamp__gte=first_day_start, timestamp__lt=last_day_end)
+        range_qs = _scoped_chiller_qs(request.user).filter(timestamp__gte=first_day_start, timestamp__lt=last_day_end)
         if equipment_id_filter:
             range_qs = range_qs.filter(equipment_id=equipment_id_filter)
 
@@ -657,7 +674,7 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
         # The start day itself still runs slot math (earlier hours can show as missed; downtime
         # timestamps above cover the maintenance window).
         open_maintenance_suppress_from = {}
-        open_ms_qs = ChillerLog.objects.filter(
+        open_ms_qs = _scoped_chiller_qs(request.user).filter(
             activity_type__in=["maintenance", "shutdown"],
             status__in=["draft", "pending", "pending_secondary_approval"],
         )
@@ -674,9 +691,12 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
                 open_maintenance_suppress_from[eid] = start_d
 
         equipment_name_map = {}
-        chiller_equipment_rows = Equipment.objects.filter(
-            is_active=True,
-            category__name__icontains="chiller",
+        chiller_equipment_rows = filter_equipment_master_queryset(
+            Equipment.objects.filter(
+                is_active=True,
+                category__name__icontains="chiller",
+            ),
+            request.user,
         ).values("equipment_number", "name", "site_id")
         for row in chiller_equipment_rows:
             eq_number = (row.get("equipment_number") or "").strip()
@@ -689,7 +709,8 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
 
         equipment_ids = set()
         historical_equipment_ids = set(
-            ChillerLog.objects.exclude(equipment_id__isnull=True)
+            _scoped_chiller_qs(request.user)
+            .exclude(equipment_id__isnull=True)
             .exclude(equipment_id="")
             .values_list("equipment_id", flat=True)
             .distinct()
@@ -702,7 +723,7 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
             equipment_ids = {equipment_id_filter}
 
         global_last_reading = {}
-        last_qs = ChillerLog.objects.exclude(equipment_id__isnull=True).exclude(equipment_id="")
+        last_qs = _scoped_chiller_qs(request.user).exclude(equipment_id__isnull=True).exclude(equipment_id="")
         if equipment_id_filter:
             last_qs = last_qs.filter(equipment_id=equipment_id_filter)
         for row in last_qs.values("equipment_id", "timestamp").order_by("equipment_id", "-timestamp"):
@@ -863,7 +884,8 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
         if not log.equipment_id or not log.timestamp:
             return False
         first_log = (
-            ChillerLog.objects.filter(
+            _scoped_chiller_qs(self.request.user)
+            .filter(
                 equipment_id=log.equipment_id,
                 timestamp__date=log.timestamp.date(),
             )
@@ -911,7 +933,6 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
             'daily_water_consumption_ct2_liters',
             'daily_water_consumption_ct3_liters',
             'operator_sign',
-            'verified_by',
             'remarks',
             'comment',
             'status',
@@ -981,6 +1002,9 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
         period_type = (request.query_params.get('period_type') or 'day').lower()
         if period_type not in ('day', 'month', 'year'):
             return Response({'error': 'period_type must be day, month, or year'}, status=status.HTTP_400_BAD_REQUEST)
+        date_from_str = (request.query_params.get('date_from') or '').strip()
+        date_to_str = (request.query_params.get('date_to') or '').strip()
+        has_custom_range = bool(date_from_str and date_to_str)
         date_str = request.query_params.get('date')
         if not date_str:
             return Response({'error': 'date is required (YYYY-MM-DD)'}, status=status.HTTP_400_BAD_REQUEST)
@@ -990,9 +1014,25 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
             return Response({'error': 'date must be YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
         if ref_date > timezone.localdate():
             return Response({'error': 'future date is not allowed'}, status=status.HTTP_400_BAD_REQUEST)
+        if has_custom_range:
+            try:
+                range_start_d = datetime.strptime(date_from_str[:10], '%Y-%m-%d').date()
+                range_end_d = datetime.strptime(date_to_str[:10], '%Y-%m-%d').date()
+            except ValueError:
+                return Response({'error': 'date_from/date_to must be YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
+            if range_start_d > range_end_d:
+                return Response({'error': 'date_from must be <= date_to'}, status=status.HTTP_400_BAD_REQUEST)
+            today_d = timezone.localdate()
+            if range_end_d > today_d:
+                return Response({'error': 'future date is not allowed'}, status=status.HTTP_400_BAD_REQUEST)
+            ref_date = range_end_d
         equipment_id = request.query_params.get('equipment_id', '').strip() or None
 
-        if period_type == 'day':
+        if has_custom_range:
+            period_start = timezone.make_aware(datetime.combine(range_start_d, datetime.min.time()))
+            period_end = timezone.make_aware(datetime.combine(range_end_d, datetime.max.time().replace(microsecond=999999)))
+            days_in_period = (range_end_d - range_start_d).days + 1
+        elif period_type == 'day':
             period_start = timezone.make_aware(datetime.combine(ref_date, datetime.min.time()))
             period_end = timezone.make_aware(datetime.combine(ref_date, datetime.max.time().replace(microsecond=999999)))
             days_in_period = 1
@@ -1010,7 +1050,11 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
         # Actual power: same source as dashboard_series (ManualChillerConsumption + approved ChillerLog)
         period_start_d = period_start.date() if hasattr(period_start, 'date') else period_start
         period_end_d = period_end.date() if hasattr(period_end, 'date') else period_end
-        if period_type == 'day':
+        if has_custom_range:
+            actual_power_kwh, actual_by_equipment = _actual_power_for_date_range(
+                period_start_d, period_end_d, equipment_id
+            )
+        elif period_type == 'day':
             actual_power_kwh = _actual_power_for_date(ref_date, equipment_id)
             if equipment_id:
                 actual_by_equipment = {equipment_id: actual_power_kwh}
@@ -1025,7 +1069,8 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
 
         # Equipment in scope: from ChillerLog or ManualChillerConsumption in period
         log_equipment = set(
-            ChillerLog.objects.filter(
+            _scoped_chiller_qs(request.user)
+            .filter(
                 timestamp__gte=period_start,
                 timestamp__lte=period_end,
             )
@@ -1037,9 +1082,12 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
         manual_equipment = set()
         if ManualChillerConsumption is not None:
             manual_equipment = set(
-                ManualChillerConsumption.objects.filter(
-                    date__gte=period_start_d,
-                    date__lte=period_end_d,
+                filter_queryset_by_equipment_scope(
+                    ManualChillerConsumption.objects.filter(
+                        date__gte=period_start_d,
+                        date__lte=period_end_d,
+                    ),
+                    request.user,
                 ).values_list('equipment_id', flat=True).distinct()
             )
             if equipment_id:
@@ -1056,7 +1104,9 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
         limit_power_kwh = 0.0
         by_equipment = []
         # Use end-of-period for limit lookup so limits with effective_from mid-period apply (matches series; fixes month/year cards)
-        if period_type == 'day':
+        if has_custom_range:
+            limit_lookup_date = period_end_d
+        elif period_type == 'day':
             limit_lookup_date = ref_date
         elif period_type == 'month':
             _, last_day_m = calendar.monthrange(ref_date.year, ref_date.month)
@@ -1064,14 +1114,9 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
         else:
             limit_lookup_date = date(ref_date.year, 12, 31)
         for eid in limit_equipment_ids:
-            if period_type == 'day':
-                limit_row = _get_limit_for_display(eid, limit_lookup_date)
-                daily_kw = (limit_row.daily_power_limit_kw or 0) if limit_row else 0
-                limit_for_period = daily_kw
-            else:
-                # Month/Year by-equipment should align with projected logic:
-                # sum only exact configured date rows in the selected period.
-                limit_for_period = _projected_chiller_power_exact_dates(period_start_d, period_end_d, eid)
+            # Keep by-equipment limits aligned with projected summary logic for all periods,
+            # including day: use only exact configured dates in the selected range.
+            limit_for_period = _projected_chiller_power_exact_dates(period_start_d, period_end_d, eid)
             limit_power_kwh += limit_for_period
             if actual_by_equipment is not None:
                 actual_e = actual_by_equipment.get(eid, 0.0)
@@ -1111,7 +1156,7 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
                 )
 
         payload = {
-            'period_type': period_type,
+            'period_type': 'custom' if has_custom_range else period_type,
             'period_start': period_start.date().isoformat(),
             'period_end': period_end.date().isoformat(),
             'days_in_period': days_in_period,
@@ -1138,6 +1183,9 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
         period_type = (request.query_params.get('period_type') or 'day').lower()
         if period_type not in ('day', 'month', 'year'):
             return Response({'error': 'period_type must be day, month, or year'}, status=status.HTTP_400_BAD_REQUEST)
+        date_from_str = (request.query_params.get('date_from') or '').strip()
+        date_to_str = (request.query_params.get('date_to') or '').strip()
+        has_custom_range = bool(date_from_str and date_to_str)
         date_str = request.query_params.get('date')
         if not date_str:
             return Response({'error': 'date is required (YYYY-MM-DD)'}, status=status.HTTP_400_BAD_REQUEST)
@@ -1147,6 +1195,18 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
             return Response({'error': 'date must be YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
         if ref_date > timezone.localdate():
             return Response({'error': 'future date is not allowed'}, status=status.HTTP_400_BAD_REQUEST)
+        if has_custom_range:
+            try:
+                range_start_d = datetime.strptime(date_from_str[:10], '%Y-%m-%d').date()
+                range_end_d = datetime.strptime(date_to_str[:10], '%Y-%m-%d').date()
+            except ValueError:
+                return Response({'error': 'date_from/date_to must be YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
+            if range_start_d > range_end_d:
+                return Response({'error': 'date_from must be <= date_to'}, status=status.HTTP_400_BAD_REQUEST)
+            today_d = timezone.localdate()
+            if range_end_d > today_d:
+                return Response({'error': 'future date is not allowed'}, status=status.HTTP_400_BAD_REQUEST)
+            ref_date = range_end_d
         equipment_id = request.query_params.get('equipment_id', '').strip() or None
         days_param = request.query_params.get('days')
         series_days = int(days_param) if days_param and str(days_param).isdigit() else 7
@@ -1172,7 +1232,28 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
 
         series = []
         try:
-            if period_type == 'day':
+            if has_custom_range:
+                actual_r, _actual_by_eq = _actual_power_for_date_range(range_start_d, range_end_d, equipment_id)
+                proj_kwh_r = _projected_chiller_power_exact_dates(range_start_d, range_end_d, equipment_id)
+                actual_cost_r = _actual_cost_for_date_range(range_start_d, range_end_d, equipment_id)
+                if equipment_id:
+                    proj_cost_r = (
+                        round(proj_kwh_r * rate_rs, 2)
+                        if (rate_rs is not None and proj_kwh_r is not None)
+                        else 0.0
+                    )
+                else:
+                    proj_cost_r = _projected_cost_exact_sum_for_range(range_start_d, range_end_d, all_limit_ids)
+                series.append({
+                    'date': range_start_d.isoformat(),
+                    'label': f"{range_start_d.strftime('%d %b')} - {range_end_d.strftime('%d %b')}",
+                    'limit_power_kwh': proj_kwh_r,
+                    'actual_power_kwh': actual_r,
+                    'projected_power_kwh': proj_kwh_r,
+                    'actual_cost_rs': actual_cost_r,
+                    'projected_cost_rs': proj_cost_r,
+                })
+            elif period_type == 'day':
                 for i in range(series_days - 1, -1, -1):
                     d = ref_date - timedelta(days=i)
                     label = d.strftime('%d %b')
@@ -1263,7 +1344,8 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
                     datetime.combine(period_end_d, datetime.max.time().replace(microsecond=999999))
                 )
                 log_equipment_y = set(
-                    ChillerLog.objects.filter(
+                    _scoped_chiller_qs(request.user)
+                    .filter(
                         timestamp__gte=period_start,
                         timestamp__lte=period_end,
                     ).values_list('equipment_id', flat=True).distinct()
@@ -1273,9 +1355,12 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
                 manual_equipment_y = set()
                 if ManualChillerConsumption is not None:
                     manual_equipment_y = set(
-                        ManualChillerConsumption.objects.filter(
-                            date__gte=period_start_d,
-                            date__lte=period_end_d,
+                        filter_queryset_by_equipment_scope(
+                            ManualChillerConsumption.objects.filter(
+                                date__gte=period_start_d,
+                                date__lte=period_end_d,
+                            ),
+                            request.user,
                         ).values_list('equipment_id', flat=True).distinct()
                     )
                     if equipment_id:
@@ -1422,7 +1507,6 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
             'daily_water_consumption_ct2_liters',
             'daily_water_consumption_ct3_liters',
             'operator_sign',
-            'verified_by',
             'remarks',
             'comment',
             'status',
@@ -1438,6 +1522,8 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
             before = getattr(original, field)
             after = getattr(new_log, field)
             if before == after:
+                continue
+            if is_redundant_correction_status_audit(field, before, after):
                 continue
             extra = dict(extra_base)
             extra["field_label"] = field
@@ -1459,6 +1545,7 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
     def approve(self, request, pk=None):
         """Approve or reject a chiller log. Handles primary approval, secondary approval (after correction), and reject."""
         log = self.get_object()
+        previous_status = log.status
         action_type = normalize_approval_action(request.data.get('action'))
         remarks = (request.data.get('remarks') or '').strip()
         require_rejection_comment(action_type, remarks)
@@ -1494,6 +1581,7 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
                 field_name="status",
                 old_value=previous_status,
                 new_value="rejected",
+                extra={"remarks": remarks} if remarks else {},
             )
         if action_type == 'reject' or (action_type == 'approve' and log.status == 'approved'):
             log.approved_by = request.user
@@ -1501,6 +1589,18 @@ class ChillerLogViewSet(viewsets.ModelViewSet):
         if remarks:
             log.comment = remarks
         log.save()
+
+        if action_type == "approve" and log.status == "approved":
+            log_audit_event(
+                user=request.user,
+                event_type="log_approved",
+                object_type="chiller_log",
+                object_id=str(log.id),
+                field_name="status",
+                old_value=previous_status,
+                new_value="approved",
+                extra={"remarks": remarks} if remarks else {},
+            )
         
         # Create report entry when approved (primary or secondary)
         if action_type == 'approve' and log.status == 'approved':
@@ -1531,7 +1631,7 @@ class ChillerEquipmentLimitViewSet(viewsets.ModelViewSet):
         equipment_id = self.request.query_params.get('equipment_id')
         if equipment_id:
             qs = qs.filter(equipment_id=equipment_id)
-        return qs
+        return filter_queryset_by_equipment_scope(qs, self.request.user)
 
     def get_object(self):
         """

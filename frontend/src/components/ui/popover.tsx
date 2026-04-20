@@ -9,9 +9,12 @@ const PopoverTrigger = PopoverPrimitive.Trigger;
 
 const PopoverContent = React.forwardRef<
   React.ElementRef<typeof PopoverPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Content>
->(({ className, align = "center", sideOffset = 4, ...props }, ref) => (
-  <PopoverPrimitive.Portal>
+  React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Content> & {
+    /** Portal target; omit to use `document.body`. Use the dialog panel when lists must stay above in-dialog UI without raising global z-index. */
+    portalContainer?: HTMLElement | null;
+  }
+>(({ className, align = "center", sideOffset = 4, portalContainer, ...props }, ref) => (
+  <PopoverPrimitive.Portal container={portalContainer}>
     <PopoverPrimitive.Content
       ref={ref}
       align={align}

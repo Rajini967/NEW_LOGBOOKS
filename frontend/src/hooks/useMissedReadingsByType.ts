@@ -98,7 +98,7 @@ export function useMissedReadingsByType(): {
           boilerCat ? equipmentAPI.list({ category: boilerCat.id }) : Promise.resolve([]),
           chemicalCat ? equipmentAPI.list({ category: chemicalCat.id }) : Promise.resolve([]),
           equipmentAPI.list(),
-          filterAssignmentAPI.list(),
+          filterAssignmentAPI.listAllPages(),
         ]);
 
         if (cancelled) return;

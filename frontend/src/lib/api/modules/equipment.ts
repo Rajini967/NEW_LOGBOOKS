@@ -38,10 +38,13 @@ export const equipmentCategoryAPI = {
 };
 
 /** Walk DRF pages (default PAGE_SIZE) so callers get every equipment row, not only the first page. */
-export async function fetchAllEquipmentPages(): Promise<Record<string, unknown>[]> {
+export async function fetchAllEquipmentPages(
+  baseParams?: Record<string, unknown>,
+): Promise<Record<string, unknown>[]> {
   const all: Record<string, unknown>[] = [];
   for (let page = 1; ; page += 1) {
-    const response = await api.get("/equipment/", { params: { page } });
+    const params: Record<string, unknown> = { ...(baseParams ?? {}), page };
+    const response = await api.get("/equipment/", { params });
     const d = response.data as
       | Record<string, unknown>[]
       | { results?: Record<string, unknown>[]; next?: string | null };
@@ -60,7 +63,7 @@ export const equipmentAPI = {
     const response = await api.get("/equipment/", { params });
     return unwrapPaginated<Record<string, unknown>>(response.data);
   },
-  /** Full equipment list across all pages (for interval maps, etc.). */
+  /** Full equipment list across all pages (for interval maps, etc.). Pass e.g. `{ status: "approved" }` to match Filter Register. */
   listAllPages: fetchAllEquipmentPages,
   create: async (data: unknown) => {
     const response = await api.post("/equipment/", data);

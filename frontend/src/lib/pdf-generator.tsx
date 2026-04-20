@@ -24,6 +24,8 @@ export type MonitoringPDFData = {
   logs: any[];
   approvedBy?: string;
   printedBy?: string;
+  /** Human-readable recording frequency label (from configured log interval). */
+  recordingFrequency?: string;
   /** yyyy-MM-dd: chiller grid columns; briquette log + water readings for that calendar day. */
   reportDate?: string;
 };
@@ -240,4 +242,60 @@ export function printPDF(blob: Blob): boolean {
   
   return true;
 }
+/**
+ * Open a full HTML document in a hidden iframe and trigger print.
+ * Prefer this over {@link printPDF} for HTML blobs so the browser print footer
+ * shows about:srcdoc (or similar) instead of the SPA URL when headers/footers are enabled.
+ */
+export function printHTML(html: string): boolean {
+  const iframe = document.createElement('iframe');
+  iframe.style.position = 'fixed';
+  iframe.style.right = '0';
+  iframe.style.bottom = '0';
+  iframe.style.width = '0';
+  iframe.style.height = '0';
+  iframe.style.border = 'none';
+  iframe.style.opacity = '0';
+  iframe.style.pointerEvents = 'none';
+  iframe.style.visibility = 'hidden';
+  iframe.style.zIndex = '-1';
+
+  document.body.appendChild(iframe);
+
+  let hasPrinted = false;
+
+  const triggerPrint = () => {
+    if (hasPrinted) return;
+    try {
+      if (iframe.contentWindow) {
+        iframe.contentWindow.focus();
+        iframe.contentWindow.print();
+        hasPrinted = true;
+      }
+    } catch (error) {
+      console.error('Error triggering print:', error);
+    }
+  };
+
+  iframe.onload = () => {
+    setTimeout(triggerPrint, 400);
+  };
+
+  iframe.srcdoc = html;
+
+  setTimeout(() => {
+    if (!hasPrinted) {
+      triggerPrint();
+    }
+  }, 2000);
+
+  setTimeout(() => {
+    if (iframe.parentNode) {
+      document.body.removeChild(iframe);
+    }
+  }, 300000);
+
+  return true;
+}
+
 

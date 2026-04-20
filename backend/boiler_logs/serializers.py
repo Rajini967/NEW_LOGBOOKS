@@ -68,28 +68,7 @@ class BoilerLogSerializer(serializers.ModelSerializer):
         if not str(remarks).strip():
             raise serializers.ValidationError({"remarks": ["Remarks are required."]})
 
-        activity_type = attrs.get("activity_type") if "activity_type" in attrs else (
-            getattr(self.instance, "activity_type", "operation") if self.instance else "operation"
-        )
-        if (activity_type or "operation") == "operation":
-
-            def _merged(field: str):
-                if field in attrs:
-                    return attrs[field]
-                if self.instance is not None:
-                    return getattr(self.instance, field, None)
-                return None
-
-            fo = _merged("fo_hsd_ng_day_tank_level")
-            if fo is not None and fo < 200:
-                raise serializers.ValidationError(
-                    {"fo_hsd_ng_day_tank_level": ["Value must be not less than 200 Ltr."]}
-                )
-            fw = _merged("feed_water_tank_level")
-            if fw is not None and fw < 2:
-                raise serializers.ValidationError(
-                    {"feed_water_tank_level": ["Value must be not less than 2 KL."]}
-                )
+        # Operational range hints (NLT 200 L, NLT 2 KL, etc.) are shown in the UI only; values are not rejected here.
 
         return super().validate(attrs)
 

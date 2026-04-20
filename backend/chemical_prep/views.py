@@ -19,6 +19,10 @@ from core.log_slot_utils import (
     get_slot_timezone,
     filter_missing_slots_before_earliest_downtime,
 )
+from core.equipment_scope import (
+    assert_user_can_access_equipment_name,
+    filter_chemical_preparation_queryset,
+)
 from equipment.models import EquipmentCategory
 from .models import Chemical, ChemicalStock, ChemicalPreparation, ChemicalAssignment, ChemicalDashboardConfig, ChemicalDailyLimit
 from .serializers import (
@@ -36,7 +40,12 @@ from accounts.permissions import (
     IsSuperAdmin,
     forbid_manager_rejecting_reading,
 )
-from reports.utils import log_limit_change, log_audit_event, save_missing_slots_snapshot
+from reports.utils import (
+    log_limit_change,
+    log_audit_event,
+    save_missing_slots_snapshot,
+    is_redundant_correction_status_audit,
+)
 from reports.approval_workflow import (
     ensure_not_operator,
     ensure_secondary_approver_diff,
@@ -379,6 +388,7 @@ class ChemicalAssignmentViewSet(viewsets.ModelViewSet):
     def approve(self, request, pk=None):
         """Approve or reject an assignment. Creator (done by) cannot approve/reject."""
         assignment = self.get_object()
+        previous_status = assignment.status
         action_type = (request.data.get("action") or "approve").lower()
         remarks = (request.data.get("remarks") or "").strip()
 
@@ -404,6 +414,16 @@ class ChemicalAssignmentViewSet(viewsets.ModelViewSet):
             assignment.approved_by = None
             assignment.approved_at = None
             assignment.save(update_fields=["status", "rejected_by", "rejected_at", "rejection_comment", "approved_by", "approved_at"])
+            log_audit_event(
+                user=request.user,
+                event_type="entity_rejected",
+                object_type="chemical_assignment",
+                object_id=str(assignment.id),
+                field_name="status",
+                old_value=previous_status,
+                new_value="rejected",
+                extra={"remarks": remarks} if remarks else {},
+            )
         elif action_type == "approve":
             if assignment.status != "pending":
                 return Response(
@@ -417,6 +437,16 @@ class ChemicalAssignmentViewSet(viewsets.ModelViewSet):
             assignment.rejected_at = None
             assignment.rejection_comment = remarks
             assignment.save(update_fields=["status", "approved_by", "approved_at", "rejected_by", "rejected_at", "rejection_comment"])
+            log_audit_event(
+                user=request.user,
+                event_type="entity_approved",
+                object_type="chemical_assignment",
+                object_id=str(assignment.id),
+                field_name="status",
+                old_value=previous_status,
+                new_value="approved",
+                extra={"remarks": remarks} if remarks else {},
+            )
         else:
             return Response(
                 {"error": 'Invalid action. Use "approve" or "reject".'},
@@ -435,6 +465,7 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = super().get_queryset()
+        qs = filter_chemical_preparation_queryset(qs, self.request.user)
         if self.action != "list":
             return qs
         equipment_name = self.request.query_params.get("equipment_name")
@@ -489,6 +520,7 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
         """
         validated = dict(serializer.validated_data)
         equipment_name = validated.get("equipment_name")
+        assert_user_can_access_equipment_name(self.request.user, equipment_name)
         timestamp = validated.get("timestamp") or timezone.now()
         if equipment_name is not None:
             base_qs = ChemicalPreparation.objects.filter(equipment_name=equipment_name)
@@ -590,6 +622,7 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
         else:
             parsed_timestamp = instance.timestamp
         next_equipment_name = request.data.get("equipment_name") or instance.equipment_name
+        assert_user_can_access_equipment_name(request.user, next_equipment_name)
         next_chemical_id = request.data.get("chemical")
         next_chemical_name = request.data.get("chemical_name")
         if next_chemical_id in (None, ""):
@@ -1000,6 +1033,9 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
                 {"error": "period_type must be day, month, or year"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        date_from_str = (request.query_params.get("date_from") or "").strip()
+        date_to_str = (request.query_params.get("date_to") or "").strip()
+        has_custom_range = bool(date_from_str and date_to_str)
         date_str = request.query_params.get("date")
         if not date_str:
             return Response(
@@ -1013,10 +1049,33 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
                 {"error": "date must be YYYY-MM-DD"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if has_custom_range:
+            try:
+                custom_start_d = datetime.strptime(date_from_str[:10], "%Y-%m-%d").date()
+                custom_end_d = datetime.strptime(date_to_str[:10], "%Y-%m-%d").date()
+            except ValueError:
+                return Response(
+                    {"error": "date_from/date_to must be YYYY-MM-DD"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if custom_start_d > custom_end_d:
+                return Response(
+                    {"error": "date_from must be <= date_to"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if custom_end_d > timezone.localdate():
+                return Response(
+                    {"error": "future date is not allowed"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
         equipment_name = (request.query_params.get("equipment_name") or "").strip() or None
         chemical_name = (request.query_params.get("chemical_name") or "").strip() or None
 
-        if period_type == "day":
+        if has_custom_range:
+            period_start = timezone.make_aware(datetime.combine(custom_start_d, datetime.min.time()))
+            period_end = timezone.make_aware(datetime.combine(custom_end_d, datetime.max.time().replace(microsecond=999999)))
+            days_in_period = (custom_end_d - custom_start_d).days + 1
+        elif period_type == "day":
             period_start = timezone.make_aware(
                 datetime.combine(ref_date, datetime.min.time())
             )
@@ -1075,7 +1134,7 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
         )
 
         payload = {
-            "period_type": period_type,
+            "period_type": "custom" if has_custom_range else period_type,
             "period_start": period_start.date().isoformat(),
             "period_end": period_end.date().isoformat(),
             "days_in_period": days_in_period,
@@ -1109,6 +1168,9 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
                 {"error": "period_type must be day, month, or year"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        date_from_str = (request.query_params.get("date_from") or "").strip()
+        date_to_str = (request.query_params.get("date_to") or "").strip()
+        has_custom_range = bool(date_from_str and date_to_str)
         date_str = request.query_params.get("date")
         if not date_str:
             return Response(
@@ -1122,6 +1184,26 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
                 {"error": "date must be YYYY-MM-DD"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if has_custom_range:
+            try:
+                custom_start_d = datetime.strptime(date_from_str[:10], "%Y-%m-%d").date()
+                custom_end_d = datetime.strptime(date_to_str[:10], "%Y-%m-%d").date()
+            except ValueError:
+                return Response(
+                    {"error": "date_from/date_to must be YYYY-MM-DD"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if custom_start_d > custom_end_d:
+                return Response(
+                    {"error": "date_from must be <= date_to"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if custom_end_d > timezone.localdate():
+                return Response(
+                    {"error": "future date is not allowed"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            ref_date = custom_end_d
         equipment_name = (request.query_params.get("equipment_name") or "").strip() or None
         chemical_name = (request.query_params.get("chemical_name") or "").strip() or None
         days_param = request.query_params.get("days")
@@ -1130,7 +1212,28 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
 
         series = []
         try:
-            if period_type == "day":
+            if has_custom_range:
+                actual_kg, actual_rs = _manual_actual_totals(
+                    start_d=custom_start_d,
+                    end_d=custom_end_d,
+                    equipment_name=equipment_name,
+                    chemical_name=chemical_name,
+                )
+                proj_total_qty_kg, proj_total_cost_rs = _projected_totals_from_daily_limits(
+                    start_d=custom_start_d,
+                    end_d=custom_end_d,
+                    equipment_name=equipment_name,
+                    chemical_name=chemical_name,
+                )
+                series.append({
+                    "date": custom_start_d.isoformat(),
+                    "label": f"{custom_start_d.strftime('%d %b')} - {custom_end_d.strftime('%d %b')}",
+                    "actual_consumption_kg": actual_kg,
+                    "projected_consumption_kg": proj_total_qty_kg,
+                    "actual_cost_rs": actual_rs,
+                    "projected_cost_rs": proj_total_cost_rs,
+                })
+            elif period_type == "day":
                 for i in range(series_days - 1, -1, -1):
                     d = ref_date - timedelta(days=i)
                     actual_kg, actual_rs = _manual_actual_totals(
@@ -1305,6 +1408,8 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
             after = getattr(new_prep, field)
             if before == after:
                 continue
+            if is_redundant_correction_status_audit(field, before, after):
+                continue
             extra = dict(extra_base)
             extra["field_label"] = field
             log_limit_change(
@@ -1325,6 +1430,7 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
     def approve(self, request, pk=None):
         """Approve or reject a chemical preparation. Handles primary, secondary approval (after correction), and reject."""
         prep = self.get_object()
+        previous_status = prep.status
         action_type = normalize_approval_action(request.data.get('action'))
         remarks = (request.data.get('remarks') or '').strip()
         require_rejection_comment(action_type, remarks)
@@ -1360,6 +1466,7 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
                 field_name="status",
                 old_value=previous_status,
                 new_value="rejected",
+                extra={"remarks": remarks} if remarks else {},
             )
         from django.utils import timezone
         if action_type == 'reject' or (action_type == 'approve' and prep.status == 'approved'):
@@ -1368,6 +1475,18 @@ class ChemicalPreparationViewSet(viewsets.ModelViewSet):
         if remarks:
             prep.comment = remarks
         prep.save()
+
+        if action_type == "approve" and prep.status == "approved":
+            log_audit_event(
+                user=request.user,
+                event_type="log_approved",
+                object_type="chemical_log",
+                object_id=str(prep.id),
+                field_name="status",
+                old_value=previous_status,
+                new_value="approved",
+                extra={"remarks": remarks} if remarks else {},
+            )
         
         if action_type == 'approve' and prep.status == 'approved':
             from reports.utils import create_report_entry

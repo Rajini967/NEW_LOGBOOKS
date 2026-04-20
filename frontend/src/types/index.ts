@@ -14,8 +14,10 @@ export interface User {
   must_change_password?: boolean;
   password_expired?: boolean;
   siteId?: string;
-  assigned_department?: string | null;
-  assigned_equipment?: string | null;
+  /** Departments this user may access (non-admin scope). */
+  department_ids?: string[];
+  /** Equipment this user may access (non-admin scope). */
+  equipment_ids?: string[];
   created_at?: string;
   updated_at?: string;
 }

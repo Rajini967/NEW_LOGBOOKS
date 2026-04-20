@@ -2,7 +2,12 @@ import { useCallback, type Dispatch, type MutableRefObject, type SetStateAction 
 import { format } from "date-fns";
 import { toast } from "@/lib/toast";
 import { filterScheduleAPI } from "@/lib/api";
-import { dueDatesForInstalled, emptyScheduleFreq, type ScheduleFreqState } from "@/pages/filter-logbook/helpers";
+import {
+  dueDatesForInstalled,
+  emptyScheduleFreq,
+  normalizeAssignmentId,
+  type ScheduleFreqState,
+} from "@/pages/filter-logbook/helpers";
 
 type ScheduleFormFields = {
   installedDate: string;
@@ -31,12 +36,13 @@ export function useFilterScheduleLoader<T extends ScheduleFormFields>(options: {
     async (equipmentUuid: string, assignmentId: string) => {
       const nextFreq = emptyScheduleFreq();
       try {
-        const rows = (await filterScheduleAPI.list({
+        const rows = (await filterScheduleAPI.listAllPages({
           equipment: equipmentUuid,
           approval: "approved",
         })) as ScheduleRow[];
+        const want = normalizeAssignmentId(assignmentId);
         const mine = (rows || []).filter(
-          (s) => s.assignment === assignmentId && s.is_approved === true,
+          (s) => normalizeAssignmentId(s.assignment) === want && s.is_approved === true,
         );
         for (const s of mine) {
           const d =

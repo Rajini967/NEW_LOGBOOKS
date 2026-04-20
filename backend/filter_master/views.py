@@ -15,6 +15,7 @@ from accounts.permissions import (
     CanManageFilterConfiguration,
 )
 from reports.utils import create_report_entry, log_audit_event, log_entity_update_changes
+from core.equipment_scope import filter_queryset_by_equipment_scope
 
 from .models import FilterCategory, FilterMaster, FilterAssignment, FilterSchedule, FilterDashboardConfig
 from filter_logs.models import FilterLog
@@ -133,6 +134,8 @@ class FilterMasterViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        prev_filter_status = instance.status
+
         # Generate a filter_id on first approval if missing
         if not instance.filter_id:
             serializer_for_id = self.get_serializer(instance)
@@ -172,7 +175,9 @@ class FilterMasterViewSet(viewsets.ModelViewSet):
             object_type="filter_master",
             object_id=str(instance.id),
             field_name="status",
+            old_value=prev_filter_status,
             new_value="approved",
+            extra={"filter_id": instance.filter_id} if instance.filter_id else {},
         )
 
         serializer = self.get_serializer(instance)
@@ -215,6 +220,8 @@ class FilterMasterViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        prev_filter_status = instance.status
+
         instance.status = "rejected"
         instance.approved_by = request.user
         instance.approved_at = timezone.now()
@@ -226,6 +233,7 @@ class FilterMasterViewSet(viewsets.ModelViewSet):
             object_type="filter_master",
             object_id=str(instance.id),
             field_name="status",
+            old_value=prev_filter_status,
             new_value="rejected",
         )
 
@@ -248,7 +256,12 @@ class FilterAssignmentViewSet(viewsets.ModelViewSet):
         equipment_id = self.request.query_params.get("equipment")
         if equipment_id:
             qs = qs.filter(equipment_id=equipment_id)
-        return qs
+        return filter_queryset_by_equipment_scope(
+            qs,
+            self.request.user,
+            equipment_field="equipment_id",
+            use_equipment_uuid_fk=True,
+        )
 
     def perform_create(self, serializer):
         instance = serializer.save()
@@ -292,6 +305,12 @@ class FilterScheduleViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = super().get_queryset()
+        qs = filter_queryset_by_equipment_scope(
+            qs,
+            self.request.user,
+            equipment_field="assignment__equipment_id",
+            use_equipment_uuid_fk=True,
+        )
         equipment_id = self.request.query_params.get("equipment")
         if equipment_id:
             qs = qs.filter(assignment__equipment_id=equipment_id)
@@ -355,6 +374,9 @@ class FilterScheduleViewSet(viewsets.ModelViewSet):
                 {"error": "period_type must be week or month"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        date_from_str = (request.query_params.get("date_from") or "").strip()
+        date_to_str = (request.query_params.get("date_to") or "").strip()
+        has_custom_range = bool(date_from_str and date_to_str)
         date_str = request.query_params.get("date")
         if not date_str:
             return Response(
@@ -368,8 +390,29 @@ class FilterScheduleViewSet(viewsets.ModelViewSet):
                 {"error": "date must be YYYY-MM-DD"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if has_custom_range:
+            try:
+                period_start_date = datetime.strptime(date_from_str[:10], "%Y-%m-%d").date()
+                period_end_date = datetime.strptime(date_to_str[:10], "%Y-%m-%d").date()
+            except ValueError:
+                return Response(
+                    {"error": "date_from/date_to must be YYYY-MM-DD"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if period_start_date > period_end_date:
+                return Response(
+                    {"error": "date_from must be <= date_to"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if period_end_date > timezone.localdate():
+                return Response(
+                    {"error": "future date is not allowed"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
-        if period_type == "week":
+        if has_custom_range:
+            pass
+        elif period_type == "week":
             year, week_no, _ = ref_date.isocalendar()
             period_start_date = datetime.strptime(
                 f"{year}-W{week_no:02d}-1", "%G-W%V-%u"
@@ -423,7 +466,7 @@ class FilterScheduleViewSet(viewsets.ModelViewSet):
         total_consumption = replacement_count + cleaning_count + integrity_count
 
         payload = {
-            "period_type": period_type,
+            "period_type": "custom" if has_custom_range else period_type,
             "period_start": period_start_date.isoformat(),
             "period_end": period_end_date.isoformat(),
             "replacement_count": replacement_count,
@@ -435,7 +478,18 @@ class FilterScheduleViewSet(viewsets.ModelViewSet):
 
         config = FilterDashboardConfig.objects.first()
         if config:
-            if period_type == "month":
+            if has_custom_range:
+                days_span = max(1, (period_end_date - period_start_date).days + 1)
+                scale = days_span / 30.0
+                payload["projected_replacement_count"] = round((config.projected_replacement_count_month or 0) * scale)
+                payload["projected_cleaning_count"] = round((config.projected_cleaning_count_month or 0) * scale)
+                payload["projected_integrity_count"] = round((config.projected_integrity_count_month or 0) * scale)
+                payload["projected_cost_rs"] = (
+                    round((config.projected_cost_rs_month or 0) * scale, 2)
+                    if config.projected_cost_rs_month is not None
+                    else None
+                )
+            elif period_type == "month":
                 payload["projected_replacement_count"] = config.projected_replacement_count_month
                 payload["projected_cleaning_count"] = config.projected_cleaning_count_month
                 payload["projected_integrity_count"] = config.projected_integrity_count_month
@@ -484,6 +538,7 @@ class FilterScheduleViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"])
     def approve(self, request, pk=None):
         instance: FilterSchedule = self.get_object()
+        prev_schedule_status = instance.status
         if instance.is_approved:
             return Response({"detail": "Schedule is already approved."}, status=status.HTTP_400_BAD_REQUEST)
         if not instance.frequency_days:
@@ -522,6 +577,7 @@ class FilterScheduleViewSet(viewsets.ModelViewSet):
             object_type="filter_schedule",
             object_id=str(instance.id),
             field_name="status",
+            old_value=prev_schedule_status,
             new_value="approved",
         )
         return Response(self.get_serializer(instance).data)
@@ -529,6 +585,7 @@ class FilterScheduleViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"])
     def reject(self, request, pk=None):
         instance: FilterSchedule = self.get_object()
+        prev_schedule_status = instance.status
         if instance.is_approved:
             return Response({"detail": "Approved schedules cannot be rejected."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -550,6 +607,7 @@ class FilterScheduleViewSet(viewsets.ModelViewSet):
             object_type="filter_schedule",
             object_id=str(instance.id),
             field_name="status",
+            old_value=prev_schedule_status,
             new_value="rejected",
         )
         instance.status = "rejected"

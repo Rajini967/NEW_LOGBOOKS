@@ -151,6 +151,45 @@ class ChemicalAssignmentSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {"category": "Category (major/minor) is required."}
             )
+
+        # One assignment per equipment + chemical; Major and Minor cannot duplicate the same chemical on the same equipment.
+        eq_for_dup = (
+            (attrs.get("equipment_name") or "").strip()
+            or ((self.instance.equipment_name or "").strip() if self.instance else "")
+        )
+        if eq_for_dup:
+            dup_qs = ChemicalAssignment.objects.filter(
+                equipment_name__iexact=eq_for_dup,
+                is_active=True,
+            ).exclude(status="rejected")
+            if self.instance:
+                dup_qs = dup_qs.exclude(pk=self.instance.pk)
+
+            fk = attrs.get("chemical")
+            if fk is None and self.instance:
+                fk = self.instance.chemical_id
+
+            if fk:
+                if dup_qs.filter(chemical_id=fk).exists():
+                    raise serializers.ValidationError(
+                        {
+                            "detail": "This chemical is already assigned to this equipment.",
+                        }
+                    )
+            else:
+                cn_dup = chemical_name.strip() if chemical_name else ""
+                if not cn_dup and self.instance:
+                    cn_dup = (self.instance.chemical_name or "").strip()
+                if cn_dup and dup_qs.filter(
+                    chemical__isnull=True,
+                    chemical_name__iexact=cn_dup,
+                ).exists():
+                    raise serializers.ValidationError(
+                        {
+                            "detail": "This chemical is already assigned to this equipment.",
+                        }
+                    )
+
         # Pass through for create (SerializerMethodField does not add to validated_data)
         if not chemical and chemical_name:
             attrs["chemical_name"] = chemical_name

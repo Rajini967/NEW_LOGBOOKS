@@ -97,6 +97,21 @@ class AuditReportViewSet(viewsets.ReadOnlyModelViewSet):
     def _base_audit_queryset(self):
         return (
             AuditEvent.objects.select_related("user")
+            .only(
+                "id",
+                "timestamp",
+                "user",
+                "user__id",
+                "user__email",
+                "user__name",
+                "event_type",
+                "object_type",
+                "object_id",
+                "field_name",
+                "old_value",
+                "new_value",
+                "extra",
+            )
             .exclude(event_type__in=USER_LIFECYCLE_EVENT_TYPES)
             .exclude(event_type__in=AUDIT_EXCLUDED_EVENT_TYPES)
             .exclude(object_type="missing_slots")

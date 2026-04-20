@@ -15,6 +15,7 @@ type ChillerGridPdfData = {
   logs: ChillerMonitoringMappedLog[];
   approvedBy?: string;
   printedBy?: string;
+  recordingFrequency?: string;
   reportDate?: string;
 };
 
@@ -350,6 +351,8 @@ export function ChillerMonitoringGridCertificate({ data }: Props) {
 
   const approvedBy = (data.approvedBy || '').toString().trim() || '—';
   const printedBy = (data.printedBy || '').toString().trim() || '—';
+  const printedBySignDateTime =
+    printedBy !== '—' ? `${printedBy} - ${format(new Date(), 'dd/MM/yy HH:mm:ss')}` : '—';
 
   const n = grid.columns.length;
   const chunks = chunkColumnIndices(n, CHILLER_GRID_MAX_COLS_PER_PAGE);
@@ -361,12 +364,6 @@ export function ChillerMonitoringGridCertificate({ data }: Props) {
         })
         .join(' | ')
     : '—';
-
-  const verifiedSummary =
-    grid.finalSignoffRows[0]?.values
-      .map((v) => (v === null || v === undefined || v === '' ? '' : String(v)))
-      .filter(Boolean)
-      .join(' · ') || '—';
 
   const statusFooterItems = grid.statusRows.map((row) => {
     let latest = '—';
@@ -528,9 +525,28 @@ export function ChillerMonitoringGridCertificate({ data }: Props) {
         dataColWidth,
         true,
       )}
-      {grid.finalSignoffRows.map((row, ri) =>
-        renderGridRow(row, `sg-${ri}`, slots, dataColWidth, true),
-      )}
+      {grid.finalSignoffRows.map((row, ri) => {
+        const isDoneByRow = /done\s*by/i.test(String(row.description || ''));
+        const displayRow = isDoneByRow
+          ? {
+              ...row,
+              values: slots.map((slot) => {
+                const ci = slot.ci;
+                if (ci == null) return '';
+                const base = row.values[ci];
+                const name = base == null ? '' : String(base).trim();
+                if (!name) return '';
+                const tsRaw = grid.columns[ci]?.log?.timestamp as unknown;
+                const ts = tsRaw ? new Date(tsRaw as any) : null;
+                const dt = ts && !Number.isNaN(ts.getTime())
+                  ? format(ts, 'dd/MM/yy HH:mm:ss')
+                  : '';
+                return dt ? `${name} - ${dt}` : name;
+              }),
+            }
+          : row;
+        return renderGridRow(displayRow, `sg-${ri}`, slots, dataColWidth, true);
+      })}
     </View>
   );
 
@@ -538,7 +554,7 @@ export function ChillerMonitoringGridCertificate({ data }: Props) {
     return (
       <Document>
         <Page size="A4" orientation="landscape" style={styles.page}>
-          <PDFHeader />
+          <PDFHeader reportTitle="CHILLER LOG BOOK REPORT" />
           <Text style={styles.title}>Chiller monitoring — daily grid</Text>
           <Text style={styles.meta}>
             Equipment ID: {equipmentId} · Report date: {format(reportDate, 'dd-MMM-yyyy')}
@@ -564,7 +580,7 @@ export function ChillerMonitoringGridCertificate({ data }: Props) {
 
         return (
           <Page key={pageIdx} size="A4" orientation="landscape" style={styles.page}>
-            <PDFHeader />
+            <PDFHeader reportTitle="CHILLER LOG BOOK REPORT" />
             <Text style={styles.title}>Chiller monitoring — daily grid</Text>
             <Text style={styles.meta}>
               Equipment ID: {equipmentId} · Report date: {grid.reportDateLabel}
@@ -618,14 +634,12 @@ export function ChillerMonitoringGridCertificate({ data }: Props) {
               <>
                 {renderSignoffTable(slots, dataColWidth)}
                 <View style={styles.logbookFooterRow} wrap={false}>
-                  <Text style={{ flexShrink: 0 }}>Recording Frequency: Once in 4 hours.</Text>
-                  <Text style={{ textAlign: 'right', maxWidth: '52%' }} wrap>
-                    Verified By (Sign & Date): {verifiedSummary}
+                  <Text style={{ flexShrink: 0 }}>
+                    Recording Frequency: {data.recordingFrequency || 'Once in every 01 hour'}
                   </Text>
-                </View>
-                <View style={styles.footer}>
-                  <Text>Approved By: {approvedBy}</Text>
-                  <Text>Printed By: {printedBy}</Text>
+                  <Text style={{ textAlign: 'right', maxWidth: '52%' }} wrap>
+                    Printed By (Sign & Date & Time): {printedBySignDateTime}
+                  </Text>
                 </View>
               </>
             ) : (

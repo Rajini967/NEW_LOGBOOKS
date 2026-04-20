@@ -109,7 +109,7 @@ def _resolve_equipment_for_log_type(equipment_identifier: str, log_type: str):
     if not identifier:
         return None
     equipment = None
-    if log_type in ("chiller", "boiler"):
+    if log_type in ("chiller", "boiler", "briquette"):
         equipment = Equipment.objects.filter(equipment_number=identifier).first()
     elif log_type == "filter":
         equipment = _resolve_equipment_for_filter_log_identifier(identifier)
@@ -427,7 +427,7 @@ def get_tolerance_status(save_time, equipment_identifier: str, log_type: str) ->
         return "none"
 
     try:
-        if log_type in ("chiller", "boiler"):
+        if log_type in ("chiller", "boiler", "briquette"):
             equipment = Equipment.objects.filter(equipment_number=equipment_identifier).first()
         elif log_type == "filter":
             equipment = _resolve_equipment_for_filter_log_identifier(equipment_identifier)
@@ -480,6 +480,17 @@ def get_tolerance_status(save_time, equipment_identifier: str, log_type: str) ->
 
             last = (
                 BoilerLog.objects.filter(
+                    equipment_id=equipment_identifier, timestamp__lt=save_time
+                )
+                .order_by("-timestamp")
+                .first()
+            )
+            last_time = last.timestamp if last else None
+        elif log_type == "briquette":
+            from briquette_logs.models import BriquetteLog
+
+            last = (
+                BriquetteLog.objects.filter(
                     equipment_id=equipment_identifier, timestamp__lt=save_time
                 )
                 .order_by("-timestamp")
@@ -563,7 +574,7 @@ def compute_slot_status(
 
     # Resolve equipment to read tolerance
     try:
-        if log_type in ("chiller", "boiler"):
+        if log_type in ("chiller", "boiler", "briquette"):
             equipment = Equipment.objects.filter(equipment_number=equipment_identifier).first()
         elif log_type == "filter":
             equipment = _resolve_equipment_for_filter_log_identifier(equipment_identifier)

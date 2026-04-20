@@ -127,7 +127,7 @@ interface ChillerMonitoringData {
     coolingTowerFanChemicalName?: string;
     coolingTowerFanChemicalQtyKg?: number;
     operatorSign?: string;
-    verifiedBy?: string;
+    approvedBy?: string;
     comment?: string;
     remarks?: string;
     checkedBy?: string;
@@ -223,7 +223,7 @@ export function ChillerMonitoringCertificate({ data }: ChillerMonitoringCertific
   return (
     <Document>
       <Page size="A4" style={styles.page}>
-        <PDFHeader />
+        <PDFHeader reportTitle="CHILLER LOG BOOK REPORT" />
         <Text style={styles.title}>RAW DATA FOR {equipmentTitle} MONITORING</Text>
         <Text style={styles.detailsTitle}>DETAILS - ALL PARAMETERS</Text>
         <Text style={styles.detailsSubtitle}>Equipment ID: {equipmentId}</Text>
@@ -356,7 +356,7 @@ export function ChillerMonitoringCertificate({ data }: ChillerMonitoringCertific
             <Text style={[styles.tableCell, styles.smallCell, { width: '14%' }]}>Chilled Water Pump</Text>
             <Text style={[styles.tableCell, styles.smallCell, { width: '14%' }]}>Cooling Tower Fan</Text>
             <Text style={[styles.tableCell, styles.smallCell, { width: '11%' }]}>Cooling Tower Blow Down Time (Minutes)</Text>
-            <Text style={[styles.tableCell, styles.smallCell, { width: '16%' }]}>Verified By</Text>
+            <Text style={[styles.tableCell, styles.smallCell, { width: '16%' }]}>Approved By</Text>
             <Text style={[styles.tableCell, styles.smallCell, { width: '16%' }, styles.tableCellLast]}>Operator Sign</Text>
           </View>
 
@@ -374,7 +374,7 @@ export function ChillerMonitoringCertificate({ data }: ChillerMonitoringCertific
                 {`Fan 1: ${parseStatus(log.coolingTowerFanStatus, 'F1', 0) || ''}\nFan 2: ${parseStatus(log.coolingTowerFanStatus, 'F2', 1) || ''}\nFan 3: ${parseStatus(log.coolingTowerFanStatus, 'F3', 2) || ''}`}
               </Text>
               <Text style={[styles.tableCell, styles.smallCell, { width: '11%' }]}>{log.coolingTowerBlowdownTimeMin ?? ''}</Text>
-              <Text style={[styles.tableCell, styles.smallCell, { width: '16%' }]}>{wrapUser(log.verifiedBy)}</Text>
+              <Text style={[styles.tableCell, styles.smallCell, { width: '16%' }]}>{wrapUser(log.approvedBy)}</Text>
               <Text style={[styles.tableCell, styles.smallCell, { width: '16%' }, styles.tableCellLast]}>{wrapUser(log.operatorSign)}</Text>
             </View>
           ))}
@@ -382,7 +382,7 @@ export function ChillerMonitoringCertificate({ data }: ChillerMonitoringCertific
       </Page>
 
       <Page size="A4" style={styles.page}>
-        <PDFHeader />
+        <PDFHeader reportTitle="CHILLER LOG BOOK REPORT" />
         <Text style={styles.title}>RAW DATA FOR {equipmentTitle} MONITORING</Text>
         <Text style={styles.subtitle}>Equipment ID: {equipmentId}</Text>
 

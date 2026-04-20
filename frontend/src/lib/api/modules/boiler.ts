@@ -26,8 +26,26 @@ export const boilerLogAPI = {
   list: async (
     params?: { date_from?: string; date_to?: string; equipment_id?: string },
   ): Promise<BoilerLogRecord[]> => {
-    const response = await api.get("/boiler-logs/", { params });
-    return unwrapPaginated<BoilerLogRecord>(response.data);
+    const first = await api.get("/boiler-logs/", { params });
+    if (!first.data || !Array.isArray(first.data.results)) {
+      return unwrapPaginated<BoilerLogRecord>(first.data);
+    }
+    const allRows: BoilerLogRecord[] = [...first.data.results];
+    let nextUrl: string | null = typeof first.data.next === "string" ? first.data.next : null;
+    while (nextUrl) {
+      const page = await api.get(nextUrl);
+      if (Array.isArray(page.data?.results)) {
+        allRows.push(...page.data.results);
+      }
+      nextUrl = typeof page.data?.next === "string" ? page.data.next : null;
+    }
+    const seen = new Set<string>();
+    return allRows.filter((r) => {
+      const id = String((r as { id?: string }).id ?? "");
+      if (!id || seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
   },
   missingSlots: async (params?: {
     date?: string;
@@ -90,12 +108,19 @@ export const boilerLimitsAPI = {
 };
 
 export const boilerDashboardAPI = {
-  getSummary: async (params: { periodType: "day" | "month" | "year"; date: string; equipmentId?: string | null }) => {
+  getSummary: async (params: {
+    periodType: "day" | "month" | "year";
+    date: string;
+    equipmentId?: string | null;
+    dateFrom?: string;
+    dateTo?: string;
+  }) => {
     const response = await api.get("/boiler-logs/dashboard_summary/", {
       params: {
         period_type: params.periodType,
         date: params.date,
         ...(params.equipmentId ? { equipment_id: params.equipmentId } : {}),
+        ...(params.dateFrom && params.dateTo ? { date_from: params.dateFrom, date_to: params.dateTo } : {}),
       },
     });
     return response.data;
@@ -105,6 +130,8 @@ export const boilerDashboardAPI = {
     date: string;
     equipmentId?: string | null;
     days?: number;
+    dateFrom?: string;
+    dateTo?: string;
   }) => {
     const response = await api.get("/boiler-logs/dashboard_series/", {
       params: {
@@ -112,6 +139,7 @@ export const boilerDashboardAPI = {
         date: params.date,
         ...(params.equipmentId ? { equipment_id: params.equipmentId } : {}),
         ...(params.days != null ? { days: params.days } : {}),
+        ...(params.dateFrom && params.dateTo ? { date_from: params.dateFrom, date_to: params.dateTo } : {}),
       },
     });
     return response.data;

@@ -1,3 +1,4 @@
+from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework import status
@@ -6,7 +7,10 @@ from datetime import timedelta
 
 from accounts.models import User, UserRole
 from chemical_prep.models import ChemicalPreparation
+from core.equipment_scope import assert_user_can_access_equipment_name
+from equipment.models import Department, Equipment, EquipmentCategory
 from reports.models import Report
+from rest_framework.exceptions import PermissionDenied
 
 
 class ChemicalPrepApiSmokeTests(APITestCase):
@@ -91,6 +95,49 @@ class ChemicalPreparationApprovalFlowTests(APITestCase):
             Report.objects.filter(source_id=prep.id, source_table="chemical_preparations").count(),
             0,
         )
+
+
+class ChemicalScopedEquipmentCompositeLabelTests(TestCase):
+    """Chemical assignments store ``NUM – NAME``; scope checks must resolve the same label."""
+
+    def setUp(self):
+        self.dept = Department.objects.create(name="Chem Scope Dept")
+        self.cat = EquipmentCategory.objects.create(name="Chem Scope Cat")
+        self.equipment = Equipment.objects.create(
+            equipment_number="B-SCOPE-01",
+            name="Label Test Boiler",
+            department=self.dept,
+            category=self.cat,
+            status="approved",
+        )
+        self.other_equipment = Equipment.objects.create(
+            equipment_number="X-OTHER-01",
+            name="Other Unit",
+            department=self.dept,
+            category=self.cat,
+            status="approved",
+        )
+        self.supervisor = User.objects.create_user(
+            email="chem-scope-label@example.com",
+            password="testpass123",
+            role=UserRole.SUPERVISOR,
+            name="Chem Scope Supervisor",
+            is_active=True,
+        )
+        self.supervisor.scoped_equipment.add(self.equipment)
+
+    def test_composite_en_dash_label_allowed_when_equipment_scoped(self):
+        label = f"{self.equipment.equipment_number} – {self.equipment.name}"
+        assert_user_can_access_equipment_name(self.supervisor, label)
+
+    def test_composite_hyphen_label_allowed_when_equipment_scoped(self):
+        label = f"{self.equipment.equipment_number} - {self.equipment.name}"
+        assert_user_can_access_equipment_name(self.supervisor, label)
+
+    def test_composite_label_denied_for_equipment_outside_scope(self):
+        label = f"{self.other_equipment.equipment_number} – {self.other_equipment.name}"
+        with self.assertRaises(PermissionDenied):
+            assert_user_can_access_equipment_name(self.supervisor, label)
 
 
 class ChemicalMissingSlotsRangeTests(APITestCase):

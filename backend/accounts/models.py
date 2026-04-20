@@ -74,19 +74,17 @@ class User(AbstractBaseUser, PermissionsMixin):
         default=UserRole.OPERATOR,
     )
 
-    assigned_department = models.ForeignKey(
+    scoped_departments = models.ManyToManyField(
         'equipment.Department',
-        null=True,
         blank=True,
-        on_delete=models.SET_NULL,
-        related_name='assigned_users',
+        related_name='scope_users',
+        help_text='Departments this user may access (Supervisor/Operator/Manager); Admin/Super Admin ignore.',
     )
-    assigned_equipment = models.ForeignKey(
+    scoped_equipment = models.ManyToManyField(
         'equipment.Equipment',
-        null=True,
         blank=True,
-        on_delete=models.SET_NULL,
-        related_name='assigned_users',
+        related_name='scope_users',
+        help_text='Equipment this user may access; combined with scoped departments on the server.',
     )
 
     # Status flags
@@ -184,10 +182,19 @@ class UserActivityLog(models.Model):
         ("manual_login", "Manual Login"),
         ("manual_logout", "Manual Logout"),
         ("auto_logout", "Auto Logout"),
+        ("login_failed_blank_email", "Login Failed — Blank Email"),
+        ("login_failed_blank_password", "Login Failed — Blank Password"),
+        ("login_failed_invalid_password", "Login Failed — Invalid Password"),
+        ("login_failed_unknown_email", "Login Failed — Unknown Email"),
+        ("login_failed_account_locked", "Login Failed — Account Locked"),
+        ("login_failed_inactive_user", "Login Failed — Inactive User"),
         ("user_created", "User Created"),
         ("password_changed", "Password Changed"),
+        ("password_reuse_rejected", "Password Reuse Rejected"),
         ("user_locked", "User Locked"),
         ("user_unlocked", "User Unlocked"),
+        ("role_changed", "Role Changed"),
+        ("access_scope_changed", "Access Scope Changed"),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -195,8 +202,29 @@ class UserActivityLog(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name="activity_logs",
+        null=True,
+        blank=True,
     )
-    event_type = models.CharField(max_length=32, choices=EVENT_TYPE_CHOICES)
+    performed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="performed_user_activity_logs",
+        help_text="User who performed the action (e.g. admin editing another user).",
+    )
+    attempted_email = models.CharField(
+        max_length=254,
+        blank=True,
+        default="",
+        help_text="Email attempted when no user row is linked (unknown user) or for cross-reference.",
+    )
+    event_type = models.CharField(max_length=40, choices=EVENT_TYPE_CHOICES)
+    detail = models.TextField(
+        blank=True,
+        default="",
+        help_text="Optional human-readable or JSON context (e.g. role or scope change).",
+    )
     ip_address = models.GenericIPAddressField(null=True, blank=True)
     user_agent = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -206,7 +234,8 @@ class UserActivityLog(models.Model):
         ordering = ["-created_at"]
 
     def __str__(self) -> str:  # pragma: no cover - trivial
-        return f"{self.user.email} - {self.event_type} at {self.created_at}"
+        ident = self.user.email if self.user_id else (self.attempted_email or "unknown")
+        return f"{ident} - {self.event_type} at {self.created_at}"
 
 
 class LogEntryInterval(models.TextChoices):

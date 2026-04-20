@@ -76,6 +76,8 @@ export function ChemicalDashboardSection({
 }: ChemicalDashboardSectionProps = {}) {
   const [periodTypeState, setPeriodTypeState] = useState<PeriodType>('month');
   const [dateState, setDateState] = useState<string>(getDefaultDate());
+  const [dateFrom, setDateFrom] = useState<string>('');
+  const [dateTo, setDateTo] = useState<string>('');
   const [selectedEquipmentNameState, setSelectedEquipmentNameState] = useState<string>('');
   const [selectedChemicalNameState, setSelectedChemicalNameState] = useState<string>('');
   const periodType = periodTypeProp ?? periodTypeState;
@@ -87,10 +89,14 @@ export function ChemicalDashboardSection({
   const selectedChemicalName = selectedChemicalNameProp ?? selectedChemicalNameState;
   const setSelectedChemicalName = onSelectedChemicalNameChange ?? setSelectedChemicalNameState;
   const [equipmentOptions, setEquipmentOptions] = useState<{ value: string; label: string }[]>([]);
+  const [chemicalOptions, setChemicalOptions] = useState<{ value: string; label: string }[]>([]);
   const [summary, setSummary] = useState<ChemicalDashboardSummary | null>(null);
   const [series, setSeries] = useState<ChemicalDashboardSeriesPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const todayDate = getDefaultDate();
+  const isRangeActive = Boolean(dateFrom && dateTo && dateFrom <= dateTo);
+  const requestDate = date || (isRangeActive ? dateTo || dateFrom : '') || todayDate;
 
   useEffect(() => {
     let cancelled = false;
@@ -114,6 +120,29 @@ export function ChemicalDashboardSection({
     };
   }, [onEquipmentOptionsChange]);
 
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { chemical_names } = await chemicalDashboardAPI.getChemicalNames({
+          equipmentName: selectedEquipmentName || undefined,
+        });
+        if (cancelled) return;
+        const opts = (chemical_names || []).map((name) => ({ value: name, label: name }));
+        setChemicalOptions(opts);
+        setSelectedChemicalName((prev) => (prev && opts.some((o) => o.value === prev) ? prev : ''));
+      } catch {
+        if (!cancelled) {
+          setChemicalOptions([]);
+          setSelectedChemicalName('');
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedEquipmentName, setSelectedChemicalName]);
+
   const fetchSummary = useCallback(
     async (background = false) => {
       if (!background) {
@@ -123,9 +152,11 @@ export function ChemicalDashboardSection({
       try {
         const data = await chemicalDashboardAPI.getSummary({
           periodType,
-          date,
+          date: requestDate,
           equipmentName: selectedEquipmentName || undefined,
           chemicalName: selectedChemicalName || undefined,
+          dateFrom: isRangeActive ? dateFrom : undefined,
+          dateTo: isRangeActive ? dateTo : undefined,
         });
         setSummary(data);
       } catch (e: unknown) {
@@ -138,23 +169,25 @@ export function ChemicalDashboardSection({
         if (!background) setLoading(false);
       }
     },
-    [periodType, date, selectedEquipmentName, selectedChemicalName]
+    [periodType, requestDate, selectedEquipmentName, selectedChemicalName, isRangeActive, dateFrom, dateTo]
   );
 
   const fetchSeries = useCallback(async () => {
     try {
       const data = await chemicalDashboardAPI.getSeries({
         periodType,
-        date,
+        date: requestDate,
         equipmentName: selectedEquipmentName || undefined,
         chemicalName: selectedChemicalName || undefined,
-        days: periodType === 'day' ? 1 : undefined,
+        days: !isRangeActive && periodType === 'day' ? 1 : undefined,
+        dateFrom: isRangeActive ? dateFrom : undefined,
+        dateTo: isRangeActive ? dateTo : undefined,
       });
       setSeries(data.series || []);
     } catch {
       setSeries([]);
     }
-  }, [periodType, date, selectedEquipmentName, selectedChemicalName]);
+  }, [periodType, requestDate, selectedEquipmentName, selectedChemicalName, isRangeActive, dateFrom, dateTo]);
 
   useEffect(() => {
     fetchSummary();
@@ -232,16 +265,43 @@ export function ChemicalDashboardSection({
 
   const toolbar = (
     <>
-      <div className="flex items-center gap-2">
-        <Label htmlFor="chemical-period-date" className="text-xs text-muted-foreground whitespace-nowrap sm:text-sm">
+      <div className="flex items-center gap-1.5">
+        <Label htmlFor="chemical-period-date" className="w-8 text-right text-[11px] font-medium text-muted-foreground whitespace-nowrap">
           Date
         </Label>
         <Input
           id="chemical-period-date"
           type="date"
+          max={todayDate}
           value={date}
           onChange={(e) => setDate(e.target.value)}
-          className="h-9 w-[150px] sm:w-[160px]"
+          className="h-8 w-[124px]"
+        />
+      </div>
+      <div className="flex items-center gap-1.5">
+        <Label htmlFor="chemical-date-from" className="w-8 text-right text-[11px] font-medium text-muted-foreground whitespace-nowrap">
+          From
+        </Label>
+        <Input
+          id="chemical-date-from"
+          type="date"
+          max={todayDate}
+          value={dateFrom}
+          onChange={(e) => setDateFrom(e.target.value)}
+          className="h-8 w-[124px]"
+        />
+      </div>
+      <div className="flex items-center gap-1.5">
+        <Label htmlFor="chemical-date-to" className="w-8 text-right text-[11px] font-medium text-muted-foreground whitespace-nowrap">
+          To
+        </Label>
+        <Input
+          id="chemical-date-to"
+          type="date"
+          max={todayDate}
+          value={dateTo}
+          onChange={(e) => setDateTo(e.target.value)}
+          className="h-8 w-[124px]"
         />
       </div>
       <div className="flex rounded-lg border border-border p-0.5 bg-muted/30">
@@ -250,23 +310,23 @@ export function ChemicalDashboardSection({
             key={p}
             variant={periodType === p ? 'secondary' : 'ghost'}
             size="sm"
-            className="h-8 rounded-md px-2.5 text-xs"
+            className="h-7 rounded-md px-2 text-[10px]"
             onClick={() => setPeriodType(p)}
           >
             {p === 'day' ? 'D' : p === 'month' ? 'M' : 'Y'}
           </Button>
         ))}
       </div>
-      <div className="flex items-center gap-2">
-        <Label className="text-xs text-muted-foreground whitespace-nowrap sm:text-sm">Equipment</Label>
+      <div className="flex items-center gap-1.5">
+        <Label className="text-[11px] font-medium text-muted-foreground whitespace-nowrap">Equipment</Label>
         <Select
           value={selectedEquipmentName || 'all'}
           onValueChange={(v) => setSelectedEquipmentName(v === 'all' ? '' : v)}
         >
-          <SelectTrigger className="h-9 w-[180px] sm:w-[200px]">
+          <SelectTrigger className="h-8 w-[112px]">
             <SelectValue placeholder="All" />
           </SelectTrigger>
-          <SelectContent>
+          <SelectContent align="end" sideOffset={4} className="w-[220px] max-w-[calc(100vw-24px)]">
             <SelectItem value="all">All</SelectItem>
             {equipmentOptions.map((opt) => (
               <SelectItem key={opt.value} value={opt.value}>
@@ -276,14 +336,24 @@ export function ChemicalDashboardSection({
           </SelectContent>
         </Select>
       </div>
-      <div className="flex items-center gap-2">
-        <Label className="text-xs text-muted-foreground whitespace-nowrap sm:text-sm">Chemical</Label>
-        <Input
-          value={selectedChemicalName}
-          onChange={(e) => setSelectedChemicalName(e.target.value)}
-          className="h-9 w-[180px] sm:w-[200px]"
-          placeholder="All chemicals"
-        />
+      <div className="flex items-center gap-1.5">
+        <Label className="text-[11px] font-medium text-muted-foreground whitespace-nowrap">Chemical</Label>
+        <Select
+          value={selectedChemicalName || 'all'}
+          onValueChange={(v) => setSelectedChemicalName(v === 'all' ? '' : v)}
+        >
+          <SelectTrigger className="h-8 w-[124px]">
+            <SelectValue placeholder="All chemicals" />
+          </SelectTrigger>
+          <SelectContent align="end" sideOffset={4} className="w-[220px] max-w-[calc(100vw-24px)]">
+            <SelectItem value="all">All chemicals</SelectItem>
+            {chemicalOptions.map((opt) => (
+              <SelectItem key={opt.value} value={opt.value}>
+                {opt.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
     </>
   );
@@ -311,7 +381,10 @@ export function ChemicalDashboardSection({
       {!loading && !error && summary && (
         <>
           <p className="text-xs text-muted-foreground -mb-2">
-            Period: {periodLabel(summary)} · Charts show {periodType === 'day' ? 'day' : periodType === 'month' ? 'month' : 'year'}-wise buckets.
+            Period: {periodLabel(summary)}
+            {isRangeActive
+              ? ` · Exact range (${dateFrom} to ${dateTo})`
+              : ` · Charts show ${periodType === 'day' ? 'day' : periodType === 'month' ? 'month' : 'year'}-wise buckets.`}
           </p>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">

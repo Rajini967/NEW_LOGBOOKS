@@ -7,6 +7,7 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from core.equipment_scope import assert_user_can_access_equipment, filter_queryset_by_equipment_scope
 from accounts.permissions import CanApproveReports, CanLogEntries, IsSuperAdmin, forbid_manager_rejecting_reading
 from core.log_slot_utils import (
     compute_missing_slots_for_day,
@@ -46,6 +47,7 @@ class BriquetteLogViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = super().get_queryset()
+        qs = filter_queryset_by_equipment_scope(qs, self.request.user)
         if self.action != "list":
             return qs
         equipment_id = self.request.query_params.get("equipment_id")
@@ -55,6 +57,7 @@ class BriquetteLogViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         validated = serializer.validated_data
+        assert_user_can_access_equipment(self.request.user, validated.get("equipment_id"))
         equipment_id = validated.get("equipment_id")
         timestamp = validated.get("timestamp") or timezone.now()
         interval, shift_hours = get_interval_for_equipment(equipment_id or "", "boiler")
@@ -90,6 +93,7 @@ class BriquetteLogViewSet(viewsets.ModelViewSet):
         validated = serializer.validated_data
         next_timestamp = validated.get("timestamp", instance.timestamp)
         next_equipment_id = validated.get("equipment_id", instance.equipment_id)
+        assert_user_can_access_equipment(self.request.user, next_equipment_id)
         interval, shift_hours = get_interval_for_equipment(next_equipment_id or "", "boiler")
         slot_start, slot_end = get_slot_range(next_timestamp, interval, shift_hours)
         duplicate_exists = (
@@ -289,6 +293,7 @@ class BriquetteLogViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"])
     def approve(self, request, pk=None):
         log = self.get_object()
+        previous_status = log.status
         action_type = request.data.get("action", "approve")
         remarks = (request.data.get("remarks") or "").strip()
         forbid_manager_rejecting_reading(request, action_type)
@@ -328,6 +333,16 @@ class BriquetteLogViewSet(viewsets.ModelViewSet):
                     {"error": "Only pending, draft, or pending secondary approval entries can be rejected."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+            log_audit_event(
+                user=request.user,
+                event_type="log_rejected",
+                object_type="briquette_log",
+                object_id=str(log.id),
+                field_name="status",
+                old_value=previous_status,
+                new_value="rejected",
+                extra={"remarks": remarks} if remarks else {},
+            )
             log.status = "rejected"
             log.secondary_approved_by = None
             log.secondary_approved_at = None
@@ -342,6 +357,16 @@ class BriquetteLogViewSet(viewsets.ModelViewSet):
         log.save()
 
         if action_type == "approve" and log.status == "approved":
+            log_audit_event(
+                user=request.user,
+                event_type="log_approved",
+                object_type="briquette_log",
+                object_id=str(log.id),
+                field_name="status",
+                old_value=previous_status,
+                new_value="approved",
+                extra={"remarks": remarks} if remarks else {},
+            )
             from reports.models import Report
             title = f"Briquette Boiler Monitoring - {log.equipment_id or 'N/A'}"
             # Idempotent: avoid duplicates if approve called twice.

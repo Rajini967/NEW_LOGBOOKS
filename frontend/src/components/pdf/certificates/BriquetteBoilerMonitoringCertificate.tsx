@@ -39,6 +39,7 @@ type Props = {
     logs: BriquettePdfLog[];
     approvedBy?: string;
     printedBy?: string;
+    recordingFrequency?: string;
     /** yyyy-MM-dd — when set, restricts grid to this day (Reports export). */
     reportDate?: string;
   };
@@ -52,8 +53,8 @@ const styles = StyleSheet.create({
   },
   titleRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-end',
+    justifyContent: 'center',
+    alignItems: 'center',
     marginTop: 4,
     marginBottom: 4,
   },
@@ -63,34 +64,18 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     flexGrow: 1,
   },
-  brandRight: {
-    width: '18%',
-    textAlign: 'right',
-    fontSize: 7,
-    fontWeight: 'bold',
-  },
-  brandLeft: {
-    width: '18%',
-  },
-  metaTable: {
-    width: '100%',
-    border: '1 solid #000',
-    marginBottom: 4,
-  },
-  metaRow: {
+  fieldRow: {
     flexDirection: 'row',
-    borderBottom: '1 solid #000',
+    justifyContent: 'space-between',
+    marginTop: 2,
+    marginBottom: 4,
+    fontSize: 7,
   },
-  metaRowLast: {
-    borderBottom: 'none',
+  metaItem: {
+    width: '50%',
   },
-  metaCell: {
-    paddingVertical: 2,
-    paddingHorizontal: 3,
-    borderRight: '1 solid #000',
-  },
-  metaCellLast: {
-    borderRight: 'none',
+  metaRight: {
+    textAlign: 'right',
   },
   mainTable: {
     width: '100%',
@@ -119,10 +104,6 @@ const styles = StyleSheet.create({
   },
   leftText: {
     textAlign: 'left',
-  },
-  note: {
-    marginTop: 4,
-    fontSize: 6.5,
   },
   waterBlock: {
     width: '100%',
@@ -224,6 +205,36 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     fontSize: 6,
   },
+  signoffTable: {
+    width: '100%',
+    borderLeft: '1 solid #000',
+    borderRight: '1 solid #000',
+    borderBottom: '1 solid #000',
+  },
+  signoffRow: {
+    flexDirection: 'row',
+    borderBottom: '1 solid #000',
+    alignItems: 'center',
+    minHeight: 16,
+  },
+  signoffRowLast: {
+    borderBottom: 'none',
+  },
+  signoffDesc: {
+    width: '74%',
+    borderRight: '1 solid #000',
+    paddingVertical: 3,
+    paddingHorizontal: 4,
+    fontSize: 7,
+    textAlign: 'left',
+  },
+  signoffValue: {
+    width: '26%',
+    paddingVertical: 3,
+    paddingHorizontal: 4,
+    fontSize: 7,
+    textAlign: 'left',
+  },
 });
 
 const parseTimeToMinutes = (t: string): number => {
@@ -319,6 +330,12 @@ export function BriquetteBoilerMonitoringCertificate({ data }: Props) {
       : fmt(logs[0]?.date) || '—';
 
   const sorted = [...logs].sort((a, b) => parseTimeToMinutes(fmt(a.time)) - parseTimeToMinutes(fmt(b.time)));
+  const lastLog = sorted[sorted.length - 1];
+  const lastTime = fmt(lastLog?.time);
+  const signDateTime = dateLabel && lastTime ? `${dateLabel} ${lastTime}` : dateLabel;
+  const doneBySignDateTime = fmt(lastLog?.operatorSignDate) || (signDateTime ? signDateTime : '-');
+  const approvedBySignDateTime = data.approvedBy ? `${data.approvedBy}${signDateTime ? ` - ${signDateTime}` : ''}` : '-';
+  const printedBySignDate = data.printedBy ? `${data.printedBy}${dateLabel ? ` - ${dateLabel}` : ''}` : '-';
 
   const feedRows = [
     { label: 'pH', readings: threeReadingCells(sorted, 'feedWaterPh') },
@@ -351,30 +368,15 @@ export function BriquetteBoilerMonitoringCertificate({ data }: Props) {
   return (
     <Document>
       <Page size="A4" orientation="landscape" style={styles.page}>
-        <PDFHeader />
+        <PDFHeader reportTitle="BOILER LOG BOOK REPORT" />
 
         <View style={styles.titleRow}>
-          <Text style={styles.brandLeft}> </Text>
           <Text style={styles.title}>Operating Log for Briquette Boiler STPH and STPH</Text>
-          <Text style={styles.brandRight}>Dr.Reddy&apos;s</Text>
         </View>
 
-        <View style={styles.metaTable} wrap={false}>
-          <View style={styles.metaRow} wrap={false}>
-            <Text style={[styles.metaCell, { width: '60%' }]}>Title</Text>
-            <Text style={[styles.metaCell, { width: '20%' }]}>Version</Text>
-            <Text style={[styles.metaCell, styles.metaCellLast, { width: '20%' }]}>2.0, CURRENT</Text>
-          </View>
-          <View style={styles.metaRow} wrap={false}>
-            <Text style={[styles.metaCell, { width: '60%' }]}>Document No.</Text>
-            <Text style={[styles.metaCell, { width: '20%' }]}>Legacy Document No.</Text>
-            <Text style={[styles.metaCell, styles.metaCellLast, { width: '20%' }]}>NA</Text>
-          </View>
-          <View style={[styles.metaRow, styles.metaRowLast]} wrap={false}>
-            <Text style={[styles.metaCell, { width: '40%' }]}>Reference SOP No.</Text>
-            <Text style={[styles.metaCell, { width: '30%' }]}>Equipment ID.: {equipmentId}</Text>
-            <Text style={[styles.metaCell, styles.metaCellLast, { width: '30%' }]}>Date: {dateLabel}</Text>
-          </View>
+        <View style={styles.fieldRow}>
+          <Text style={styles.metaItem}>Date: {dateLabel}</Text>
+          <Text style={[styles.metaItem, styles.metaRight]}>Equipment Number: {equipmentId}</Text>
         </View>
 
         <View style={styles.mainTable} wrap={false}>
@@ -431,14 +433,20 @@ export function BriquetteBoilerMonitoringCertificate({ data }: Props) {
           </View>
         </View>
 
-        <Text style={styles.note}>
-          Note: All parameters shall be recorded once in 2 hours and Feed and Boiler Water parameter shall be recorded once in a shift.
-        </Text>
+        <View style={styles.signoffTable} wrap={false}>
+          <View style={styles.signoffRow} wrap={false}>
+            <Text style={styles.signoffDesc}>Done By (Sign & Date Time)</Text>
+            <Text style={styles.signoffValue}>{doneBySignDateTime}</Text>
+          </View>
+          <View style={[styles.signoffRow, styles.signoffRowLast]} wrap={false}>
+            <Text style={styles.signoffDesc}>Approved By (Sign & Date Time)</Text>
+            <Text style={styles.signoffValue}>{approvedBySignDateTime}</Text>
+          </View>
+        </View>
 
         <View style={styles.footerRow} wrap={false}>
-          <Text>Verified by: {fmt(sorted[sorted.length - 1]?.verifiedSignDate ?? sorted[0]?.verifiedSignDate)}</Text>
-          <Text>Approved By: {data.approvedBy || '-'}</Text>
-          <Text>Printed By: {data.printedBy || '-'}</Text>
+          <Text>Recording Frequency: {data.recordingFrequency || 'Once in every 01 hour'}</Text>
+          <Text>Printed By (Sign & Date): {printedBySignDate}</Text>
         </View>
       </Page>
     </Document>

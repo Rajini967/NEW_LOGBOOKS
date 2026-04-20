@@ -166,9 +166,8 @@ const ChemicalAssignmentPage: React.FC = () => {
             .map((c) => c.id)
         );
 
-        const list = (await equipmentAPI.list({ status: "approved" })) as any[];
-
-        const options: EquipmentOption[] = (list || [])
+        const rawList = (await equipmentAPI.listAllPages()) as any[];
+        const options: EquipmentOption[] = (rawList || [])
           .filter((e: any) => {
             if (e?.is_active === false) return false;
             if (e?.status !== "approved") return false;
@@ -211,7 +210,7 @@ const ChemicalAssignmentPage: React.FC = () => {
 
   useEffect(() => {
     if (!form.department) {
-      setEquipmentOptions(allEquipmentOptions);
+      setEquipmentOptions([]);
       return;
     }
     const filtered = allEquipmentOptions.filter((eq) => eq.department === form.department);
@@ -317,19 +316,19 @@ const ChemicalAssignmentPage: React.FC = () => {
       toast.error("Please select a category (Major/Minor).");
       return;
     }
-    const isExactDuplicateAssignment = rows.some((r) => {
+    const isDuplicateAssignment = rows.some((r) => {
       const sameEquipment =
         (r.equipment_name || "").trim().toLowerCase() === equipmentName.trim().toLowerCase();
-      const sameCategory =
-        (r.category || "").trim().toLowerCase() === (form.category || "").trim().toLowerCase();
       const rowChemicalName = (r.chemical_name || "").trim().toLowerCase();
       const sameChemical =
         rowChemicalName === chemicalName.trim().toLowerCase() ||
         (!!form.selectedChemicalId && r.chemical === form.selectedChemicalId);
-      return sameEquipment && sameCategory && sameChemical;
+      return sameEquipment && sameChemical;
     });
-    if (isExactDuplicateAssignment) {
-      toast.error("This chemical is already assigned to this equipment for the selected category.");
+    if (isDuplicateAssignment) {
+      toast.error(
+        "This chemical is already assigned to this equipment. Remove or edit the existing assignment instead of adding another Major/Minor row.",
+      );
       return;
     }
     try {
