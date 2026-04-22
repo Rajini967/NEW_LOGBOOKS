@@ -31,7 +31,6 @@ type BriquettePdfLog = {
   boilerWaterTdsPpm?: number | null;
   totalSteamIn1Day?: string | number | null;
   totalSteamFlowRatio?: string | number | null;
-  verifiedSignDate?: string | null;
 };
 
 type Props = {

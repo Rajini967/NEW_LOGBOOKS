@@ -5,6 +5,7 @@ import json
 from datetime import datetime
 
 from django.utils import timezone
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
@@ -487,13 +488,16 @@ class ResetPasswordSerializer(_BaseTokenSerializer):
 
         new_password = self.validated_data["new_password"]
         request = self.context.get("request")
-        check_password_history(
-            user,
-            new_password,
-            performed_by=user,
-            ip_address=request.META.get("REMOTE_ADDR") if request else None,
-            user_agent=request.META.get("HTTP_USER_AGENT", "") if request else None,
-        )
+        try:
+            check_password_history(
+                user,
+                new_password,
+                performed_by=user,
+                ip_address=request.META.get("REMOTE_ADDR") if request else None,
+                user_agent=request.META.get("HTTP_USER_AGENT", "") if request else None,
+            )
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError({"new_password": exc.messages})
         user.set_password(new_password)
         user.must_change_password = False
         user.password_changed_at = timezone.now()
@@ -530,13 +534,16 @@ class ChangePasswordSerializer(serializers.Serializer):
         if not user.check_password(attrs["current_password"]):
             raise serializers.ValidationError({"current_password": "Current password is incorrect."})
         request = self.context.get("request")
-        check_password_history(
-            user,
-            attrs["new_password"],
-            performed_by=user,
-            ip_address=request.META.get("REMOTE_ADDR") if request else None,
-            user_agent=request.META.get("HTTP_USER_AGENT", "") if request else None,
-        )
+        try:
+            check_password_history(
+                user,
+                attrs["new_password"],
+                performed_by=user,
+                ip_address=request.META.get("REMOTE_ADDR") if request else None,
+                user_agent=request.META.get("HTTP_USER_AGENT", "") if request else None,
+            )
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError({"new_password": exc.messages})
         return attrs
 
     def save(self, **kwargs):

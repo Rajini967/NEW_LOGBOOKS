@@ -44,7 +44,6 @@ class BriquetteLog(models.Model):
     hot_air_temp = models.CharField(max_length=20, blank=True, null=True)
     feed_pump_1_2 = models.CharField(max_length=20, blank=True, null=True)
     operator_sign_date = models.CharField(max_length=255, blank=True, null=True)
-    verified_sign_date = models.CharField(max_length=255, blank=True, null=True)
 
     # Water parameters block
     feed_water_ph = models.FloatField(blank=True, null=True)

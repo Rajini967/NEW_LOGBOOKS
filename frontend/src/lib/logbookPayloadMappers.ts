@@ -65,7 +65,6 @@ type BoilerLikeLog = BaseApiLog & {
   hot_air_temp?: string | null;
   feed_pump_1_2?: string | null;
   operator_sign_date?: string | null;
-  verified_sign_date?: string | null;
   feed_water_ph?: number | null;
   boiler_water_ph?: number | null;
   boiler_water_hardness_ppm?: number | null;
@@ -228,7 +227,6 @@ export function mapBriquetteLogPayload(log: BoilerLikeLog) {
     hotAirTemp: log.hot_air_temp ?? "",
     feedPump12: log.feed_pump_1_2 ?? "",
     operatorSignDate: log.operator_sign_date ?? "",
-    verifiedSignDate: log.verified_sign_date ?? "",
     feedWaterPh: log.feed_water_ph ?? undefined,
     feedWaterHardnessPpm: log.feed_water_hardness_ppm ?? undefined,
     feedWaterTdsPpm: log.feed_water_tds_ppm ?? undefined,

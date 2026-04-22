@@ -39,7 +39,6 @@ class BriquetteLogSerializer(serializers.ModelSerializer):
             "hot_air_temp",
             "feed_pump_1_2",
             "operator_sign_date",
-            "verified_sign_date",
             "feed_water_ph",
             "feed_water_hardness_ppm",
             "feed_water_tds_ppm",

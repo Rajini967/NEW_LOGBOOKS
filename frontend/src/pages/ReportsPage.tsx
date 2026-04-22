@@ -390,7 +390,6 @@ const mapBriquetteLogForMonitoringPdf = (l: any) => ({
   hotAirTemp: l.hot_air_temp,
   feedPump12: l.feed_pump_1_2,
   operatorSignDate: l.operator_sign_date,
-  verifiedSignDate: l.verified_sign_date,
   feedWaterPh: l.feed_water_ph,
   feedWaterHardnessPpm: l.feed_water_hardness_ppm,
   feedWaterTdsPpm: l.feed_water_tds_ppm,

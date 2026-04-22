@@ -636,7 +636,7 @@ export default function DashboardPage() {
   ];
 
   return (
-    <div className="min-h-screen">
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/50 to-cyan-50/40 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950">
       <Header
         title="Dashboard"
         subtitle={`Welcome back, ${user?.name || user?.email || 'User'}`}
@@ -644,13 +644,13 @@ export default function DashboardPage() {
 
       <div className="p-3 sm:p-4 space-y-3">
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="h-9">
-            <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="energy">Energy</TabsTrigger>
-            <TabsTrigger value="chemicals">Chemicals</TabsTrigger>
+          <TabsList className="h-11 rounded-xl border border-border/70 bg-white/80 p-1 shadow-sm backdrop-blur dark:bg-card/90">
+            <TabsTrigger value="overview" className="rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">Overview</TabsTrigger>
+            <TabsTrigger value="energy" className="rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">Energy</TabsTrigger>
+            <TabsTrigger value="chemicals" className="rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">Chemicals</TabsTrigger>
             <TabsTrigger
               value="maintenance"
-              className={hasOverdueFilters ? 'border border-destructive/50 bg-destructive/10 text-destructive' : undefined}
+              className={hasOverdueFilters ? 'rounded-lg border border-destructive/50 bg-destructive/10 text-destructive data-[state=active]:bg-destructive data-[state=active]:text-destructive-foreground' : 'rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground'}
             >
               Maintenance / Filters
               {hasOverdueFilters ? (
@@ -662,7 +662,7 @@ export default function DashboardPage() {
           </TabsList>
           {activeTab !== 'overview' && activeTab !== 'energy' && activeTab !== 'chemicals' && activeTab !== 'maintenance' && topFilterBar}
           <TabsContent value="overview" className="space-y-3">
-            <div className="rounded-lg border border-border bg-card px-3 py-2">
+            <div className="rounded-xl border border-border/70 bg-white/80 px-3 py-2 shadow-sm backdrop-blur dark:bg-card/90">
               <div className="flex flex-wrap items-center gap-2">
                 <Input
                   type="date"

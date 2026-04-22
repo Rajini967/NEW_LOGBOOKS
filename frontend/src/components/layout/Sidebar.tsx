@@ -84,7 +84,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
   const navItems = [
     { path: '/dashboard', icon: LayoutDashboard, label: 'Dashboard', roles: ['operator', 'supervisor', 'manager', 'admin', 'super_admin'] },
-    { path: '/logbook-builder', icon: Hammer, label: 'Logbook Builder', roles: ['super_admin', 'admin'] },
+    { path: '/logbook-builder', icon: Hammer, label: 'Logbook Builder', roles: ['super_admin'] },
     { path: '/e-log-book', icon: ClipboardList, label: 'E Log Book', roles: ['operator', 'supervisor', 'manager', 'super_admin', 'admin'] },
     { path: '/instruments', icon: Wrench, label: 'Instruments', roles: ['supervisor', 'super_admin', 'admin'] },
     { path: '/reports', icon: FileText, label: 'Reports', roles: ['supervisor', 'manager', 'super_admin', 'admin'] },

@@ -177,7 +177,6 @@ interface BoilerLog {
   hotAirTemp?: string;
   feedPump12?: string;
   operatorSignDate?: string;
-  verifiedSignDate?: string;
   feedWaterPh?: number;
   boilerWaterPh?: number;
   boilerWaterHardnessPpm?: number;
@@ -305,7 +304,6 @@ const BoilerLogBookPage: React.FC = () => {
     hotAirTemp: "",
     feedPump12: "",
     operatorSignDate: "",
-    verifiedSignDate: "",
     feedWaterPh: "",
     boilerWaterPh: "",
     boilerWaterHardnessPpm: "",
@@ -323,7 +321,6 @@ const BoilerLogBookPage: React.FC = () => {
     setFormData((prev) => {
       const next = { ...prev };
       if (!next.operatorSignDate) next.operatorSignDate = buildAutoSignText(actor);
-      if (!next.verifiedSignDate) next.verifiedSignDate = buildAutoSignText(actor);
       return next;
     });
   }, [isDialogOpen, editingLogId, formData.fuelType, user?.name, user?.email]);
@@ -862,7 +859,6 @@ const BoilerLogBookPage: React.FC = () => {
           hot_air_temp: formData.hotAirTemp || undefined,
           feed_pump_1_2: formData.feedPump12 || undefined,
           operator_sign_date: formData.operatorSignDate || undefined,
-          verified_sign_date: formData.verifiedSignDate || undefined,
           feed_water_ph: formData.feedWaterPh ? parseFloat(formData.feedWaterPh) : undefined,
           feed_water_hardness_ppm: formData.feedWaterHardnessPpm ? parseFloat(formData.feedWaterHardnessPpm) : undefined,
           feed_water_tds_ppm: formData.feedWaterTdsPpm ? parseFloat(formData.feedWaterTdsPpm) : undefined,
@@ -930,7 +926,6 @@ const BoilerLogBookPage: React.FC = () => {
           hotAirTemp: "",
           feedPump12: "",
           operatorSignDate: "",
-          verifiedSignDate: "",
           feedWaterPh: "",
           feedWaterHardnessPpm: "",
           feedWaterTdsPpm: "",
@@ -1290,7 +1285,6 @@ const BoilerLogBookPage: React.FC = () => {
       hotAirTemp: log.hotAirTemp ?? "",
       feedPump12: log.feedPump12 ?? "",
       operatorSignDate: log.operatorSignDate ?? "",
-      verifiedSignDate: log.verifiedSignDate ?? "",
       feedWaterPh: log.feedWaterPh != null ? String(log.feedWaterPh) : "",
       boilerWaterPh: log.boilerWaterPh != null ? String(log.boilerWaterPh) : "",
       boilerWaterHardnessPpm: log.boilerWaterHardnessPpm != null ? String(log.boilerWaterHardnessPpm) : "",
@@ -2137,15 +2131,6 @@ const BoilerLogBookPage: React.FC = () => {
 
                   {/* Remarks */}
                   <div className="space-y-3 pt-4 mt-2 border-t">
-                    {formData.fuelType === "briquette" && (
-                      <div className="space-y-2">
-                        <Label>Verified Sign & Date</Label>
-                        <Input
-                          value={formData.verifiedSignDate}
-                          readOnly
-                        />
-                      </div>
-                    )}
                     <h3 className="text-sm font-semibold border-b pb-2">Remarks</h3>
                     <Textarea
                       value={formData.remarks}

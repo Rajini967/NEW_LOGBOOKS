@@ -27,7 +27,7 @@ interface ScheduledReadingsStatusProps {
  */
 export function ScheduledReadingsStatus({ missedByLogType, loading }: ScheduledReadingsStatusProps) {
   return (
-    <div className="bg-card rounded-lg border border-border p-6">
+    <div className="rounded-xl border border-border/70 bg-white/80 p-6 shadow-sm backdrop-blur dark:bg-card/90">
       <h3 className="text-lg font-semibold text-foreground mb-4">Scheduled readings status</h3>
       {loading ? (
         <div className="text-center py-6 text-muted-foreground text-sm">Loading...</div>
@@ -40,15 +40,17 @@ export function ScheduledReadingsStatus({ missedByLogType, loading }: ScheduledR
                 key={key}
                 to={path}
                 className={cn(
-                  'flex items-center justify-between p-4 rounded-lg border transition-all hover:opacity-90',
-                  missed ? 'border-danger/50 bg-danger/5' : 'border-border bg-muted/30'
+                  'flex items-center justify-between p-4 rounded-xl border transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md',
+                  missed
+                    ? 'border-danger/50 bg-gradient-to-r from-danger/10 to-danger/5'
+                    : 'border-border/70 bg-gradient-to-r from-emerald-50 to-white dark:from-emerald-950/20 dark:to-card'
                 )}
               >
                 <div className="flex items-center gap-3">
                   <div
                     className={cn(
-                      'w-10 h-10 rounded-lg flex items-center justify-center',
-                      missed ? 'bg-danger/10 text-danger' : 'bg-muted text-muted-foreground'
+                      'w-10 h-10 rounded-lg flex items-center justify-center shadow-sm',
+                      missed ? 'bg-danger/15 text-danger' : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
                     )}
                   >
                     <Icon className="w-5 h-5" />

@@ -48,6 +48,8 @@ const queryClient = new QueryClient();
 /** Chemical hub (stock / assignment / entry tiles): all roles except operator. */
 const canAccessChemicalHub = (role?: string) =>
   normalizeUserRole(role) !== "operator";
+const isSuperAdmin = (role?: string) =>
+  normalizeUserRole(role) === "super_admin";
 
 function AdminFilterLandingRoute() {
   const { user, isLoading } = useAuth();
@@ -77,6 +79,16 @@ function ChemicalLandingRoute() {
     return <Navigate to="/e-log-book/chemical/entry" replace />;
   }
   return <ChemicalHomePage />;
+}
+
+function LogbookBuilderRoute() {
+  const { user, isLoading } = useAuth();
+
+  if (isLoading) return null;
+  if (!user || !isSuperAdmin(user.role)) {
+    return <Navigate to="/dashboard" replace />;
+  }
+  return <LogbookBuilderPage />;
 }
 
 const App = () => (
@@ -122,7 +134,7 @@ const App = () => (
               <Route path="/equipment/list" element={<EquipmentListPage />} />
               <Route path="/reports" element={<ReportsPage />} />
               <Route path="/trends" element={<TrendsPage />} />
-              <Route path="/logbook-builder" element={<LogbookBuilderPage />} />
+              <Route path="/logbook-builder" element={<LogbookBuilderRoute />} />
               <Route path="/users" element={<UsersPage />} />
               <Route path="/settings" element={<SettingsPage />} />
             </Route>

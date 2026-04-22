@@ -71,7 +71,6 @@ class BriquetteLogViewSet(viewsets.ModelViewSet):
             operator=self.request.user,
             operator_name=self.request.user.name or self.request.user.email,
             operator_sign_date=validated.get("operator_sign_date") or signature,
-            verified_sign_date=validated.get("verified_sign_date") or signature,
         )
         log_audit_event(
             user=self.request.user,
@@ -283,7 +282,6 @@ class BriquetteLogViewSet(viewsets.ModelViewSet):
             "site_id": original.site_id,
             "status": "pending_secondary_approval",
             "operator_sign_date": validated.get("operator_sign_date") or original.operator_sign_date or _signature_text(request.user),
-            "verified_sign_date": validated.get("verified_sign_date") or original.verified_sign_date or _signature_text(request.user),
         }
         if timestamp is not None:
             payload["timestamp"] = timestamp
@@ -351,7 +349,6 @@ class BriquetteLogViewSet(viewsets.ModelViewSet):
 
         log.approved_by = request.user
         log.approved_at = timezone.now()
-        log.verified_sign_date = _signature_text(request.user)
         if remarks:
             log.remarks = remarks
         log.save()
