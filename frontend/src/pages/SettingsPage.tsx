@@ -27,11 +27,14 @@ import {
   Thermometer,
   Flame,
   Droplets,
+  Upload,
+  X,
 } from 'lucide-react';
 import { toast } from '@/lib/toast';
 import { authAPI, equipmentCategoryAPI, equipmentAPI, chillerLimitsAPI, boilerLimitsAPI, chemicalLimitsAPI, chemicalAssignmentAPI } from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
 import type { LogEntryIntervalType } from '@/types';
+import { loadOrganizationSettings, saveOrganizationSettings, type OrganizationSettings } from '@/lib/organizationSettings';
 
 export default function SettingsPage() {
   const navigate = useNavigate();
@@ -97,6 +100,11 @@ export default function SettingsPage() {
   });
   const [chemicalLimitsLoading, setChemicalLimitsLoading] = useState(false);
   const [chemicalLimitSaving, setChemicalLimitSaving] = useState(false);
+  const [organizationName, setOrganizationName] = useState('Pharma Industries Ltd.');
+  const [organizationIndustry, setOrganizationIndustry] = useState('Pharmaceutical Manufacturing');
+  const [organizationAddress, setOrganizationAddress] = useState('123 Industrial Park, Sector 7');
+  const [organizationLogoPreview, setOrganizationLogoPreview] = useState<string | null>(null);
+  const [organizationLogoFileName, setOrganizationLogoFileName] = useState<string>('');
 
   const emptyChillerLimit = (): ChillerLimitRow => ({
     equipment_id: undefined,
@@ -555,6 +563,54 @@ export default function SettingsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedChemicalName]);
 
+  useEffect(() => {
+    const org = loadOrganizationSettings();
+    setOrganizationName(org.organizationName || 'Pharma Industries Ltd.');
+    setOrganizationIndustry(org.industry || 'Pharmaceutical Manufacturing');
+    setOrganizationAddress(org.address || '123 Industrial Park, Sector 7');
+    setOrganizationLogoPreview(org.logoDataUrl || null);
+    setOrganizationLogoFileName(org.logoDataUrl ? 'saved-logo' : '');
+  }, []);
+
+  const handleOrganizationLogoUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const allowedTypes = ['image/png', 'image/jpeg', 'image/jpg'];
+    if (!allowedTypes.includes(file.type)) {
+      toast.error('Please upload a PNG or JPG logo file.');
+      event.target.value = '';
+      return;
+    }
+
+    const maxSizeInBytes = 2 * 1024 * 1024;
+    if (file.size > maxSizeInBytes) {
+      toast.error('Logo file size must be 2MB or less.');
+      event.target.value = '';
+      return;
+    }
+
+    const previewUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => reject(new Error('Failed to read logo file'));
+      reader.readAsDataURL(file);
+    }).catch(() => '');
+    if (!previewUrl) {
+      toast.error('Failed to read selected logo file.');
+      event.target.value = '';
+      return;
+    }
+    setOrganizationLogoPreview(previewUrl);
+    setOrganizationLogoFileName(file.name);
+    event.target.value = '';
+  };
+
+  const handleRemoveOrganizationLogo = () => {
+    setOrganizationLogoPreview(null);
+    setOrganizationLogoFileName('');
+  };
+
   const handleSaveChillerLimits = async (equipmentNumber: string) => {
     setChillerLimitSaving(equipmentNumber);
     try {
@@ -702,6 +758,14 @@ export default function SettingsPage() {
         payload.shift_duration_hours = shiftDurationHours;
       }
 
+      const orgPayload: OrganizationSettings = {
+        organizationName: String(organizationName || '').trim(),
+        industry: String(organizationIndustry || '').trim(),
+        address: String(organizationAddress || '').trim(),
+        logoDataUrl: String(organizationLogoPreview || '').trim(),
+      };
+      saveOrganizationSettings(orgPayload);
+
       await authAPI.updateSessionSettings(payload);
       await refreshSessionSettings();
       toast.success('Settings saved successfully');
@@ -737,16 +801,78 @@ export default function SettingsPage() {
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Organization Name</Label>
-                <Input defaultValue="Pharma Industries Ltd." />
+                <Input
+                  value={organizationName}
+                  onChange={(e) => setOrganizationName(e.target.value)}
+                />
               </div>
               <div className="space-y-2">
                 <Label>Industry</Label>
-                <Input defaultValue="Pharmaceutical Manufacturing" />
+                <Input
+                  value={organizationIndustry}
+                  onChange={(e) => setOrganizationIndustry(e.target.value)}
+                />
               </div>
             </div>
             <div className="space-y-2">
               <Label>Address</Label>
-              <Input defaultValue="123 Industrial Park, Sector 7" />
+              <Input
+                value={organizationAddress}
+                onChange={(e) => setOrganizationAddress(e.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Organization Logo</Label>
+              <div className="flex flex-col sm:flex-row sm:items-center gap-3 rounded-md border border-dashed border-border p-3">
+                {organizationLogoPreview ? (
+                  <img
+                    src={organizationLogoPreview}
+                    alt="Organization logo preview"
+                    className="h-16 w-16 rounded-md border border-border object-contain bg-background p-1"
+                  />
+                ) : (
+                  <div className="h-16 w-16 rounded-md border border-border bg-muted/30 flex items-center justify-center text-xs text-muted-foreground text-center px-1">
+                    No Logo
+                  </div>
+                )}
+                <div className="flex-1 space-y-2">
+                  <p className="text-sm text-muted-foreground">
+                    Upload logo for reports and headers. Allowed: PNG, JPG (max 2MB).
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      id="organization-logo"
+                      type="file"
+                      accept=".png,.jpg,.jpeg,image/png,image/jpeg"
+                      className="hidden"
+                      onChange={handleOrganizationLogoUpload}
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => document.getElementById('organization-logo')?.click()}
+                    >
+                      <Upload className="w-4 h-4 mr-2" />
+                      {organizationLogoPreview ? 'Replace Logo' : 'Upload Logo'}
+                    </Button>
+                    {organizationLogoPreview && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={handleRemoveOrganizationLogo}
+                      >
+                        <X className="w-4 h-4 mr-2" />
+                        Remove
+                      </Button>
+                    )}
+                  </div>
+                  {organizationLogoFileName && (
+                    <p className="text-xs text-muted-foreground">Selected: {organizationLogoFileName}</p>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
         </div>

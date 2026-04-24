@@ -40,6 +40,7 @@ import { jsPDF } from 'jspdf';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { parseBriquetteTimeToMinutes } from '@/lib/reports/reportMappers';
+import { loadOrganizationSettings } from '@/lib/organizationSettings';
 import {
   generateAirVelocityPDF,
   generateFilterIntegrityPDF,
@@ -786,25 +787,44 @@ type UserActivityPrintHeaderMeta = {
   printedBy?: string;
 };
 
+function getJsPdfImageType(dataUrl: string): 'PNG' | 'JPEG' | null {
+  const v = String(dataUrl || '').trim().toLowerCase();
+  if (v.startsWith('data:image/png')) return 'PNG';
+  if (v.startsWith('data:image/jpeg') || v.startsWith('data:image/jpg')) return 'JPEG';
+  return null;
+}
+
+function drawLeftLogoInPdfHeader(
+  doc: jsPDF,
+  logoDataUrl: string,
+  margin: number,
+  top: number,
+): boolean {
+  const type = getJsPdfImageType(logoDataUrl);
+  if (!type) return false;
+  try {
+    // Use a larger logo box for better readability in generated PDFs.
+    doc.addImage(logoDataUrl, type, margin + 8, top + 4, 118, 28);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function loadUserActivityPrintHeaderMeta(
   activityFromDate: string,
   activityFromTime: string,
   activityToDate: string,
   activityToTime: string,
 ): Promise<UserActivityPrintHeaderMeta> {
-  const logoLeft = String(import.meta.env.VITE_AUDIT_REPORT_LOGO_LEFT || '').trim();
-  const logoRight = String(import.meta.env.VITE_AUDIT_REPORT_LOGO_RIGHT || '').trim();
-  const defaultClient = String(import.meta.env.VITE_AUDIT_REPORT_CLIENT || '').trim()
-    || "M/s. DR. REDDY'S LABORATORIES LTD, FTO UNIT-09, VISAKHAPATNAM, AP";
-  const defaultManufacturedBy = String(import.meta.env.VITE_AUDIT_REPORT_MANUFACTURED_BY || '').trim()
-    || 'M/s. RAJ HI-PURITY SYSTEMS LIMITED';
-  const logoLeftLabel = String(import.meta.env.VITE_AUDIT_REPORT_LOGO_LEFT_LABEL || '').trim()
-    || "Dr.Reddy's";
-  const logoRightLabel = String(import.meta.env.VITE_AUDIT_REPORT_LOGO_RIGHT_LABEL || '').trim()
-    || 'Praj HiPurity Systems';
+  const org = loadOrganizationSettings();
+  const logoLeft = org.logoDataUrl;
+  const logoRight = '';
+  const logoLeftLabel = '';
+  const logoRightLabel = "Dr. Reddy's";
 
-  const clientLine = defaultClient;
-  const manufacturedBy = defaultManufacturedBy;
+  const clientLine = `${org.organizationName}, ${org.address}`.replace(/,\s*$/, '').trim() || '—';
+  const manufacturedBy = org.industry || '—';
   const systemTitle = 'DIGITAL LOG BOOK';
 
   const fromHms = ((activityFromTime && activityFromTime.trim()) || '00:00:00');
@@ -831,11 +851,9 @@ async function loadUserActivityPrintHeaderMeta(
 
 function buildStandardReportHeader(title: string, meta: UserActivityPrintHeaderMeta): string {
   const leftImgs = meta.logoLeft
-    ? `<img class="header-logo" src="${escapeAttr(meta.logoLeft)}" alt="" /><div class="header-logo-label">${escapeHtml(meta.logoLeftLabel)}</div>`
-    : `<div class="header-logo-label">${escapeHtml(meta.logoLeftLabel)}</div>`;
-  const rightImgs = meta.logoRight
-    ? `<img class="header-logo" src="${escapeAttr(meta.logoRight)}" alt="" /><div class="header-logo-label">${escapeHtml(meta.logoRightLabel)}</div>`
-    : `<div class="header-logo-label">${escapeHtml(meta.logoRightLabel)}</div>`;
+    ? `<img class="header-logo" src="${escapeAttr(meta.logoLeft)}" alt="" />`
+    : '';
+  const rightImgs = `<div class="header-logo-label">${escapeHtml(meta.logoRightLabel)}</div>`;
 
   return `
     <div class="audit-header">
@@ -855,9 +873,9 @@ function buildStandardReportHeader(title: string, meta: UserActivityPrintHeaderM
           <span class="meta-val">${escapeHtml(meta.manufacturedBy)}</span>
           <span class="meta-lab">SYSTEM TITLE:-</span>
           <span class="meta-val">${escapeHtml(meta.systemTitle)}</span>
-          <span class="meta-lab">FROM DATE &amp; TIME:-</span>
+          <span class="meta-lab">From Date and Time:-</span>
           <span class="meta-val">${escapeHtml(meta.fromDateTime)}</span>
-          <span class="meta-lab">TO DATE &amp; TIME:-</span>
+          <span class="meta-lab">To Date and Time:-</span>
           <span class="meta-val">${escapeHtml(meta.toDateTime)}</span>
         </div>
       </div>
@@ -916,7 +934,8 @@ function standardReportPrintCss(tableFontSize = 11): string {
       display: flex;
       flex-direction: column;
       justify-content: flex-end;
-      align-items: center;
+      align-items: flex-end;
+      text-align: right;
     }
     .header-logo {
       max-height: 48px;
@@ -1020,11 +1039,9 @@ function buildUserActivityPrintDocument(rows: UserActivityRow[], meta: UserActiv
   const printedAt = escapeHtml(format(new Date(), 'dd/MM/yyyy HH:mm:ss'));
 
   const leftImgs = meta.logoLeft
-    ? `<img class="header-logo" src="${escapeAttr(meta.logoLeft)}" alt="" /><div class="header-logo-label">${escapeHtml(meta.logoLeftLabel)}</div>`
-    : `<div class="header-logo-label">${escapeHtml(meta.logoLeftLabel)}</div>`;
-  const rightImgs = meta.logoRight
-    ? `<img class="header-logo" src="${escapeAttr(meta.logoRight)}" alt="" /><div class="header-logo-label">${escapeHtml(meta.logoRightLabel)}</div>`
-    : `<div class="header-logo-label">${escapeHtml(meta.logoRightLabel)}</div>`;
+    ? `<img class="header-logo" src="${escapeAttr(meta.logoLeft)}" alt="" />`
+    : '';
+  const rightImgs = `<div class="header-logo-label">${escapeHtml(meta.logoRightLabel)}</div>`;
 
   const rowsHtml = rows
     .map(
@@ -1096,7 +1113,8 @@ function buildUserActivityPrintDocument(rows: UserActivityRow[], meta: UserActiv
                             display: flex;
                             flex-direction: column;
                             justify-content: flex-end;
-                            align-items: center;
+                            align-items: flex-end;
+                            text-align: right;
                           }
                           .header-logo {
                             max-height: 48px;
@@ -1208,9 +1226,9 @@ function buildUserActivityPrintDocument(rows: UserActivityRow[], meta: UserActiv
                               <span class="meta-val">${escapeHtml(meta.manufacturedBy)}</span>
                               <span class="meta-lab">SYSTEM TITLE:-</span>
                               <span class="meta-val">${escapeHtml(meta.systemTitle)}</span>
-                              <span class="meta-lab">FROM DATE &amp; TIME:-</span>
+                              <span class="meta-lab">From Date and Time:-</span>
                               <span class="meta-val">${escapeHtml(meta.fromDateTime)}</span>
-                              <span class="meta-lab">TO DATE &amp; TIME:-</span>
+                              <span class="meta-lab">To Date and Time:-</span>
                               <span class="meta-val">${escapeHtml(meta.toDateTime)}</span>
                             </div>
                           </div>
@@ -1265,8 +1283,8 @@ async function generateUserActivityPdfBlob(
 
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(8);
-    doc.text(meta.logoLeftLabel || "Dr.Reddy's", margin + 10, top + 18);
-    doc.text(meta.logoRightLabel || 'P HiPurity Systems', margin + contentW - 122, top + 18);
+    drawLeftLogoInPdfHeader(doc, meta.logoLeft, margin, top);
+    doc.text(meta.logoRightLabel || "Dr. Reddy's", margin + contentW - 122, top + 18);
 
     doc.setFontSize(12);
     doc.text('USER ACTIVITY REPORT', margin + contentW / 2, top + 15, { align: 'center' });
@@ -1277,8 +1295,8 @@ async function generateUserActivityPdfBlob(
       ['CLIENT :-', meta.clientLine || '—'],
       ['MANUFACTURED BY :-', meta.manufacturedBy || '—'],
       ['SYSTEM TITLE :-', meta.systemTitle || 'DIGITAL LOG BOOK'],
-      ['FROM DATE & TIME :-', meta.fromDateTime || '—'],
-      ['TO DATE & TIME :-', meta.toDateTime || '—'],
+      ['From Date and Time :-', meta.fromDateTime || '—'],
+      ['To Date and Time :-', meta.toDateTime || '—'],
     ];
     doc.setFontSize(7.4);
     let y = top + 47;
@@ -1376,8 +1394,8 @@ function drawStandardPdfHeader(
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8);
-  doc.text(meta.logoLeftLabel || "Dr.Reddy's", margin + 10, top + 18);
-  doc.text(meta.logoRightLabel || 'P HiPurity Systems', margin + contentW - 122, top + 18);
+  drawLeftLogoInPdfHeader(doc, meta.logoLeft, margin, top);
+  doc.text(meta.logoRightLabel || "Dr. Reddy's", margin + contentW - 122, top + 18);
 
   doc.setFontSize(12);
   doc.text(title, margin + contentW / 2, top + 15, { align: 'center' });
@@ -1388,8 +1406,8 @@ function drawStandardPdfHeader(
     ['CLIENT :-', meta.clientLine || '—'],
     ['MANUFACTURED BY :-', meta.manufacturedBy || '—'],
     ['SYSTEM TITLE :-', meta.systemTitle || 'DIGITAL LOG BOOK'],
-    ['FROM DATE & TIME :-', meta.fromDateTime || '—'],
-    ['TO DATE & TIME :-', meta.toDateTime || '—'],
+    ['From Date and Time :-', meta.fromDateTime || '—'],
+    ['To Date and Time :-', meta.toDateTime || '—'],
   ];
   doc.setFontSize(7.4);
   let y = top + 47;

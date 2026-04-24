@@ -1,5 +1,6 @@
 import React from 'react';
-import { View, Text, StyleSheet } from '@react-pdf/renderer';
+import { View, Text, StyleSheet, Image } from '@react-pdf/renderer';
+import { loadOrganizationSettings } from '@/lib/organizationSettings';
 
 const styles = StyleSheet.create({
   header: {
@@ -70,29 +71,35 @@ interface PDFHeaderProps {
   systemTitle?: string;
   client?: string;
   manufacturedBy?: string;
+  logoLeft?: string;
 }
 
-export function PDFHeader({ 
-  leftBrand = "Dr.Reddy's",
-  rightBrand = 'Praj HiPurity Systems',
+export function PDFHeader({
+  leftBrand = '',
+  rightBrand = "Dr. Reddy's",
   reportTitle = 'LOG BOOK REPORT',
   systemTitle = 'DIGITAL LOG BOOK',
   client,
   manufacturedBy,
+  logoLeft,
 }: PDFHeaderProps) {
-  const defaultClient =
-    String(import.meta.env.VITE_AUDIT_REPORT_CLIENT || '').trim() ||
-    'M/s. DR. REDDY\'S LABORATORIES LTD, FTO UNIT-09, VISAKHAPATNAM, AP';
-  const defaultManufacturedBy =
-    String(import.meta.env.VITE_AUDIT_REPORT_MANUFACTURED_BY || '').trim() ||
-    'M/s. PRAJ HIPURITY SYSTEMS LIMITED';
-  const clientLine = (client || defaultClient).trim();
-  const manufacturedByLine = (manufacturedBy || defaultManufacturedBy).trim();
+  const org = loadOrganizationSettings();
+
+  const effectiveLogoLeft = String(logoLeft || org.logoDataUrl || '').trim();
+  const clientLine = (client || `${org.organizationName}${org.address ? `, ${org.address}` : ''}` || '—').trim();
+  const manufacturedByLine = (manufacturedBy || org.industry || '—').trim();
+  const leftBrandText = String(leftBrand || '').trim();
 
   return (
     <View style={styles.header}>
       <View style={styles.topRow}>
-        <Text style={styles.leftBrand}>{leftBrand}</Text>
+        <View style={styles.leftBrand}>
+          {effectiveLogoLeft ? (
+            <Image src={effectiveLogoLeft} style={{ height: 22, width: 110, objectFit: 'contain' as any }} />
+          ) : (
+            <Text style={{ fontSize: 9 }}>{leftBrandText}</Text>
+          )}
+        </View>
         <View style={styles.centerWrap}>
           <Text style={styles.reportTitle}>{reportTitle}</Text>
           <Text style={styles.systemTitle}>{systemTitle}</Text>
