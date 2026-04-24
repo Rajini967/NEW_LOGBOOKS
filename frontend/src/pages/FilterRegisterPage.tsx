@@ -719,7 +719,7 @@ const FilterRegisterPage: React.FC = () => {
                                 </Button>
                               </>
                             )}
-                            {filter.status !== "approved" && user?.role === "super_admin" && (
+                            {user?.role === "super_admin" && (
                               <Button
                                 size="icon"
                                 variant="outline"
@@ -1462,7 +1462,7 @@ const FilterRegisterPage: React.FC = () => {
             <AlertDialogTitle>Delete filter?</AlertDialogTitle>
             <AlertDialogDescription>
               {pendingDeleteFilter
-                ? `Delete filter ${pendingDeleteFilter.make} ${pendingDeleteFilter.model}? You can only delete filters before they are approved.`
+                ? `Delete filter ${pendingDeleteFilter.make} ${pendingDeleteFilter.model}? This action cannot be undone.`
                 : null}
             </AlertDialogDescription>
           </AlertDialogHeader>

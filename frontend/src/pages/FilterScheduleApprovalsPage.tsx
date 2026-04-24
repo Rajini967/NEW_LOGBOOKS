@@ -3,10 +3,14 @@ import { Header } from "@/components/layout/Header";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/use-toast";
 import { filterScheduleAPI } from "@/lib/api";
-import { Loader2, CheckCircle2, XCircle, ArrowLeft } from "lucide-react";
+import { Loader2, CheckCircle2, XCircle, ArrowLeft, Trash2 } from "lucide-react";
 import { useNavigate, Navigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
-import { canAccessFilterHub, canApproveFilterSchedule } from "@/lib/auth/role";
+import {
+  canAccessFilterHub,
+  canApproveFilterSchedule,
+  canDeleteFilterSchedule,
+} from "@/lib/auth/role";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -62,6 +66,7 @@ const FilterScheduleApprovalsPage: React.FC = () => {
 
   const canViewSchedules = canAccessFilterHub(user?.role);
   const canApproveSchedules = canApproveFilterSchedule(user?.role);
+  const canDeleteSchedules = canDeleteFilterSchedule(user?.role);
   const [rows, setRows] = useState<FilterScheduleRow[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [workingId, setWorkingId] = useState<string | null>(null);
@@ -70,6 +75,7 @@ const FilterScheduleApprovalsPage: React.FC = () => {
   const [approveCommentOpen, setApproveCommentOpen] = useState(false);
   const [rejectConfirmOpen, setRejectConfirmOpen] = useState(false);
   const [rejectCommentOpen, setRejectCommentOpen] = useState(false);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [approvalComment, setApprovalComment] = useState("");
   const [rejectionComment, setRejectionComment] = useState("");
 
@@ -137,6 +143,24 @@ const FilterScheduleApprovalsPage: React.FC = () => {
       });
     } finally {
       setWorkingId(null);
+    }
+  };
+
+  const doDelete = async (id: string) => {
+    setWorkingId(id);
+    try {
+      await filterScheduleAPI.delete(id);
+      toast({ title: "Schedule deleted" });
+      await load();
+    } catch (error: any) {
+      toast({
+        title: "Delete failed",
+        description: error?.message || "Only Super Admin can delete schedules.",
+        variant: "destructive",
+      });
+    } finally {
+      setWorkingId(null);
+      setDeleteConfirmId(null);
     }
   };
 
@@ -272,60 +296,80 @@ const FilterScheduleApprovalsPage: React.FC = () => {
                           {row.assignment_info?.tag_info || "—"}
                         </td>
                         <td className="px-4 py-2 text-right">
-                          {canApproveSchedules ? (
+                          {canApproveSchedules || canDeleteSchedules ? (
                             <div className="inline-flex items-center gap-2">
-                              <Button
-                                size="icon"
-                                variant="outline"
-                                className="h-8 w-8 text-emerald-600"
-                                disabled={workingId === row.id || row.is_approved || row.status === "rejected"}
-                                onClick={() => {
-                                  if (userIsAssignmentAssigner(row)) {
-                                    toast({
-                                      title: "Cannot approve your own assignment",
-                                      description:
-                                        "Someone else must approve schedules for equipment you assigned the filter to.",
-                                      variant: "destructive",
-                                    });
-                                    return;
-                                  }
-                                  if (!row.is_approved && row.status !== "rejected") {
-                                    setSelectedScheduleId(row.id);
-                                    setApproveConfirmOpen(true);
-                                  }
-                                }}
-                                title="Approve"
-                              >
-                                {workingId === row.id ? (
-                                  <Loader2 className="w-4 h-4 animate-spin" />
-                                ) : (
-                                  <CheckCircle2 className="w-4 h-4" />
-                                )}
-                              </Button>
-                              <Button
-                                size="icon"
-                                variant="outline"
-                                className="h-8 w-8 text-rose-600"
-                                disabled={workingId === row.id || row.is_approved || row.status === "rejected"}
-                                onClick={() => {
-                                  if (userIsAssignmentAssigner(row)) {
-                                    toast({
-                                      title: "Cannot reject your own assignment",
-                                      description:
-                                        "Someone else must reject schedules for equipment you assigned the filter to.",
-                                      variant: "destructive",
-                                    });
-                                    return;
-                                  }
-                                  if (!row.is_approved && row.status !== "rejected") {
-                                    setSelectedScheduleId(row.id);
-                                    setRejectConfirmOpen(true);
-                                  }
-                                }}
-                                title="Reject"
-                              >
-                                <XCircle className="w-4 h-4" />
-                              </Button>
+                              {canApproveSchedules ? (
+                                <>
+                                  <Button
+                                    size="icon"
+                                    variant="outline"
+                                    className="h-8 w-8 text-emerald-600"
+                                    disabled={workingId === row.id || row.is_approved || row.status === "rejected"}
+                                    onClick={() => {
+                                      if (userIsAssignmentAssigner(row)) {
+                                        toast({
+                                          title: "Cannot approve your own assignment",
+                                          description:
+                                            "Someone else must approve schedules for equipment you assigned the filter to.",
+                                          variant: "destructive",
+                                        });
+                                        return;
+                                      }
+                                      if (!row.is_approved && row.status !== "rejected") {
+                                        setSelectedScheduleId(row.id);
+                                        setApproveConfirmOpen(true);
+                                      }
+                                    }}
+                                    title="Approve"
+                                  >
+                                    {workingId === row.id ? (
+                                      <Loader2 className="w-4 h-4 animate-spin" />
+                                    ) : (
+                                      <CheckCircle2 className="w-4 h-4" />
+                                    )}
+                                  </Button>
+                                  <Button
+                                    size="icon"
+                                    variant="outline"
+                                    className="h-8 w-8 text-rose-600"
+                                    disabled={workingId === row.id || row.is_approved || row.status === "rejected"}
+                                    onClick={() => {
+                                      if (userIsAssignmentAssigner(row)) {
+                                        toast({
+                                          title: "Cannot reject your own assignment",
+                                          description:
+                                            "Someone else must reject schedules for equipment you assigned the filter to.",
+                                          variant: "destructive",
+                                        });
+                                        return;
+                                      }
+                                      if (!row.is_approved && row.status !== "rejected") {
+                                        setSelectedScheduleId(row.id);
+                                        setRejectConfirmOpen(true);
+                                      }
+                                    }}
+                                    title="Reject"
+                                  >
+                                    <XCircle className="w-4 h-4" />
+                                  </Button>
+                                </>
+                              ) : null}
+                              {canDeleteSchedules ? (
+                                <Button
+                                  size="icon"
+                                  variant="outline"
+                                  className="h-8 w-8 text-destructive"
+                                  disabled={workingId === row.id}
+                                  onClick={() => setDeleteConfirmId(row.id)}
+                                  title="Delete"
+                                >
+                                  {workingId === row.id ? (
+                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                  ) : (
+                                    <Trash2 className="w-4 h-4" />
+                                  )}
+                                </Button>
+                              ) : null}
                             </div>
                           ) : (
                             <span className="text-xs text-muted-foreground">—</span>
@@ -523,6 +567,35 @@ const FilterScheduleApprovalsPage: React.FC = () => {
           </div>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog
+        open={!!deleteConfirmId}
+        onOpenChange={(open) => {
+          if (!open) setDeleteConfirmId(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Schedule</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete this filter schedule? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={!!workingId}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive hover:bg-destructive/90 text-white"
+              disabled={!deleteConfirmId || !!workingId}
+              onClick={async () => {
+                if (!deleteConfirmId) return;
+                await doDelete(deleteConfirmId);
+              }}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };

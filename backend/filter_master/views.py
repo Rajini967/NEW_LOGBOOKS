@@ -13,6 +13,7 @@ from accounts.permissions import (
     CanApproveFilterSchedule,
     CanDeleteEquipmentMaster,
     CanManageFilterConfiguration,
+    IsSuperAdmin,
 )
 from reports.utils import create_report_entry, log_audit_event, log_entity_update_changes
 from core.equipment_scope import filter_queryset_by_equipment_scope
@@ -71,7 +72,9 @@ class FilterMasterViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         if self.action in ["approve", "reject"]:
             return [IsAuthenticated(), CanApproveFilterRegister()]
-        if self.action in ["create", "update", "partial_update", "destroy"]:
+        if self.action == "destroy":
+            return [IsAuthenticated(), IsSuperAdmin()]
+        if self.action in ["create", "update", "partial_update"]:
             return [IsAuthenticated(), CanManageFilterConfiguration()]
         return [IsAuthenticated()]
 
@@ -184,15 +187,7 @@ class FilterMasterViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
 
     def destroy(self, request, *args, **kwargs):
-        """
-        Allow deleting filters only before they are approved.
-        """
-        instance: FilterMaster = self.get_object()
-        if instance.status == "approved":
-            return Response(
-                {"detail": "Approved filters cannot be deleted."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        """Allow deleting filter rows (super admin only via permissions)."""
         return super().destroy(request, *args, **kwargs)
 
     @action(detail=True, methods=["post"])
@@ -299,7 +294,9 @@ class FilterScheduleViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         if self.action in ["approve", "reject"]:
             return [IsAuthenticated(), CanApproveFilterSchedule()]
-        if self.action in ["create", "update", "partial_update", "destroy"]:
+        if self.action == "destroy":
+            return [IsAuthenticated(), IsSuperAdmin()]
+        if self.action in ["create", "update", "partial_update"]:
             return [IsAuthenticated(), CanManageFilterConfiguration()]
         return [IsAuthenticated()]
 

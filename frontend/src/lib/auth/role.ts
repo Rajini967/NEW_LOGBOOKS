@@ -74,6 +74,11 @@ export function canApproveFilterSchedule(userRole: unknown): boolean {
   return FILTER_SCHEDULE_APPROVE_ROLES.includes(r);
 }
 
+/** Filter schedule delete is super admin only. */
+export function canDeleteFilterSchedule(userRole: unknown): boolean {
+  return normalizeUserRole(userRole) === 'super_admin';
+}
+
 /** Matches backend CanApproveFilterRegister — approve/reject register row (not supervisor). */
 const FILTER_REGISTER_APPROVE_ROLES: UserRole[] = ['manager', 'admin', 'super_admin'];
 

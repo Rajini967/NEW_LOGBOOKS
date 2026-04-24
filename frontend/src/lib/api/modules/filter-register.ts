@@ -146,4 +146,7 @@ export const filterScheduleAPI = {
     const response = await api.post(`/filter-schedules/${id}/reject/`, {});
     return response.data;
   },
+  delete: async (id: string) => {
+    await api.delete(`/filter-schedules/${id}/`);
+  },
 };
