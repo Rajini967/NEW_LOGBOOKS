@@ -426,9 +426,9 @@ export default function ELogBookPage() {
         const typeToCategory: Record<string, string> = {};
         for (const c of categories) {
           const name = (c.name || '').toLowerCase().trim();
-          if (name === 'chiller' || name === 'chillers') typeToCategory.chiller = c.id;
-          else if (name === 'boiler' || name === 'boilers') typeToCategory.boiler = c.id;
-          else if (name === 'compressor' || name === 'compressors') typeToCategory.compressor = c.id;
+          if (name.includes('chiller') && !typeToCategory.chiller) typeToCategory.chiller = c.id;
+          else if (name.includes('boiler') && !typeToCategory.boiler) typeToCategory.boiler = c.id;
+          else if (name.includes('compressor') && !typeToCategory.compressor) typeToCategory.compressor = c.id;
         }
         const [chillerEq, boilerEq, compressorEq] = await Promise.all([
           typeToCategory.chiller ? equipmentAPI.list({ category: typeToCategory.chiller }) : Promise.resolve([]),

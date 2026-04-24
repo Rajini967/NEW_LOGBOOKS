@@ -140,7 +140,7 @@ export default function ConsumptionPage() {
         let chillerCategoryId: string | null = null;
         for (const c of categories) {
           const name = (c.name || '').toLowerCase().trim();
-          if (name === 'chiller' || name === 'chillers') {
+          if (name.includes('chiller')) {
             chillerCategoryId = c.id;
             break;
           }
@@ -179,7 +179,7 @@ export default function ConsumptionPage() {
         let boilerCategoryId: string | null = null;
         for (const c of categories) {
           const name = (c.name || '').toLowerCase().trim();
-          if (name === 'boiler' || name === 'boilers') {
+          if (name.includes('boiler')) {
             boilerCategoryId = c.id;
             break;
           }
